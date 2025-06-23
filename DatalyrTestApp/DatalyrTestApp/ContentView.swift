@@ -243,11 +243,11 @@ struct ContentView: View {
     
     private func initializeSDK() {
         Task {
-                         do {
-                 let config = DatalyrConfig(
-                     workspaceId: "BFXm1IpyVe",
-                     apiKey: "dk_KCrEZT9saU4ZlTwr2HHnuaia3jKDHcuf"
-                 )
+            do {
+                let config = DatalyrConfig(
+                    workspaceId: "BFXm1IpyVe",
+                    apiKey: "dk_KCrEZT9saU4ZlTwr2HHnuaia3jKDHcuf"
+                )
                 
                 try await DatalyrSDK.shared.initialize(config)
                 

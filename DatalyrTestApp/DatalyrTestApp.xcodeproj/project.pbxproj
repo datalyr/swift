@@ -7,44 +7,44 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		41FED52B2E09C4A300551E35 /* DatalyrSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 41FED52A2E09C4A300551E35 /* DatalyrSDK */; };
+		41A8A4162E09CF4600E81123 /* DatalyrSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 41A8A4152E09CF4600E81123 /* DatalyrSDK */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		41FED50D2E09C38800551E35 /* PBXContainerItemProxy */ = {
+		41A8A3E62E09CE4F00E81123 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
-			containerPortal = 41FED4F42E09C38700551E35 /* Project object */;
+			containerPortal = 41A8A3CD2E09CE4E00E81123 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 41FED4FB2E09C38700551E35;
+			remoteGlobalIDString = 41A8A3D42E09CE4E00E81123;
 			remoteInfo = DatalyrTestApp;
 		};
-		41FED5172E09C38800551E35 /* PBXContainerItemProxy */ = {
+		41A8A3F02E09CE4F00E81123 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
-			containerPortal = 41FED4F42E09C38700551E35 /* Project object */;
+			containerPortal = 41A8A3CD2E09CE4E00E81123 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 41FED4FB2E09C38700551E35;
+			remoteGlobalIDString = 41A8A3D42E09CE4E00E81123;
 			remoteInfo = DatalyrTestApp;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		41FED4FC2E09C38700551E35 /* DatalyrTestApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DatalyrTestApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		41FED50C2E09C38800551E35 /* DatalyrTestAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DatalyrTestAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		41FED5162E09C38800551E35 /* DatalyrTestAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DatalyrTestAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		41A8A3D52E09CE4E00E81123 /* DatalyrTestApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DatalyrTestApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		41A8A3E52E09CE4F00E81123 /* DatalyrTestAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DatalyrTestAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		41A8A3EF2E09CE4F00E81123 /* DatalyrTestAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DatalyrTestAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		41FED4FE2E09C38700551E35 /* DatalyrTestApp */ = {
+		41A8A3D72E09CE4E00E81123 /* DatalyrTestApp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = DatalyrTestApp;
 			sourceTree = "<group>";
 		};
-		41FED50F2E09C38800551E35 /* DatalyrTestAppTests */ = {
+		41A8A3E82E09CE4F00E81123 /* DatalyrTestAppTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = DatalyrTestAppTests;
 			sourceTree = "<group>";
 		};
-		41FED5192E09C38800551E35 /* DatalyrTestAppUITests */ = {
+		41A8A3F22E09CE4F00E81123 /* DatalyrTestAppUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = DatalyrTestAppUITests;
 			sourceTree = "<group>";
@@ -52,22 +52,22 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		41FED4F92E09C38700551E35 /* Frameworks */ = {
+		41A8A3D22E09CE4E00E81123 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				41FED52B2E09C4A300551E35 /* DatalyrSDK in Frameworks */,
+				41A8A4162E09CF4600E81123 /* DatalyrSDK in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		41FED5092E09C38800551E35 /* Frameworks */ = {
+		41A8A3E22E09CE4F00E81123 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		41FED5132E09C38800551E35 /* Frameworks */ = {
+		41A8A3EC2E09CE4F00E81123 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -77,22 +77,22 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		41FED4F32E09C38700551E35 = {
+		41A8A3CC2E09CE4E00E81123 = {
 			isa = PBXGroup;
 			children = (
-				41FED4FE2E09C38700551E35 /* DatalyrTestApp */,
-				41FED50F2E09C38800551E35 /* DatalyrTestAppTests */,
-				41FED5192E09C38800551E35 /* DatalyrTestAppUITests */,
-				41FED4FD2E09C38700551E35 /* Products */,
+				41A8A3D72E09CE4E00E81123 /* DatalyrTestApp */,
+				41A8A3E82E09CE4F00E81123 /* DatalyrTestAppTests */,
+				41A8A3F22E09CE4F00E81123 /* DatalyrTestAppUITests */,
+				41A8A3D62E09CE4E00E81123 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		41FED4FD2E09C38700551E35 /* Products */ = {
+		41A8A3D62E09CE4E00E81123 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				41FED4FC2E09C38700551E35 /* DatalyrTestApp.app */,
-				41FED50C2E09C38800551E35 /* DatalyrTestAppTests.xctest */,
-				41FED5162E09C38800551E35 /* DatalyrTestAppUITests.xctest */,
+				41A8A3D52E09CE4E00E81123 /* DatalyrTestApp.app */,
+				41A8A3E52E09CE4F00E81123 /* DatalyrTestAppTests.xctest */,
+				41A8A3EF2E09CE4F00E81123 /* DatalyrTestAppUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -100,138 +100,138 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		41FED4FB2E09C38700551E35 /* DatalyrTestApp */ = {
+		41A8A3D42E09CE4E00E81123 /* DatalyrTestApp */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 41FED5202E09C38800551E35 /* Build configuration list for PBXNativeTarget "DatalyrTestApp" */;
+			buildConfigurationList = 41A8A3F92E09CE4F00E81123 /* Build configuration list for PBXNativeTarget "DatalyrTestApp" */;
 			buildPhases = (
-				41FED4F82E09C38700551E35 /* Sources */,
-				41FED4F92E09C38700551E35 /* Frameworks */,
-				41FED4FA2E09C38700551E35 /* Resources */,
+				41A8A3D12E09CE4E00E81123 /* Sources */,
+				41A8A3D22E09CE4E00E81123 /* Frameworks */,
+				41A8A3D32E09CE4E00E81123 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				41FED4FE2E09C38700551E35 /* DatalyrTestApp */,
+				41A8A3D72E09CE4E00E81123 /* DatalyrTestApp */,
 			);
 			name = DatalyrTestApp;
 			packageProductDependencies = (
-				41FED52A2E09C4A300551E35 /* DatalyrSDK */,
+				41A8A4152E09CF4600E81123 /* DatalyrSDK */,
 			);
 			productName = DatalyrTestApp;
-			productReference = 41FED4FC2E09C38700551E35 /* DatalyrTestApp.app */;
+			productReference = 41A8A3D52E09CE4E00E81123 /* DatalyrTestApp.app */;
 			productType = "com.apple.product-type.application";
 		};
-		41FED50B2E09C38800551E35 /* DatalyrTestAppTests */ = {
+		41A8A3E42E09CE4F00E81123 /* DatalyrTestAppTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 41FED5232E09C38800551E35 /* Build configuration list for PBXNativeTarget "DatalyrTestAppTests" */;
+			buildConfigurationList = 41A8A3FC2E09CE4F00E81123 /* Build configuration list for PBXNativeTarget "DatalyrTestAppTests" */;
 			buildPhases = (
-				41FED5082E09C38800551E35 /* Sources */,
-				41FED5092E09C38800551E35 /* Frameworks */,
-				41FED50A2E09C38800551E35 /* Resources */,
+				41A8A3E12E09CE4F00E81123 /* Sources */,
+				41A8A3E22E09CE4F00E81123 /* Frameworks */,
+				41A8A3E32E09CE4F00E81123 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				41FED50E2E09C38800551E35 /* PBXTargetDependency */,
+				41A8A3E72E09CE4F00E81123 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				41FED50F2E09C38800551E35 /* DatalyrTestAppTests */,
+				41A8A3E82E09CE4F00E81123 /* DatalyrTestAppTests */,
 			);
 			name = DatalyrTestAppTests;
 			packageProductDependencies = (
 			);
 			productName = DatalyrTestAppTests;
-			productReference = 41FED50C2E09C38800551E35 /* DatalyrTestAppTests.xctest */;
+			productReference = 41A8A3E52E09CE4F00E81123 /* DatalyrTestAppTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		41FED5152E09C38800551E35 /* DatalyrTestAppUITests */ = {
+		41A8A3EE2E09CE4F00E81123 /* DatalyrTestAppUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 41FED5262E09C38800551E35 /* Build configuration list for PBXNativeTarget "DatalyrTestAppUITests" */;
+			buildConfigurationList = 41A8A3FF2E09CE4F00E81123 /* Build configuration list for PBXNativeTarget "DatalyrTestAppUITests" */;
 			buildPhases = (
-				41FED5122E09C38800551E35 /* Sources */,
-				41FED5132E09C38800551E35 /* Frameworks */,
-				41FED5142E09C38800551E35 /* Resources */,
+				41A8A3EB2E09CE4F00E81123 /* Sources */,
+				41A8A3EC2E09CE4F00E81123 /* Frameworks */,
+				41A8A3ED2E09CE4F00E81123 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				41FED5182E09C38800551E35 /* PBXTargetDependency */,
+				41A8A3F12E09CE4F00E81123 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				41FED5192E09C38800551E35 /* DatalyrTestAppUITests */,
+				41A8A3F22E09CE4F00E81123 /* DatalyrTestAppUITests */,
 			);
 			name = DatalyrTestAppUITests;
 			packageProductDependencies = (
 			);
 			productName = DatalyrTestAppUITests;
-			productReference = 41FED5162E09C38800551E35 /* DatalyrTestAppUITests.xctest */;
+			productReference = 41A8A3EF2E09CE4F00E81123 /* DatalyrTestAppUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		41FED4F42E09C38700551E35 /* Project object */ = {
+		41A8A3CD2E09CE4E00E81123 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1610;
 				LastUpgradeCheck = 1610;
 				TargetAttributes = {
-					41FED4FB2E09C38700551E35 = {
+					41A8A3D42E09CE4E00E81123 = {
 						CreatedOnToolsVersion = 16.1;
 					};
-					41FED50B2E09C38800551E35 = {
+					41A8A3E42E09CE4F00E81123 = {
 						CreatedOnToolsVersion = 16.1;
-						TestTargetID = 41FED4FB2E09C38700551E35;
+						TestTargetID = 41A8A3D42E09CE4E00E81123;
 					};
-					41FED5152E09C38800551E35 = {
+					41A8A3EE2E09CE4F00E81123 = {
 						CreatedOnToolsVersion = 16.1;
-						TestTargetID = 41FED4FB2E09C38700551E35;
+						TestTargetID = 41A8A3D42E09CE4E00E81123;
 					};
 				};
 			};
-			buildConfigurationList = 41FED4F72E09C38700551E35 /* Build configuration list for PBXProject "DatalyrTestApp" */;
+			buildConfigurationList = 41A8A3D02E09CE4E00E81123 /* Build configuration list for PBXProject "DatalyrTestApp" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 				Base,
 			);
-			mainGroup = 41FED4F32E09C38700551E35;
+			mainGroup = 41A8A3CC2E09CE4E00E81123;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				41FED5292E09C4A300551E35 /* XCRemoteSwiftPackageReference "datalyr-ios-sdk" */,
+				41A8A4142E09CF4600E81123 /* XCLocalSwiftPackageReference "../../datalyr-ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
-			productRefGroup = 41FED4FD2E09C38700551E35 /* Products */;
+			productRefGroup = 41A8A3D62E09CE4E00E81123 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				41FED4FB2E09C38700551E35 /* DatalyrTestApp */,
-				41FED50B2E09C38800551E35 /* DatalyrTestAppTests */,
-				41FED5152E09C38800551E35 /* DatalyrTestAppUITests */,
+				41A8A3D42E09CE4E00E81123 /* DatalyrTestApp */,
+				41A8A3E42E09CE4F00E81123 /* DatalyrTestAppTests */,
+				41A8A3EE2E09CE4F00E81123 /* DatalyrTestAppUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		41FED4FA2E09C38700551E35 /* Resources */ = {
+		41A8A3D32E09CE4E00E81123 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		41FED50A2E09C38800551E35 /* Resources */ = {
+		41A8A3E32E09CE4F00E81123 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		41FED5142E09C38800551E35 /* Resources */ = {
+		41A8A3ED2E09CE4F00E81123 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -241,21 +241,21 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		41FED4F82E09C38700551E35 /* Sources */ = {
+		41A8A3D12E09CE4E00E81123 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		41FED5082E09C38800551E35 /* Sources */ = {
+		41A8A3E12E09CE4F00E81123 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		41FED5122E09C38800551E35 /* Sources */ = {
+		41A8A3EB2E09CE4F00E81123 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -265,20 +265,20 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		41FED50E2E09C38800551E35 /* PBXTargetDependency */ = {
+		41A8A3E72E09CE4F00E81123 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 41FED4FB2E09C38700551E35 /* DatalyrTestApp */;
-			targetProxy = 41FED50D2E09C38800551E35 /* PBXContainerItemProxy */;
+			target = 41A8A3D42E09CE4E00E81123 /* DatalyrTestApp */;
+			targetProxy = 41A8A3E62E09CE4F00E81123 /* PBXContainerItemProxy */;
 		};
-		41FED5182E09C38800551E35 /* PBXTargetDependency */ = {
+		41A8A3F12E09CE4F00E81123 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 41FED4FB2E09C38700551E35 /* DatalyrTestApp */;
-			targetProxy = 41FED5172E09C38800551E35 /* PBXContainerItemProxy */;
+			target = 41A8A3D42E09CE4E00E81123 /* DatalyrTestApp */;
+			targetProxy = 41A8A3F02E09CE4F00E81123 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		41FED51E2E09C38800551E35 /* Debug */ = {
+		41A8A3F72E09CE4F00E81123 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -341,7 +341,7 @@
 			};
 			name = Debug;
 		};
-		41FED51F2E09C38800551E35 /* Release */ = {
+		41A8A3F82E09CE4F00E81123 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -397,7 +397,7 @@
 			};
 			name = Release;
 		};
-		41FED5212E09C38800551E35 /* Debug */ = {
+		41A8A3FA2E09CE4F00E81123 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -420,17 +420,13 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.test.datalyrapp.DatalyrTestApp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
-		41FED5222E09C38800551E35 /* Release */ = {
+		41A8A3FB2E09CE4F00E81123 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -453,22 +449,19 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.test.datalyrapp.DatalyrTestApp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
-		41FED5242E09C38800551E35 /* Debug */ = {
+		41A8A3FD2E09CE4F00E81123 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = UDPQ7DK7L3;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
 				MARKETING_VERSION = 1.0;
@@ -481,12 +474,13 @@
 			};
 			name = Debug;
 		};
-		41FED5252E09C38800551E35 /* Release */ = {
+		41A8A3FE2E09CE4F00E81123 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = UDPQ7DK7L3;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.1;
 				MARKETING_VERSION = 1.0;
@@ -499,11 +493,12 @@
 			};
 			name = Release;
 		};
-		41FED5272E09C38800551E35 /* Debug */ = {
+		41A8A4002E09CE4F00E81123 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = UDPQ7DK7L3;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.test.datalyrapp.DatalyrTestAppUITests;
@@ -515,11 +510,12 @@
 			};
 			name = Debug;
 		};
-		41FED5282E09C38800551E35 /* Release */ = {
+		41A8A4012E09CE4F00E81123 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = UDPQ7DK7L3;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.test.datalyrapp.DatalyrTestAppUITests;
@@ -534,62 +530,57 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		41FED4F72E09C38700551E35 /* Build configuration list for PBXProject "DatalyrTestApp" */ = {
+		41A8A3D02E09CE4E00E81123 /* Build configuration list for PBXProject "DatalyrTestApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				41FED51E2E09C38800551E35 /* Debug */,
-				41FED51F2E09C38800551E35 /* Release */,
+				41A8A3F72E09CE4F00E81123 /* Debug */,
+				41A8A3F82E09CE4F00E81123 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		41FED5202E09C38800551E35 /* Build configuration list for PBXNativeTarget "DatalyrTestApp" */ = {
+		41A8A3F92E09CE4F00E81123 /* Build configuration list for PBXNativeTarget "DatalyrTestApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				41FED5212E09C38800551E35 /* Debug */,
-				41FED5222E09C38800551E35 /* Release */,
+				41A8A3FA2E09CE4F00E81123 /* Debug */,
+				41A8A3FB2E09CE4F00E81123 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		41FED5232E09C38800551E35 /* Build configuration list for PBXNativeTarget "DatalyrTestAppTests" */ = {
+		41A8A3FC2E09CE4F00E81123 /* Build configuration list for PBXNativeTarget "DatalyrTestAppTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				41FED5242E09C38800551E35 /* Debug */,
-				41FED5252E09C38800551E35 /* Release */,
+				41A8A3FD2E09CE4F00E81123 /* Debug */,
+				41A8A3FE2E09CE4F00E81123 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		41FED5262E09C38800551E35 /* Build configuration list for PBXNativeTarget "DatalyrTestAppUITests" */ = {
+		41A8A3FF2E09CE4F00E81123 /* Build configuration list for PBXNativeTarget "DatalyrTestAppUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				41FED5272E09C38800551E35 /* Debug */,
-				41FED5282E09C38800551E35 /* Release */,
+				41A8A4002E09CE4F00E81123 /* Debug */,
+				41A8A4012E09CE4F00E81123 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		41FED5292E09C4A300551E35 /* XCRemoteSwiftPackageReference "datalyr-ios-sdk" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/datalyr/datalyr-ios-sdk";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		41A8A4142E09CF4600E81123 /* XCLocalSwiftPackageReference "../../datalyr-ios-sdk" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../datalyr-ios-sdk";
 		};
-/* End XCRemoteSwiftPackageReference section */
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		41FED52A2E09C4A300551E35 /* DatalyrSDK */ = {
+		41A8A4152E09CF4600E81123 /* DatalyrSDK */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 41FED5292E09C4A300551E35 /* XCRemoteSwiftPackageReference "datalyr-ios-sdk" */;
 			productName = DatalyrSDK;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
-	rootObject = 41FED4F42E09C38700551E35 /* Project object */;
+	rootObject = 41A8A3CD2E09CE4E00E81123 /* Project object */;
 }
