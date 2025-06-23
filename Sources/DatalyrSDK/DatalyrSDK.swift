@@ -334,7 +334,7 @@ public class DatalyrSDK {
             eventName: eventName,
             eventData: enrichedEventData,
             fingerprintData: fingerprintData,
-            source: "ios_app",
+            source: "mobile_app",
             timestamp: timestamp,
             userId: currentUserId,
             userProperties: userProperties.isEmpty ? nil : userProperties

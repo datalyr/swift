@@ -109,7 +109,7 @@ public struct EventPayload: Codable {
         eventName: String,
         eventData: EventData? = nil,
         fingerprintData: FingerprintData? = nil,
-        source: String = "ios_app",
+        source: String = "mobile_app",
         timestamp: String = ISO8601DateFormatter().string(from: Date()),
         userId: String? = nil,
         userProperties: UserProperties? = nil
