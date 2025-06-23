@@ -206,11 +206,41 @@ let config = DatalyrConfig(
 )
 ```
 
-## Deep Link Setup (Optional)
+## Attribution Tracking Setup
 
-If you want to track attribution from deep links, add this to your app:
+Attribution tracking allows you to understand which campaigns, ads, or links drive app installs and user actions.
 
-### For iOS 13+ (SceneDelegate)
+### Step 1: Enable Attribution in SDK Configuration
+
+```swift
+let config = DatalyrConfig(
+    workspaceId: "YOUR_WORKSPACE_ID",
+    apiKey: "YOUR_API_KEY",
+    enableAttribution: true  // Enable attribution tracking
+)
+```
+
+### Step 2: Configure URL Schemes
+
+Add your app's URL scheme to `Info.plist` to handle deep links:
+
+```xml
+<key>CFBundleURLTypes</key>
+<array>
+    <dict>
+        <key>CFBundleURLName</key>
+        <string>com.yourapp.deeplink</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+            <string>yourapp</string>
+        </array>
+    </dict>
+</array>
+```
+
+### Step 3: Handle Deep Links
+
+#### For iOS 13+ (SceneDelegate)
 
 ```swift
 import UIKit
@@ -221,31 +251,152 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
         guard let url = URLContexts.first?.url else { return }
         
-        // Datalyr automatically processes attribution parameters
-        // No additional code needed - just ensure the SDK is initialized
+        // Datalyr automatically captures attribution parameters
+        // from UTM parameters, click IDs, and custom parameters
         
         // Handle your app's deep link logic here
         handleDeepLink(url)
     }
     
     private func handleDeepLink(_ url: URL) {
-        // Your app's deep link handling logic
+        // Example: yourapp://product?id=123&utm_source=facebook&utm_campaign=summer_sale
+        // Datalyr will automatically capture:
+        // - utm_source: facebook
+        // - utm_campaign: summer_sale
+        // - Any other UTM or click ID parameters
+        
+        // Your app's navigation logic
+        if url.host == "product" {
+            // Navigate to product page
+        }
     }
 }
 ```
 
-### For iOS 12 and earlier (AppDelegate)
+#### For iOS 12 and earlier (AppDelegate)
 
 ```swift
 func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
     
-    // Datalyr automatically processes attribution parameters
-    // No additional code needed - just ensure the SDK is initialized
-    
-    // Handle your app's deep link logic here
+    // Datalyr automatically captures attribution parameters
     handleDeepLink(url)
     
     return true
+}
+```
+
+### Step 4: Supported Attribution Parameters
+
+The SDK automatically captures these parameters from deep links:
+
+#### UTM Parameters (Google Analytics standard)
+- `utm_source` - Traffic source (e.g., "facebook", "google")
+- `utm_medium` - Marketing medium (e.g., "cpc", "email")
+- `utm_campaign` - Campaign name (e.g., "summer_sale")
+- `utm_term` - Paid search keywords
+- `utm_content` - Ad content or link identifier
+
+#### Platform Click IDs
+- `fbclid` - Facebook Click ID
+- `ttclid` - TikTok Click ID  
+- `gclid` - Google Click ID
+- `twclid` - Twitter Click ID
+- `msclkid` - Microsoft Click ID
+
+#### Custom Parameters
+- Any additional parameters you include in your links
+
+### Step 5: Test Attribution
+
+#### Create Test Links
+
+```bash
+# Example attribution links for testing:
+
+# Facebook campaign
+yourapp://home?utm_source=facebook&utm_campaign=summer_sale&fbclid=abc123
+
+# Google Ads
+yourapp://product?utm_source=google&utm_medium=cpc&gclid=xyz789
+
+# Email campaign
+yourapp://offer?utm_source=email&utm_campaign=newsletter&utm_content=button1
+```
+
+#### Verify Attribution Data
+
+```swift
+// Check captured attribution data
+let attribution = DatalyrSDK.shared.getAttributionData()
+print("Attribution source: \(attribution.utmSource ?? "none")")
+print("Attribution campaign: \(attribution.utmCampaign ?? "none")")
+print("Facebook Click ID: \(attribution.fbclid ?? "none")")
+```
+
+### Step 6: Universal Links (Recommended)
+
+For better user experience, set up Universal Links instead of custom URL schemes:
+
+#### Configure Apple App Site Association
+
+Create `apple-app-site-association` file on your website:
+
+```json
+{
+    "applinks": {
+        "apps": [],
+        "details": [
+            {
+                "appID": "TEAMID.com.yourapp.bundle",
+                "paths": ["*"]
+            }
+        ]
+    }
+}
+```
+
+#### Handle Universal Links
+
+```swift
+// In SceneDelegate
+func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+    guard userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+          let url = userActivity.webpageURL else { return }
+    
+    // Datalyr automatically processes attribution from Universal Links
+    handleDeepLink(url)
+}
+```
+
+### Step 7: Attribution Events
+
+The SDK automatically tracks these attribution events:
+
+- **`app_install`** - First app launch with attribution data
+- **`session_start`** - Each session includes attribution context
+- **Attribution data** - Attached to all subsequent events
+
+### Example Attribution Flow
+
+1. **User clicks ad**: `https://yourwebsite.com/app?utm_source=facebook&utm_campaign=summer_sale`
+2. **Redirects to app**: `yourapp://home?utm_source=facebook&utm_campaign=summer_sale`
+3. **SDK captures data**: Attribution automatically saved
+4. **All events tagged**: Future events include attribution context
+
+### Testing Attribution
+
+```swift
+// In your test app or debug build
+Task {
+    // Track a test event
+    await DatalyrSDK.shared.track("attribution_test")
+    
+    // Check attribution data
+    let attribution = DatalyrSDK.shared.getAttributionData()
+    print("📊 Attribution Data:")
+    print("Source: \(attribution.utmSource ?? "none")")
+    print("Campaign: \(attribution.utmCampaign ?? "none")")
+    print("Install time: \(attribution.installTime ?? "none")")
 }
 ```
 
