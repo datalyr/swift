@@ -249,7 +249,7 @@ struct ContentView: View {
                     apiKey: "dk_KCrEZT9saU4ZlTwr2HHnuaia3jKDHcuf"
                 )
                 
-                try await DatalyrSDK.shared.initialize(config)
+                try await DatalyrSDK.shared.initialize(config: config)
                 
                 await MainActor.run {
                     sdkInitialized = true

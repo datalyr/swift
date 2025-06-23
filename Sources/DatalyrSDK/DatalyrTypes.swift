@@ -133,12 +133,10 @@ public struct EventPayload: Codable {
 /// Device fingerprint data
 public struct FingerprintData: Codable {
     public let deviceId: String?
-    public let advertisingId: String?
     public let deviceInfo: DeviceInfo?
     
-    public init(deviceId: String? = nil, advertisingId: String? = nil, deviceInfo: DeviceInfo? = nil) {
+    public init(deviceId: String? = nil, deviceInfo: DeviceInfo? = nil) {
         self.deviceId = deviceId
-        self.advertisingId = advertisingId
         self.deviceInfo = deviceInfo
     }
 }

@@ -169,12 +169,10 @@ private func getCarrierName() -> String? {
 /// Create device fingerprint data
 internal func createFingerprintData() async -> FingerprintData {
     let deviceId = await getOrCreateDeviceId()
-    let advertisingId = await getAdvertisingId()
     let deviceInfo = getDeviceInfo()
     
     return FingerprintData(
         deviceId: deviceId,
-        advertisingId: advertisingId,
         deviceInfo: deviceInfo
     )
 }
@@ -192,35 +190,7 @@ internal func getOrCreateDeviceId() async -> String {
     return newId
 }
 
-/// Get advertising ID (IDFA) with proper privacy handling
-internal func getAdvertisingId() async -> String? {
-    // Check iOS version and tracking authorization
-    if #available(iOS 14, *) {
-        let status = ATTrackingManager.trackingAuthorizationStatus
-        
-        switch status {
-        case .authorized:
-            let idfa = ASIdentifierManager.shared().advertisingIdentifier
-            return idfa.uuidString != "00000000-0000-0000-0000-000000000000" ? idfa.uuidString : nil
-        case .denied, .restricted:
-            return nil
-        case .notDetermined:
-            // Request permission if not determined
-            let requestedStatus = await ATTrackingManager.requestTrackingAuthorization()
-            if requestedStatus == .authorized {
-                let idfa = ASIdentifierManager.shared().advertisingIdentifier
-                return idfa.uuidString != "00000000-0000-0000-0000-000000000000" ? idfa.uuidString : nil
-            }
-            return nil
-        @unknown default:
-            return nil
-        }
-    } else {
-        // iOS 13 and earlier
-        let idfa = ASIdentifierManager.shared().advertisingIdentifier
-        return ASIdentifierManager.shared().isAdvertisingTrackingEnabled ? idfa.uuidString : nil
-    }
-}
+
 
 // MARK: - ID Generation
 

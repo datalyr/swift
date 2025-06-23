@@ -147,7 +147,7 @@ internal class AttributionManager {
         
         // Extract fragment parameters (after #)
         if let fragment = components.fragment {
-            let fragmentComponents = URLComponents()
+            var fragmentComponents = URLComponents()
             fragmentComponents.query = fragment
             
             if let fragmentItems = fragmentComponents.queryItems {
