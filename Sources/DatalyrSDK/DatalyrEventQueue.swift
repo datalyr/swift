@@ -102,7 +102,7 @@ internal class DatalyrEventQueue {
         queueLock.lock()
         defer { queueLock.unlock() }
         
-        let oldestEventAge: TimeInterval? = queue.first?.timestamp.timeIntervalSince1970
+        let oldestEventAge: TimeInterval? = queue.first?.timestamp
             .map { Date().timeIntervalSince1970 - $0 }
         
         return QueueStats(

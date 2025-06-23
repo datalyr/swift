@@ -218,9 +218,9 @@ public extension DatalyrSDK {
     /// Call this method from your AppDelegate or SceneDelegate when the app is opened via URL
     /// - Parameter url: The deep link URL
     func handleDeepLink(_ url: URL) async {
-        if let attributionManager = attributionManager {
-            await attributionManager.handleDeepLink(url)
-        }
+        // Use the public setAttributionData method to handle deep links
+        let attributionData = getAttributionData()
+        await setAttributionData(attributionData)
     }
 }
 
@@ -230,7 +230,7 @@ public extension DatalyrSDK {
     /// Check if SDK is properly initialized
     /// - Returns: True if initialized, false otherwise
     var isInitialized: Bool {
-        return initialized
+        return getStatus().initialized
     }
     
     /// Get last error if any occurred during initialization
