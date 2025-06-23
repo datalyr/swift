@@ -103,7 +103,7 @@ The SDK automatically tracks these events when `enableAutoEvents: true`:
 
 - **`session_start`** - User starts new session with attribution data
 - **`session_end`** - Session ends with duration and event count
-- **`screen_view`** - User navigates between screens (with SwiftUI/UIKit integration)
+- **`pageview`** - User navigates between screens (with SwiftUI/UIKit integration)
 - **`app_install`** - First app launch with full attribution
 - **`app_update`** - App version changes
 - **`app_foregrounded`** - App becomes active

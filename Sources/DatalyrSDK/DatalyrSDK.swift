@@ -159,7 +159,7 @@ public class DatalyrSDK {
             screenData.merge(properties) { (_, new) in new }
         }
         
-        await track("screen_view", eventData: screenData)
+        await track("pageview", eventData: screenData)
     }
     
     /// Identify a user

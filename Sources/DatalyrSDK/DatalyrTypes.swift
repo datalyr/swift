@@ -304,6 +304,7 @@ public struct SessionData: Codable {
     public let startTime: Date
     public var lastActivityTime: Date
     public var eventCount: Int
+    public var pageviewCount: Int
     public let appVersion: String
     public let osVersion: String
     
@@ -312,6 +313,7 @@ public struct SessionData: Codable {
         self.startTime = startTime
         self.lastActivityTime = startTime
         self.eventCount = 0
+        self.pageviewCount = 0
         self.appVersion = appVersion
         self.osVersion = osVersion
     }

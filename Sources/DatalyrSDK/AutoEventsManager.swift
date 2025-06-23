@@ -108,6 +108,7 @@ internal class AutoEventsManager {
             "session_id": session.sessionId,
             "session_duration": sessionDuration,
             "event_count": session.eventCount,
+            "pageview": session.pageviewCount,
             "app_version": session.appVersion,
             "os_version": session.osVersion
         ])
@@ -164,6 +165,13 @@ internal class AutoEventsManager {
         }
         
         trackingDelegate?.trackScreenView(screenName, properties: screenProperties)
+        
+        // Update session pageview count
+        if var session = currentSession {
+            session.pageviewCount += 1
+            currentSession = session
+        }
+        
         updateSessionActivity()
         
         debugLog("Screen view tracked", data: ["screen": screenName])
@@ -278,6 +286,7 @@ internal class AutoEventsManager {
                 "session_id": session.sessionId,
                 "session_duration": sessionDuration,
                 "event_count": session.eventCount,
+                "pageview": session.pageviewCount,
                 "reason": "app_terminated"
             ])
         }
