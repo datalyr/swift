@@ -1,4 +1,5 @@
 import Foundation
+import StoreKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -28,9 +29,14 @@ public class DatalyrSDK {
     private var currentUserId: String?
     private var userProperties: UserProperties = [:]
     
+    // SKAdNetwork conversion value encoder
+    private var conversionEncoder: ConversionValueEncoder?
+    
     // App lifecycle monitoring
     private var appStateObserver: NSObjectProtocol?
+    #if canImport(UIKit)
     private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
+    #endif
     
     private init() {
         setupNotificationObservers()
@@ -105,6 +111,25 @@ public class DatalyrSDK {
                 config: config.autoEventConfig ?? AutoEventConfig()
             )
             await autoEventsManager?.initialize()
+        }
+        
+        // Initialize SKAdNetwork conversion encoder
+        if let templateName = config.skadTemplate {
+            let template: ConversionTemplate
+            switch templateName.lowercased() {
+            case "gaming":
+                template = .gaming
+            case "subscription":
+                template = .subscription
+            default:
+                template = .ecommerce
+            }
+            
+            self.conversionEncoder = ConversionValueEncoder(template: template)
+            
+            if config.debug {
+                debugLog("SKAdNetwork encoder initialized with template: \(templateName)")
+            }
         }
         
         // Mark as initialized
@@ -309,6 +334,164 @@ public class DatalyrSDK {
         await track(eventName, eventData: revenueData)
     }
     
+    // MARK: - SKAdNetwork Enhanced Methods
+    
+    /// Initialize Datalyr SDK with SKAdNetwork conversion value encoding
+    /// - Parameters:
+    ///   - config: SDK configuration
+    ///   - template: SKAdNetwork conversion template ("ecommerce", "gaming", "subscription")
+    public static func initializeWithSKAdNetwork(
+        config: DatalyrConfig, 
+        template: String = "ecommerce"
+    ) async throws {
+        // Create config with SKAdNetwork template
+        let skadConfig = DatalyrConfig(
+            workspaceId: config.workspaceId,
+            apiKey: config.apiKey,
+            debug: config.debug,
+            endpoint: config.endpoint,
+            maxRetries: config.maxRetries,
+            retryDelay: config.retryDelay,
+            timeout: config.timeout,
+            batchSize: config.batchSize,
+            flushInterval: config.flushInterval,
+            maxQueueSize: config.maxQueueSize,
+            respectDoNotTrack: config.respectDoNotTrack,
+            enableAutoEvents: config.enableAutoEvents,
+            enableAttribution: config.enableAttribution,
+            autoEventConfig: config.autoEventConfig,
+            skadTemplate: template
+        )
+        
+        try await shared.initialize(config: skadConfig)
+    }
+    
+    /// Track event with automatic SKAdNetwork conversion value encoding
+    /// - Parameters:
+    ///   - event: Event name
+    ///   - eventData: Event properties
+    public func trackWithSKAdNetwork(
+        _ event: String, 
+        eventData: EventData? = nil
+    ) async {
+        // Existing tracking (keep this exactly as-is)
+        await track(event, eventData: eventData)
+        
+        // NEW: Automatic SKAdNetwork encoding
+        guard let encoder = conversionEncoder else {
+            if config?.debug == true {
+                debugLog("SKAdNetwork encoder not initialized. Pass skadTemplate in initialize() or use initializeWithSKAdNetwork()")
+            }
+            return
+        }
+        
+        let conversionValue = encoder.encode(event: event, properties: eventData)
+        
+        if conversionValue > 0 {
+            #if os(iOS)
+            if #available(iOS 14.0, *) {
+                SKAdNetwork.updateConversionValue(conversionValue)
+                
+                if config?.debug == true {
+                    debugLog("SKAdNetwork conversion value updated: \(conversionValue) for event: \(event)", data: eventData)
+                }
+            } else if config?.debug == true {
+                debugLog("SKAdNetwork requires iOS 14.0+")
+            }
+            #else
+            if config?.debug == true {
+                debugLog("SKAdNetwork only available on iOS")
+            }
+            #endif
+        } else if config?.debug == true {
+            debugLog("No conversion value generated for event: \(event)")
+        }
+    }
+    
+    /// Track purchase with automatic revenue encoding
+    /// - Parameters:
+    ///   - value: Purchase value
+    ///   - currency: Currency code (default: "USD")
+    ///   - productId: Product identifier (optional)
+    public func trackPurchase(
+        value: Double, 
+        currency: String = "USD", 
+        productId: String? = nil
+    ) async {
+        var properties: EventData = [
+            "revenue": value, 
+            "currency": currency
+        ]
+        if let productId = productId {
+            properties["product_id"] = productId
+        }
+        
+        await trackWithSKAdNetwork("purchase", eventData: properties)
+    }
+    
+    /// Track subscription with automatic revenue encoding
+    /// - Parameters:
+    ///   - value: Subscription value
+    ///   - currency: Currency code (default: "USD")
+    ///   - plan: Subscription plan (optional)
+    public func trackSubscription(
+        value: Double, 
+        currency: String = "USD", 
+        plan: String? = nil
+    ) async {
+        var properties: EventData = [
+            "revenue": value, 
+            "currency": currency
+        ]
+        if let plan = plan {
+            properties["plan"] = plan
+        }
+        
+        await trackWithSKAdNetwork("subscribe", eventData: properties)
+    }
+    
+    /// Get current conversion value for testing
+    /// - Parameters:
+    ///   - event: Event name
+    ///   - properties: Event properties
+    /// - Returns: Conversion value (0-63) or nil if encoder not initialized
+    public func getConversionValue(for event: String, properties: EventData? = nil) -> Int? {
+        return conversionEncoder?.encode(event: event, properties: properties)
+    }
+    
+    // MARK: - Static Convenience Methods
+    
+    /// Track event with automatic SKAdNetwork conversion value encoding (static)
+    public static func trackWithSKAdNetwork(
+        _ event: String,
+        eventData: EventData? = nil
+    ) async {
+        await shared.trackWithSKAdNetwork(event, eventData: eventData)
+    }
+    
+    /// Track purchase with automatic revenue encoding (static)
+    public static func trackPurchase(
+        value: Double,
+        currency: String = "USD",
+        productId: String? = nil
+    ) async {
+        await shared.trackPurchase(value: value, currency: currency, productId: productId)
+    }
+    
+    /// Track subscription with automatic revenue encoding (static)
+    public static func trackSubscription(
+        value: Double,
+        currency: String = "USD",
+        plan: String? = nil
+    ) async {
+        await shared.trackSubscription(value: value, currency: currency, plan: plan)
+    }
+    
+    /// Get conversion value for testing (static)
+    public static func getConversionValue(for event: String, properties: EventData? = nil) -> Int? {
+        return shared.getConversionValue(for: event, properties: properties)
+    }
+    
     // MARK: - Private Methods
     
     /// Create event payload from event data
@@ -323,7 +506,11 @@ public class DatalyrSDK {
         enrichedEventData["platform"] = "ios"
         enrichedEventData["app_version"] = getAppVersion()
         enrichedEventData["app_build"] = getAppBuildNumber()
+        #if canImport(UIKit)
         enrichedEventData["os_version"] = UIDevice.current.systemVersion
+        #else
+        enrichedEventData["os_version"] = ProcessInfo.processInfo.operatingSystemVersionString
+        #endif
         enrichedEventData["sdk_version"] = "1.0.0"
         
         return EventPayload(
@@ -399,6 +586,7 @@ public class DatalyrSDK {
     
     /// Setup notification observers for app lifecycle
     private func setupNotificationObservers() {
+        #if canImport(UIKit)
         // App will resign active
         NotificationCenter.default.addObserver(
             self,
@@ -422,8 +610,10 @@ public class DatalyrSDK {
             name: UIApplication.willTerminateNotification,
             object: nil
         )
+        #endif
     }
     
+    #if canImport(UIKit)
     @objc private func appWillResignActive() {
         // Start background task
         backgroundTaskId = UIApplication.shared.beginBackgroundTask { [weak self] in
@@ -459,6 +649,7 @@ public class DatalyrSDK {
             backgroundTaskId = .invalid
         }
     }
+    #endif
     
     /// Refresh session if timeout exceeded
     private func refreshSessionIfNeeded() async {
@@ -477,7 +668,9 @@ public class DatalyrSDK {
     private func cleanup() {
         NotificationCenter.default.removeObserver(self)
         eventQueue?.destroy()
+        #if canImport(UIKit)
         endBackgroundTask()
+        #endif
     }
 }
 

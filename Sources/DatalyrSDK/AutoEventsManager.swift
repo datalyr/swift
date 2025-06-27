@@ -67,7 +67,11 @@ internal class AutoEventsManager {
     private func initializeSessionTracking() async {
         let sessionId = await getOrCreateSessionId()
         let appVersion = getAppVersion()
+        #if canImport(UIKit)
         let osVersion = UIDevice.current.systemVersion
+        #else
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
+        #endif
         
         currentSession = SessionData(
             sessionId: sessionId,
@@ -183,6 +187,7 @@ internal class AutoEventsManager {
     
     /// Set up app lifecycle observers
     private func setupAppLifecycleObservers() {
+        #if canImport(UIKit)
         // App did become active
         NotificationCenter.default.addObserver(
             self,
@@ -222,8 +227,10 @@ internal class AutoEventsManager {
             name: UIApplication.willTerminateNotification,
             object: nil
         )
+        #endif
     }
     
+    #if canImport(UIKit)
     @objc private func appDidBecomeActive() {
         trackingDelegate?.trackEvent("app_became_active", properties: [
             "platform": "ios",
@@ -300,6 +307,7 @@ internal class AutoEventsManager {
         
         debugLog("App will terminate")
     }
+    #endif
     
     // MARK: - App Update Tracking
     

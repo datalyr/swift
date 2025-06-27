@@ -52,6 +52,35 @@ public extension DatalyrSDK {
         
         try await shared.initialize(config: config)
     }
+    
+    /// Convenience method to initialize with SKAdNetwork conversion value encoding
+    /// - Parameters:
+    ///   - workspaceId: Your Datalyr workspace ID
+    ///   - apiKey: Your Datalyr API key
+    ///   - template: SKAdNetwork conversion template ("ecommerce", "gaming", "subscription")
+    ///   - debug: Enable debug logging
+    ///   - enableAutoEvents: Enable automatic event tracking
+    ///   - enableAttribution: Enable attribution tracking
+    static func configureWithSKAdNetwork(
+        workspaceId: String,
+        apiKey: String,
+        template: String = "ecommerce",
+        debug: Bool = false,
+        enableAutoEvents: Bool = true,
+        enableAttribution: Bool = true
+    ) async throws {
+        try await DatalyrSDK.initializeWithSKAdNetwork(
+            config: DatalyrConfig(
+                workspaceId: workspaceId,
+                apiKey: apiKey,
+                debug: debug,
+                enableAutoEvents: enableAutoEvents,
+                enableAttribution: enableAttribution,
+                autoEventConfig: AutoEventConfig()
+            ),
+            template: template
+        )
+    }
 }
 
 // MARK: - Global Convenience Functions
@@ -96,6 +125,43 @@ public func datalyrReset() async {
 /// Global convenience function to flush events
 public func datalyrFlush() async {
     await DatalyrSDK.shared.flush()
+}
+
+// MARK: - SKAdNetwork Global Convenience Functions
+
+/// Global convenience function to track events with automatic SKAdNetwork conversion value encoding
+/// - Parameters:
+///   - eventName: Name of the event
+///   - properties: Optional event properties
+public func datalyrTrackWithSKAdNetwork(_ eventName: String, properties: [String: Any]? = nil) async {
+    await DatalyrSDK.shared.trackWithSKAdNetwork(eventName, eventData: properties)
+}
+
+/// Global convenience function to track purchases with automatic revenue encoding
+/// - Parameters:
+///   - value: Purchase value
+///   - currency: Currency code (default: "USD")
+///   - productId: Product identifier (optional)
+public func datalyrTrackPurchase(value: Double, currency: String = "USD", productId: String? = nil) async {
+    await DatalyrSDK.shared.trackPurchase(value: value, currency: currency, productId: productId)
+}
+
+/// Global convenience function to track subscriptions with automatic revenue encoding
+/// - Parameters:
+///   - value: Subscription value
+///   - currency: Currency code (default: "USD")
+///   - plan: Subscription plan (optional)
+public func datalyrTrackSubscription(value: Double, currency: String = "USD", plan: String? = nil) async {
+    await DatalyrSDK.shared.trackSubscription(value: value, currency: currency, plan: plan)
+}
+
+/// Global convenience function to get conversion value for testing
+/// - Parameters:
+///   - event: Event name
+///   - properties: Event properties
+/// - Returns: Conversion value (0-63) or nil if encoder not initialized
+public func datalyrGetConversionValue(for event: String, properties: [String: Any]? = nil) -> Int? {
+    return DatalyrSDK.shared.getConversionValue(for: event, properties: properties)
 }
 
 // MARK: - SwiftUI Integration

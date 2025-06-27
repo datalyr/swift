@@ -18,6 +18,7 @@ public struct DatalyrConfig {
     public let enableAutoEvents: Bool
     public let enableAttribution: Bool
     public let autoEventConfig: AutoEventConfig?
+    public let skadTemplate: String?
     
     public init(
         workspaceId: String,
@@ -33,7 +34,8 @@ public struct DatalyrConfig {
         respectDoNotTrack: Bool = true,
         enableAutoEvents: Bool = false,
         enableAttribution: Bool = false,
-        autoEventConfig: AutoEventConfig? = nil
+        autoEventConfig: AutoEventConfig? = nil,
+        skadTemplate: String? = nil
     ) {
         self.workspaceId = workspaceId
         self.apiKey = apiKey
@@ -49,6 +51,7 @@ public struct DatalyrConfig {
         self.enableAutoEvents = enableAutoEvents
         self.enableAttribution = enableAttribution
         self.autoEventConfig = autoEventConfig
+        self.skadTemplate = skadTemplate
     }
 }
 

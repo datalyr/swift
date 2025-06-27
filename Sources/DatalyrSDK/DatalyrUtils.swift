@@ -75,16 +75,22 @@ internal func validateEventData(_ eventData: EventData?) -> Bool {
 
 /// Get comprehensive device information
 internal func getDeviceInfo() -> DeviceInfo {
-    let device = UIDevice.current
-    let screen = UIScreen.main
     let locale = Locale.current
     let timeZone = TimeZone.current
     
     // Get device model name
     let deviceModel = getDeviceModelName()
     
-    // Get screen dimensions
+    // Get device-specific information
+    #if canImport(UIKit)
+    let device = UIDevice.current
+    let screen = UIScreen.main
+    let osVersion = device.systemVersion
     let screenSize = "\(Int(screen.bounds.width))x\(Int(screen.bounds.height))"
+    #else
+    let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
+    let screenSize = "unknown"
+    #endif
     
     // Check if running on simulator
     let isSimulator = isRunningOnSimulator()
@@ -92,7 +98,7 @@ internal func getDeviceInfo() -> DeviceInfo {
     return DeviceInfo(
         model: deviceModel,
         manufacturer: "Apple",
-        osVersion: device.systemVersion,
+        osVersion: osVersion,
         screenSize: screenSize,
         timezone: timeZone.identifier,
         locale: locale.identifier,
