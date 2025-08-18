@@ -60,27 +60,29 @@ public class DatalyrSDK {
         debugLog("Initializing Datalyr SDK...", data: ["workspaceId": config.workspaceId])
         
         // Validate configuration
-        guard !config.workspaceId.isEmpty else {
-            throw DatalyrError.invalidConfiguration("workspaceId is required")
+        guard !config.apiKey.isEmpty else {
+            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v1.0.0")
         }
         
-        guard !config.apiKey.isEmpty else {
-            throw DatalyrError.invalidConfiguration("apiKey is required")
+        // workspaceId is now optional (for backward compatibility)
+        if config.workspaceId.isEmpty {
+            debugLog("workspaceId not provided, using server-side tracking only")
         }
         
         // Store configuration
         self.config = config
         
-        // Initialize HTTP client
+        // Initialize HTTP client with server-side API
         let httpConfig = HTTPClientConfig(
             maxRetries: config.maxRetries,
             retryDelay: config.retryDelay,
             timeout: config.timeout,
             apiKey: config.apiKey,
-            workspaceId: config.workspaceId,
+            workspaceId: config.workspaceId.isEmpty ? nil : config.workspaceId,
+            useServerTracking: config.useServerTracking,
             debug: config.debug
         )
-        self.httpClient = DatalyrHTTPClient(endpoint: config.endpoint, config: httpConfig)
+        self.httpClient = DatalyrHTTPClient(endpoint: config.endpoint.isEmpty ? "https://api.datalyr.com" : config.endpoint, config: httpConfig)
         
         // Initialize event queue
         let queueConfig = QueueConfig(
@@ -511,10 +513,10 @@ public class DatalyrSDK {
         #else
         enrichedEventData["os_version"] = ProcessInfo.processInfo.operatingSystemVersionString
         #endif
-        enrichedEventData["sdk_version"] = "1.0.0"
+        enrichedEventData["sdk_version"] = "1.0.1"
         
         return EventPayload(
-            workspaceId: config?.workspaceId ?? "",
+            workspaceId: config?.workspaceId?.isEmpty == false ? config!.workspaceId : "ios_sdk",
             visitorId: visitorId,
             sessionId: sessionId,
             eventId: eventId,
@@ -571,7 +573,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "1.0.0",
+                "sdk_version": "1.0.1",
                 "install_time": installTime
             ]
             

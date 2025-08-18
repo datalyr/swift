@@ -4,8 +4,9 @@ import Foundation
 
 /// Configuration for the Datalyr SDK
 public struct DatalyrConfig {
-    public let workspaceId: String
-    public let apiKey: String
+    public let apiKey: String // Required for server-side tracking
+    public let workspaceId: String // Optional for backward compatibility
+    public let useServerTracking: Bool // Flag to use new server API (default: true)
     public let debug: Bool
     public let endpoint: String
     public let maxRetries: Int
@@ -21,10 +22,11 @@ public struct DatalyrConfig {
     public let skadTemplate: String?
     
     public init(
-        workspaceId: String,
         apiKey: String,
+        workspaceId: String = "",
+        useServerTracking: Bool = true,
         debug: Bool = false,
-        endpoint: String = "https://datalyr-ingest.datalyr-ingest.workers.dev",
+        endpoint: String = "https://api.datalyr.com",
         maxRetries: Int = 3,
         retryDelay: TimeInterval = 1.0,
         timeout: TimeInterval = 15.0,
@@ -37,8 +39,9 @@ public struct DatalyrConfig {
         autoEventConfig: AutoEventConfig? = nil,
         skadTemplate: String? = nil
     ) {
-        self.workspaceId = workspaceId
         self.apiKey = apiKey
+        self.workspaceId = workspaceId
+        self.useServerTracking = useServerTracking
         self.debug = debug
         self.endpoint = endpoint
         self.maxRetries = maxRetries

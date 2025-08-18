@@ -7,8 +7,9 @@ internal struct HTTPClientConfig {
     let maxRetries: Int
     let retryDelay: TimeInterval
     let timeout: TimeInterval
-    let apiKey: String
-    let workspaceId: String
+    let apiKey: String // Required for server-side tracking
+    let workspaceId: String? // Optional for backward compatibility
+    let useServerTracking: Bool // Flag to use new server API
     let debug: Bool
     
     init(
@@ -16,7 +17,8 @@ internal struct HTTPClientConfig {
         retryDelay: TimeInterval = 1.0,
         timeout: TimeInterval = 15.0,
         apiKey: String,
-        workspaceId: String,
+        workspaceId: String? = nil,
+        useServerTracking: Bool = true,
         debug: Bool = false
     ) {
         self.maxRetries = maxRetries
@@ -24,6 +26,7 @@ internal struct HTTPClientConfig {
         self.timeout = timeout
         self.apiKey = apiKey
         self.workspaceId = workspaceId
+        self.useServerTracking = useServerTracking
         self.debug = debug
     }
 }
@@ -40,7 +43,10 @@ internal class DatalyrHTTPClient {
     private let rateLimitQueue = DispatchQueue(label: "com.datalyr.ratelimit")
     
     init(endpoint: String, config: HTTPClientConfig) {
-        self.endpoint = endpoint
+        // Use server-side API if flag is set (default to true for v1.0.0)
+        self.endpoint = config.useServerTracking 
+            ? "https://api.datalyr.com" 
+            : endpoint
         self.config = config
         
         // Create URLSession with custom configuration
@@ -139,24 +145,33 @@ internal class DatalyrHTTPClient {
         
         // Set headers
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("datalyr-ios-sdk/1.0.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("@datalyr/swift/1.0.1", forHTTPHeaderField: "User-Agent")
         
-        // Use workspace ID as Bearer token if no API key provided (matching web script)
-        let authToken = config.apiKey.isEmpty ? config.workspaceId : config.apiKey
-        request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
-        
-        // Add multiple auth methods for compatibility
-        if !config.apiKey.isEmpty {
+        // Server-side tracking uses X-API-Key header
+        if config.useServerTracking {
             request.setValue(config.apiKey, forHTTPHeaderField: "X-API-Key")
-            request.setValue(config.apiKey, forHTTPHeaderField: "X-Datalyr-API-Key")
+        } else {
+            // Legacy client-side tracking
+            let authToken = config.apiKey.isEmpty ? (config.workspaceId ?? "") : config.apiKey
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+            if !config.apiKey.isEmpty {
+                request.setValue(config.apiKey, forHTTPHeaderField: "X-API-Key")
+                request.setValue(config.apiKey, forHTTPHeaderField: "X-Datalyr-API-Key")
+            }
         }
         
-        // Encode payload
-        let jsonData = try JSONEncoder().encode(payload)
-        request.httpBody = jsonData
+        // Transform payload for server-side API if needed
+        let requestBody: Data
+        if config.useServerTracking {
+            let serverPayload = transformForServerAPI(payload)
+            requestBody = try JSONSerialization.data(withJSONObject: serverPayload)
+        } else {
+            requestBody = try JSONEncoder().encode(payload)
+        }
+        request.httpBody = requestBody
         
         if config.debug {
-            debugLog("Request body: \(String(data: jsonData, encoding: .utf8) ?? "Invalid JSON")")
+            debugLog("Request body: \(String(data: requestBody, encoding: .utf8) ?? "Invalid JSON")")
         }
         
         return request
@@ -233,6 +248,52 @@ internal class DatalyrHTTPClient {
     func updateEndpoint(_ newEndpoint: String) {
         // Note: This would require recreating the client in practice
         debugLog("Endpoint update requested: \(newEndpoint)")
+    }
+    
+    /// Transform payload for server-side API format
+    private func transformForServerAPI(_ payload: EventPayload) -> [String: Any] {
+        var result: [String: Any] = [
+            "event": payload.eventName,
+            "timestamp": payload.timestamp ?? Date().toISOString()
+        ]
+        
+        // Add user identifiers
+        if let userId = payload.userId {
+            result["userId"] = userId
+        } else {
+            result["userId"] = payload.visitorId
+        }
+        result["anonymousId"] = payload.visitorId
+        
+        // Add properties
+        var properties: [String: Any] = payload.eventData ?? [:]
+        properties["sessionId"] = payload.sessionId
+        properties["source"] = payload.source ?? "ios_app"
+        if let fingerprint = payload.fingerprintData {
+            properties["fingerprint"] = fingerprint
+        }
+        result["properties"] = properties
+        
+        // Add context
+        var context: [String: Any] = [
+            "library": "@datalyr/swift",
+            "version": "1.0.1"
+        ]
+        if let userProperties = payload.userProperties {
+            context["userProperties"] = userProperties
+        }
+        result["context"] = context
+        
+        return result
+    }
+}
+
+// Date extension for ISO string formatting
+extension Date {
+    func toISOString() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: self)
     }
 }
 

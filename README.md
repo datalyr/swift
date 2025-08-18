@@ -1,320 +1,299 @@
-# Datalyr iOS SDK
+# @datalyr/swift
 
-A powerful, privacy-first iOS SDK for event tracking and analytics. Built with Swift and designed for modern iOS applications.
+Official Datalyr SDK for iOS - Server-side attribution tracking and analytics.
 
-[![Swift 5.5+](https://img.shields.io/badge/Swift-5.5+-orange.svg)](https://swift.org)
-[![iOS 13.0+](https://img.shields.io/badge/iOS-13.0+-blue.svg)](https://developer.apple.com/ios/)
-[![Swift Package Manager](https://img.shields.io/badge/SPM-compatible-brightgreen.svg)](https://swift.org/package-manager/)
+[![Swift](https://img.shields.io/badge/Swift-5.0+-orange.svg)](https://swift.org)
+[![Platform](https://img.shields.io/badge/platform-iOS%2013%2B-blue.svg)](https://developer.apple.com/ios/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
 
-- 🚀 **Easy Integration** - Simple Swift Package Manager installation
-- 📊 **SKAdNetwork Support** - Automatic conversion value encoding for iOS 14+ attribution
-- 🎮 **Industry Templates** - Pre-built templates for E-commerce, Gaming, and Subscription apps
-- 🔒 **Privacy First** - No IDFA required, GDPR compliant
-- 📱 **Native iOS** - Built specifically for iOS with Swift
-- 🌐 **Offline Support** - Events queued and sent when online
-- 🎯 **Attribution Tracking** - Deep link and campaign attribution
-- 🔄 **Auto Events** - Automatic session and screen tracking
-- ⚡ **High Performance** - Minimal impact on app performance
-- 🛡️ **Type Safe** - Full Swift type safety and error handling
+- 🔒 **Server-side tracking** - Secure API key authentication
+- 📊 **SKAdNetwork** - iOS 14+ attribution with conversion values
+- 🎯 **Attribution tracking** - Deep links, UTM parameters, click IDs
+- 💾 **Offline queue** - Events saved and retried automatically
+- 🔄 **Session management** - Automatic session tracking
+- ⚡ **Performance** - < 5MB memory, minimal battery impact
+- 🏗️ **SwiftUI & UIKit** - Works with both frameworks
 
 ## Installation
 
-### Swift Package Manager
+### Swift Package Manager (Recommended)
 
-Add the Datalyr iOS SDK to your project using Xcode:
+1. In Xcode, select **File → Add Package Dependencies**
+2. Enter the repository URL:
+   ```
+   https://github.com/datalyr/swift
+   ```
+3. Select version **1.0.1** or later
+4. Add **DatalyrSDK** to your target
 
-1. Open your project in Xcode
-2. Go to **File → Add Package Dependencies**
-3. Enter the repository URL:
-   ```
-   https://github.com/datalyr/datalyr-ios-sdk
-   ```
-4. Choose the latest version and add to your target
+### CocoaPods
+
+Add to your `Podfile`:
+```ruby
+pod 'DatalyrSwift', '~> 1.0.1'
+```
+
+Then run:
+```bash
+pod install
+```
 
 ### Manual Installation
 
-You can also add the SDK manually by downloading the source and adding it to your project.
+1. Download the SDK from [Releases](https://github.com/datalyr/swift/releases)
+2. Drag `Sources/DatalyrSDK` folder into your Xcode project
+3. Ensure "Copy items if needed" is checked
 
 ## Quick Start
-
-### 1. Initialize the SDK
 
 ```swift
 import DatalyrSDK
 
-class AppDelegate: UIResponder, UIApplicationDelegate {
-    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        
-        Task {
-            do {
-                let config = DatalyrConfig(
-                    workspaceId: "YOUR_WORKSPACE_ID",
-                    apiKey: "YOUR_API_KEY",
-                    debug: false // Set to true for development
-                )
-                
-                try await DatalyrSDK.shared.initialize(config: config)
-                print("Datalyr SDK initialized successfully")
-            } catch {
-                print("Failed to initialize Datalyr SDK: \(error)")
-            }
-        }
-        
-        return true
-    }
-}
-```
+// Initialize on app launch
+let config = DatalyrConfig(
+    apiKey: "dk_your_api_key", // Required - get from Datalyr dashboard
+    debug: true // Enable console logs during development
+)
 
-### 2. Track Events
+try await DatalyrSDK.shared.initialize(config: config)
 
-```swift
-// Track a simple event
-await DatalyrSDK.shared.track("button_clicked")
-
-// Track an event with properties
-await DatalyrSDK.shared.track("purchase", eventData: [
-    "product_id": "abc123",
-    "amount": 29.99,
-    "currency": "USD"
+// Track custom event
+await DatalyrSDK.shared.track("Button Clicked", eventData: [
+    "button_name": "purchase",
+    "value": 99.99
 ])
-```
 
-### 3. Track Screen Views
-
-```swift
-// Track a screen view
-await DatalyrSDK.shared.screen("home_screen")
-
-// Track with additional properties
-await DatalyrSDK.shared.screen("product_detail", properties: [
-    "product_id": "abc123",
-    "category": "electronics"
-])
-```
-
-### 4. Identify Users
-
-```swift
-// Identify a user
-await DatalyrSDK.shared.identify("user123", properties: [
+// Identify user
+await DatalyrSDK.shared.identify("user_123", properties: [
     "email": "user@example.com",
     "plan": "premium"
 ])
 ```
 
-## SKAdNetwork Integration
-
-The Datalyr iOS SDK includes automatic SKAdNetwork conversion value encoding, making it easy to compete with enterprise Mobile Measurement Partners (MMPs) like AppsFlyer and Adjust at a fraction of the cost.
-
-### Quick Setup
+## Configuration
 
 ```swift
-import DatalyrSDK
-
-// Initialize with SKAdNetwork support
-try await DatalyrSDK.configureWithSKAdNetwork(
-    workspaceId: "YOUR_WORKSPACE_ID",
-    apiKey: "YOUR_API_KEY",
-    template: "ecommerce", // or "gaming" or "subscription"
-    debug: true
+let config = DatalyrConfig(
+    apiKey: "dk_your_api_key",        // Required
+    workspaceId: "",                  // Optional (legacy support)
+    useServerTracking: true,           // Default: true
+    debug: false,                      // Enable logging
+    endpoint: "https://api.datalyr.com", // Don't change
+    maxRetries: 3,                     // Retry failed requests
+    retryDelay: 1.0,                   // Seconds between retries
+    timeout: 15.0,                     // Request timeout
+    batchSize: 10,                     // Events per batch
+    flushInterval: 10.0,               // Seconds between flushes
+    maxQueueSize: 100,                 // Max queued events
+    enableAutoEvents: true,            // Track lifecycle
+    enableAttribution: true,           // Track attribution
+    skadTemplate: "ecommerce"          // SKAdNetwork template
 )
 ```
 
-### Industry Templates
+## Core Methods
 
-Choose the template that best fits your app:
+### Initialize
 
-#### E-commerce Template
-Optimized for online stores and retail apps:
 ```swift
-// Track purchase with automatic revenue encoding
-await DatalyrSDK.trackPurchase(value: 29.99, currency: "USD", productId: "shirt_001")
+// Basic initialization
+try await DatalyrSDK.shared.initialize(config: config)
 
-// Track funnel events
-await DatalyrSDK.trackWithSKAdNetwork("view_item", eventData: ["product_id": "shirt_001"])
-await DatalyrSDK.trackWithSKAdNetwork("add_to_cart", eventData: ["product_id": "shirt_001"])
-await DatalyrSDK.trackWithSKAdNetwork("begin_checkout", eventData: ["cart_value": 89.97])
+// With SKAdNetwork
+try await DatalyrSDK.initializeWithSKAdNetwork(
+    config: config,
+    template: "ecommerce" // or "gaming", "subscription"
+)
 ```
 
-#### Gaming Template
-Optimized for mobile games:
-```swift
-// Track game events with automatic encoding
-await DatalyrSDK.trackWithSKAdNetwork("tutorial_complete", eventData: ["level": 1])
-await DatalyrSDK.trackWithSKAdNetwork("level_complete", eventData: ["level": 5, "score": 1250])
-await DatalyrSDK.trackWithSKAdNetwork("achievement_unlocked", eventData: ["achievement": "first_win"])
+### Track Events
 
-// Track in-app purchases
-await DatalyrSDK.trackPurchase(value: 4.99, currency: "USD", productId: "extra_lives")
-```
-
-#### Subscription Template
-Optimized for subscription-based apps:
 ```swift
-// Track subscription events
-await DatalyrSDK.trackWithSKAdNetwork("trial_start", eventData: ["plan": "premium"])
-await DatalyrSDK.trackSubscription(value: 9.99, currency: "USD", plan: "monthly")
-await DatalyrSDK.trackWithSKAdNetwork("upgrade", eventData: [
-    "revenue": 19.99,
-    "from_plan": "basic",
-    "to_plan": "premium"
+// Simple event
+await DatalyrSDK.shared.track("Product Viewed")
+
+// Event with properties
+await DatalyrSDK.shared.track("Purchase Completed", eventData: [
+    "product_id": "SKU123",
+    "product_name": "Premium Subscription",
+    "amount": 49.99,
+    "currency": "USD"
 ])
 ```
 
-### Revenue Encoding
-
-The SDK automatically encodes revenue into 8 tiers for optimal SKAdNetwork attribution:
-
-| Revenue Range | Tier | Bit Encoding |
-|---------------|------|--------------|
-| $0 - $1 | 0 | `000` |
-| $1 - $5 | 1 | `001` |
-| $5 - $10 | 2 | `010` |
-| $10 - $25 | 3 | `011` |
-| $25 - $50 | 4 | `100` |
-| $50 - $100 | 5 | `101` |
-| $100 - $250 | 6 | `110` |
-| $250+ | 7 | `111` |
-
-### Testing Conversion Values
-
-Test your SKAdNetwork implementation without sending to Apple:
+### Identify Users
 
 ```swift
-// Test conversion values locally
-let purchaseValue = DatalyrSDK.getConversionValue(for: "purchase", properties: ["revenue": 29.99])
-print("Purchase conversion value: \(purchaseValue ?? 0)")
-
-let cartValue = DatalyrSDK.getConversionValue(for: "add_to_cart", properties: nil)
-print("Add to cart conversion value: \(cartValue ?? 0)")
+await DatalyrSDK.shared.identify("user_123", properties: [
+    "email": "john@example.com",
+    "name": "John Doe",
+    "plan": "premium",
+    "company": "Acme Inc",
+    "created_at": "2024-01-15"
+])
 ```
 
-### Global Convenience Functions
-
-Use simple global functions for common SKAdNetwork events:
+### Track Screen Views
 
 ```swift
-// Simple purchase tracking
-await datalyrTrackPurchase(value: 49.99, productId: "premium_upgrade")
-
-// Simple subscription tracking
-await datalyrTrackSubscription(value: 12.99, plan: "pro_monthly")
-
-// Track any event with SKAdNetwork encoding
-await datalyrTrackWithSKAdNetwork("signup", properties: ["source": "homepage"])
-
-// Test conversion values
-let testValue = datalyrGetConversionValue(for: "purchase", properties: ["revenue": 25.00])
+await DatalyrSDK.shared.screen("Product Details", properties: [
+    "product_id": "SKU123",
+    "category": "Electronics"
+])
 ```
 
-### Requirements for SKAdNetwork
+## E-commerce Tracking
 
-- iOS 14.0+ (automatically handled - falls back gracefully on older versions)
-- SKAdNetwork framework (automatically included)
-- Proper App Store Connect configuration for SKAdNetwork
-
-### Benefits vs. Enterprise MMPs
-
-✅ **Same Attribution Functionality** as AppsFlyer/Adjust  
-✅ **90% Cost Savings** compared to enterprise MMPs  
-✅ **Automatic Revenue Optimization** with 8-tier encoding  
-✅ **Industry-Specific Templates** for maximum performance  
-✅ **Unified Analytics** - web + mobile in one dashboard  
-✅ **No Setup Complexity** - works out of the box
-
-## Configuration
-
-### Basic Configuration
+### Track Purchases
 
 ```swift
+// Simple purchase with SKAdNetwork
+await DatalyrSDK.shared.trackPurchase(
+    value: 99.99,
+    currency: "USD",
+    productId: "premium_subscription"
+)
+
+// Detailed purchase event
+await DatalyrSDK.shared.track("Purchase Completed", eventData: [
+    "order_id": "ORDER123",
+    "amount": 149.99,
+    "currency": "USD",
+    "products": [
+        ["id": "SKU1", "name": "Product 1", "price": 99.99],
+        ["id": "SKU2", "name": "Product 2", "price": 50.00]
+    ],
+    "tax": 12.50,
+    "shipping": 5.00
+])
+```
+
+### Track Subscriptions
+
+```swift
+await DatalyrSDK.shared.trackSubscription(
+    value: 9.99,
+    currency: "USD",
+    plan: "monthly_pro"
+)
+```
+
+### Track Revenue
+
+```swift
+await DatalyrSDK.shared.trackRevenue("In-App Purchase", properties: [
+    "product_id": "coins_1000",
+    "amount": 4.99,
+    "currency": "USD",
+    "quantity": 1
+])
+```
+
+## SKAdNetwork Support
+
+iOS 14+ attribution with automatic conversion value management:
+
+```swift
+// Initialize with SKAdNetwork template
 let config = DatalyrConfig(
-    workspaceId: "YOUR_WORKSPACE_ID",
-    apiKey: "YOUR_API_KEY"
+    apiKey: "dk_your_api_key",
+    skadTemplate: "ecommerce" // Choose your business model
 )
+
+try await DatalyrSDK.shared.initialize(config: config)
+
+// Events automatically update conversion values
+await DatalyrSDK.shared.trackPurchase(value: 99.99, currency: "USD")
+
+// Test conversion value
+let value = DatalyrSDK.shared.getConversionValue(
+    for: "purchase",
+    properties: ["revenue": 75.00]
+)
+print("Conversion value: \(value ?? 0)") // 0-63
 ```
 
-### Advanced Configuration
+### Template Options
+
+- **ecommerce**: Purchase events, revenue ranges
+- **gaming**: Level completion, in-app purchases, retention
+- **subscription**: Trial starts, conversions, renewals
+
+## Attribution Tracking
+
+Automatic tracking of:
+- Deep links and Universal Links
+- UTM parameters
+- Platform click IDs (fbclid, gclid, ttclid)
+- Install referrer
+- Campaign data
 
 ```swift
-let config = DatalyrConfig(
-    workspaceId: "YOUR_WORKSPACE_ID",
-    apiKey: "YOUR_API_KEY",
-    debug: true,                    // Enable debug logging
-    maxRetries: 3,                  // Number of retry attempts
-    timeout: 30.0,                  // Request timeout in seconds
-    batchSize: 20,                  // Events per batch
-    flushInterval: 15.0,            // Auto-flush interval in seconds
-    maxQueueSize: 1000,             // Maximum events in queue
-    enableAutoEvents: true,         // Enable automatic events
-    enableAttribution: true         // Enable attribution tracking
-)
+// Get attribution data
+let attribution = DatalyrSDK.shared.getAttributionData()
+print(attribution.campaign)
+print(attribution.source)
+print(attribution.medium)
+
+// Set custom attribution
+var customAttribution = AttributionData()
+customAttribution.campaign = "summer_sale"
+customAttribution.source = "facebook"
+await DatalyrSDK.shared.setAttributionData(customAttribution)
 ```
 
-## Auto Events
+## Session Management
 
-Enable automatic tracking of common events:
+Sessions are automatically managed with 30-minute timeout:
 
 ```swift
-let autoConfig = AutoEventConfig(
-    trackSessions: true,        // Track app sessions
-    trackScreenViews: true,     // Track screen changes
-    trackAppUpdates: true,      // Track app version changes
-    trackPerformance: false     // Track performance metrics
-)
+// Get current session
+let session = DatalyrSDK.shared.getCurrentSession()
 
-let config = DatalyrConfig(
-    workspaceId: "YOUR_WORKSPACE_ID",
-    apiKey: "YOUR_API_KEY",
-    enableAutoEvents: true,
-    autoEventConfig: autoConfig
-)
+// Manually end session
+await DatalyrSDK.shared.endSession()
+
+// Reset user (logout)
+await DatalyrSDK.shared.reset()
 ```
+
+## Automatic Events
+
+When `enableAutoEvents` is true:
+
+- `app_install` - First app open
+- `app_open` - App launches
+- `app_background` - App enters background
+- `app_foreground` - Returns to foreground
+- `app_update` - Version changes
+- `session_start` - New session
+- `session_end` - Session expires
 
 ## SwiftUI Integration
-
-### Automatic Screen Tracking
 
 ```swift
 import SwiftUI
 import DatalyrSDK
 
-struct ContentView: View {
-    var body: some View {
-        NavigationView {
-            VStack {
-                Text("Hello, World!")
-            }
-            .navigationTitle("Home")
-        }
-        .onAppear {
-            Task {
-                await DatalyrSDK.shared.screen("home_screen")
-            }
+@main
+struct MyApp: App {
+    init() {
+        Task {
+            let config = DatalyrConfig(apiKey: "dk_your_api_key")
+            try? await DatalyrSDK.shared.initialize(config: config)
         }
     }
-}
-```
-
-### Event Tracking in Views
-
-```swift
-struct ProductView: View {
-    let product: Product
     
-    var body: some View {
-        VStack {
-            Text(product.name)
-            
-            Button("Add to Cart") {
-                Task {
-                    await DatalyrSDK.shared.track("add_to_cart", eventData: [
-                        "product_id": product.id,
-                        "price": product.price
-                    ])
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .onAppear {
+                    Task {
+                        await DatalyrSDK.shared.track("App Opened")
+                    }
                 }
-            }
         }
     }
 }
@@ -322,163 +301,215 @@ struct ProductView: View {
 
 ## UIKit Integration
 
-### Automatic Screen Tracking
-
 ```swift
 import UIKit
 import DatalyrSDK
 
-class HomeViewController: UIViewController {
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
+class AppDelegate: UIResponder, UIApplicationDelegate {
+    func application(_ application: UIApplication, 
+                    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         
         Task {
-            await DatalyrSDK.shared.screen("home_screen")
+            let config = DatalyrConfig(apiKey: "dk_your_api_key")
+            try? await DatalyrSDK.shared.initialize(config: config)
         }
+        
+        return true
     }
 }
 ```
 
-## Attribution Tracking
-
-The SDK automatically captures attribution data from deep links and campaign parameters:
-
-### Supported Parameters
-
-- **UTM Parameters**: `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`
-- **Platform Click IDs**: `fbclid`, `ttclid`, `gclid`, `twclid`
-- **Custom Parameters**: Any additional parameters in deep links
-
-### Deep Link Setup
+## Deep Link Handling
 
 ```swift
-// In your SceneDelegate or AppDelegate
-func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-    guard let url = URLContexts.first?.url else { return }
-    
-    // Datalyr SDK automatically processes attribution parameters
-    // No additional code needed - attribution data is captured automatically
+// SwiftUI
+.onOpenURL { url in
+    Task {
+        await DatalyrSDK.shared.track("Deep Link Opened", eventData: [
+            "url": url.absoluteString,
+            "scheme": url.scheme ?? "",
+            "host": url.host ?? ""
+        ])
+    }
+}
+
+// UIKit
+func application(_ app: UIApplication, open url: URL, 
+                options: [UIApplication.OpenURLOptionsKey : Any] = [:]) -> Bool {
+    Task {
+        await DatalyrSDK.shared.track("Deep Link Opened", eventData: [
+            "url": url.absoluteString
+        ])
+    }
+    return true
 }
 ```
 
-## Privacy & GDPR Compliance
+## Offline Support
 
-The Datalyr iOS SDK is designed with privacy in mind:
-
-- **No IDFA Required** - Works without advertising identifiers
-- **Local Storage** - Sensitive data stored securely in Keychain
-- **Opt-out Support** - Respect user privacy preferences
-- **Minimal Data Collection** - Only collects necessary analytics data
-
-### Privacy Configuration
+Events are automatically queued when offline:
 
 ```swift
-let config = DatalyrConfig(
-    workspaceId: "YOUR_WORKSPACE_ID",
-    apiKey: "YOUR_API_KEY",
-    respectDoNotTrack: true  // Respect DNT settings
-)
-```
-
-## Error Handling
-
-The SDK provides comprehensive error handling:
-
-```swift
-do {
-    try await DatalyrSDK.shared.initialize(config: config)
-} catch DatalyrError.invalidConfiguration(let message) {
-    print("Configuration error: \(message)")
-} catch DatalyrError.networkError(let error) {
-    print("Network error: \(error)")
-} catch {
-    print("Unexpected error: \(error)")
-}
-```
-
-## Testing
-
-### Debug Mode
-
-Enable debug mode to see detailed logs:
-
-```swift
-let config = DatalyrConfig(
-    workspaceId: "YOUR_WORKSPACE_ID",
-    apiKey: "YOUR_API_KEY",
-    debug: true
-)
-```
-
-### Manual Flush
-
-Force immediate sending of events:
-
-```swift
+// Manually flush queue
 await DatalyrSDK.shared.flush()
-```
 
-### SDK Status
-
-Check SDK status and queue information:
-
-```swift
+// Check queue status
 let status = DatalyrSDK.shared.getStatus()
 print("Queue size: \(status.queueStats.queueSize)")
-print("Is processing: \(status.queueStats.isProcessing)")
+print("Is online: \(status.queueStats.isOnline)")
+```
+
+## Debug Mode
+
+Enable detailed logging:
+
+```swift
+let config = DatalyrConfig(
+    apiKey: "dk_your_api_key",
+    debug: true // Enables console logs
+)
+```
+
+Debug output includes:
+- Event tracking logs
+- Network requests
+- Queue operations
+- Attribution updates
+- Error messages
+
+## Privacy & Compliance
+
+### User Consent
+
+```swift
+// Track consent
+await DatalyrSDK.shared.track("Consent Updated", eventData: [
+    "tracking_allowed": false,
+    "gdpr_consent": false
+])
+
+// Disable tracking
+await DatalyrSDK.shared.reset()
+```
+
+### App Tracking Transparency (iOS 14.5+)
+
+```swift
+import AppTrackingTransparency
+
+ATTrackingManager.requestTrackingAuthorization { status in
+    Task {
+        await DatalyrSDK.shared.track("ATT Status", eventData: [
+            "status": status.rawValue
+        ])
+    }
+}
 ```
 
 ## API Reference
 
-### Core Methods
+### Initialization
+```swift
+DatalyrSDK.shared.initialize(config: DatalyrConfig) async throws
+DatalyrSDK.initializeWithSKAdNetwork(config: DatalyrConfig, template: String) async throws
+```
 
-| Method | Description |
-|--------|-------------|
-| `initialize(config:)` | Initialize the SDK with configuration |
-| `track(_:eventData:)` | Track a custom event |
-| `screen(_:properties:)` | Track a screen view |
-| `identify(_:properties:)` | Identify a user |
-| `alias(_:previousId:)` | Create user alias |
-| `reset()` | Reset user session |
-| `flush()` | Manually flush events |
-| `getStatus()` | Get SDK status |
+### Event Tracking
+```swift
+track(_ eventName: String, eventData: EventData? = nil) async
+screen(_ screenName: String, properties: EventData? = nil) async
+identify(_ userId: String, properties: UserProperties? = nil) async
+alias(_ newUserId: String, previousId: String? = nil) async
+```
 
-### Configuration Options
+### Revenue Tracking
+```swift
+trackPurchase(value: Double, currency: String, productId: String?) async
+trackSubscription(value: Double, currency: String, plan: String?) async
+trackRevenue(_ eventName: String, properties: EventData?) async
+```
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `workspaceId` | String | Required | Your Datalyr workspace ID |
-| `apiKey` | String | Required | Your Datalyr API key |
-| `debug` | Bool | `false` | Enable debug logging |
-| `maxRetries` | Int | `3` | Maximum retry attempts |
-| `timeout` | TimeInterval | `15.0` | Request timeout |
-| `batchSize` | Int | `10` | Events per batch |
-| `flushInterval` | TimeInterval | `10.0` | Auto-flush interval |
-| `maxQueueSize` | Int | `100` | Maximum queue size |
+### Session Management
+```swift
+getCurrentSession() -> SessionData?
+endSession() async
+reset() async
+flush() async
+```
 
-## Requirements
+### Attribution
+```swift
+getAttributionData() -> AttributionData
+setAttributionData(_ data: AttributionData) async
+```
 
-- iOS 13.0+
-- macOS 10.15+
-- tvOS 13.0+
-- watchOS 6.0+
-- Swift 5.5+
-- Xcode 13.0+
+### Utilities
+```swift
+getStatus() -> SDKStatus
+getConversionValue(for event: String, properties: EventData?) -> Int?
+```
+
+## Troubleshooting
+
+### Events not appearing?
+1. Check API key is correct (starts with `dk_`)
+2. Enable debug mode to see logs
+3. Verify network connectivity
+4. Check `getStatus()` for queue info
+5. Call `flush()` to force send
+
+### Build errors?
+```bash
+# Clean build folder
+cmd+shift+k in Xcode
+
+# Reset package caches
+File → Packages → Reset Package Caches
+
+# Update packages
+File → Packages → Update to Latest Package Versions
+```
+
+### Authentication errors?
+- Get API key from: https://app.datalyr.com/settings/api-keys
+- Ensure key is active
+- Check key permissions
+
+## Example App
+
+See the [examples](./examples) folder for a complete implementation.
+
+## Migration from Other SDKs
+
+### From AppsFlyer/Adjust
+```swift
+// AppsFlyer
+AppsFlyerLib.shared().logEvent("purchase", withValues: [...])
+
+// Datalyr (similar API)
+await DatalyrSDK.shared.track("purchase", eventData: [...])
+```
+
+### From Firebase Analytics
+```swift
+// Firebase
+Analytics.logEvent("purchase", parameters: [...])
+
+// Datalyr
+await DatalyrSDK.shared.track("purchase", eventData: [...])
+```
 
 ## Support
 
-- **Documentation**: [docs.datalyr.com](https://docs.datalyr.com)
-- **Issues**: [GitHub Issues](https://github.com/datalyr/datalyr-ios-sdk/issues)
-- **Email**: support@datalyr.com
+- 📧 Email: support@datalyr.com
+- 📚 Docs: https://docs.datalyr.com
+- 🐛 Issues: https://github.com/datalyr/swift/issues
+- 💬 Discord: https://discord.gg/datalyr
 
 ## License
 
-This SDK is available under the MIT License. See the LICENSE file for more info.
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+MIT © Datalyr
 
 ---
 
-Built with ❤️ by the Datalyr team 
+Built with ❤️ by [Datalyr](https://datalyr.com)
