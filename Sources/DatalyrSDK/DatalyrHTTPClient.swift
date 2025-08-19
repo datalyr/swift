@@ -274,10 +274,11 @@ internal class DatalyrHTTPClient {
         }
         result["properties"] = properties
         
-        // Add context
+        // Add context with explicit source
         var context: [String: Any] = [
             "library": "@datalyr/swift",
-            "version": "1.0.1"
+            "version": "1.0.2",
+            "source": "mobile_app"  // Explicitly set source for iOS
         ]
         if let userProperties = payload.userProperties {
             context["userProperties"] = userProperties
