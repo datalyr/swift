@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'DatalyrSDK'
-  s.version          = '1.0.0'
+  s.version          = '1.0.2'
   s.summary          = 'Server-side attribution tracking SDK for iOS'
   s.description      = <<-DESC
     Datalyr SDK for iOS with server-side tracking API support.
@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
   s.license          = { :type => 'MIT', :file => 'LICENSE' }
   s.author           = { 'Datalyr' => 'sdk@datalyr.com' }
   s.source           = { 
-    :git => 'https://github.com/datalyr/datalyr-ios-sdk.git', 
+    :git => 'https://github.com/datalyr/swift.git', 
     :tag => s.version.to_s 
   }
   

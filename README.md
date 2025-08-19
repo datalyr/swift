@@ -8,13 +8,13 @@ Official Datalyr SDK for iOS - Server-side attribution tracking and analytics.
 
 ## Features
 
-- 🔒 **Server-side tracking** - Secure API key authentication
-- 📊 **SKAdNetwork** - iOS 14+ attribution with conversion values
-- 🎯 **Attribution tracking** - Deep links, UTM parameters, click IDs
-- 💾 **Offline queue** - Events saved and retried automatically
-- 🔄 **Session management** - Automatic session tracking
-- ⚡ **Performance** - < 5MB memory, minimal battery impact
-- 🏗️ **SwiftUI & UIKit** - Works with both frameworks
+- **Server-side tracking** - Secure API key authentication
+- **SKAdNetwork** - iOS 14+ attribution with conversion values
+- **Attribution tracking** - Deep links, UTM parameters, click IDs
+- **Offline queue** - Events saved and retried automatically
+- **Session management** - Automatic session tracking
+- **Performance** - < 5MB memory, minimal battery impact
+- **SwiftUI & UIKit** - Works with both frameworks
 
 ## Installation
 
@@ -25,14 +25,14 @@ Official Datalyr SDK for iOS - Server-side attribution tracking and analytics.
    ```
    https://github.com/datalyr/swift
    ```
-3. Select version **1.0.1** or later
+3. Select version **1.0.2** or later
 4. Add **DatalyrSDK** to your target
 
 ### CocoaPods
 
 Add to your `Podfile`:
 ```ruby
-pod 'DatalyrSwift', '~> 1.0.1'
+pod 'DatalyrSwift', '~> 1.0.2'
 ```
 
 Then run:
