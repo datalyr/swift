@@ -1,28 +1,28 @@
-# 🧪 Datalyr iOS SDK Test App
+# Datalyr iOS SDK Test App
 
 A comprehensive debug and test application for the Datalyr iOS SDK - similar to the React Native test app.
 
-## 🎯 What This Tests
+## What This Tests
 
-- ✅ **SDK Initialization** - Complete configuration with debug logging
-- ✅ **Real-time Status** - Live SDK status monitoring  
-- ✅ **Event Tracking** - Various event types with properties
-- ✅ **User Management** - Login, logout, profile updates
-- ✅ **Attribution Testing** - Deep link simulation and testing
-- ✅ **Offline Support** - Event queueing when offline
-- ✅ **Live Logging** - Recent activity logs in the app
-- ✅ **Debug Console** - Detailed console output
+- **SDK Initialization** - Complete configuration with debug logging
+- **Real-time Status** - Live SDK status monitoring  
+- **Event Tracking** - Various event types with properties
+- **User Management** - Login, logout, profile updates
+- **Attribution Testing** - Deep link simulation and testing
+- **Offline Support** - Event queueing when offline
+- **Live Logging** - Recent activity logs in the app
+- **Debug Console** - Detailed console output
 
-## 📱 Features
+## Features
 
-### 📊 SDK Status Dashboard
+### SDK Status Dashboard
 - Initialization status
 - Workspace configuration
 - Visitor & session IDs
 - Event queue size
 - Current user info
 
-### 🧪 Event Testing Buttons
+### Event Testing Buttons
 - **Simple Event** - Basic event tracking
 - **Page View** - Screen navigation events
 - **Purchase** - E-commerce event with properties
@@ -30,19 +30,19 @@ A comprehensive debug and test application for the Datalyr iOS SDK - similar to 
 - **Error Event** - Error tracking
 - **Custom Event** - Custom event with data
 
-### 🔗 Attribution Testing
+### Attribution Testing
 - **UTM Test** - UTM parameter simulation
 - **Facebook Click** - Facebook click ID testing
 - **Google Click** - Google click ID testing  
 - **LYR Tag** - Datalyr LYR tag testing
 
-### ⚙️ SDK Management
+### SDK Management
 - **Flush Queue** - Force send queued events
 - **Reset User** - Clear user session
 - **Get Attribution** - Show current attribution data
 - **Test Offline** - Simulate offline event queueing
 
-## 🚀 Quick Setup
+## Quick Setup
 
 1. **Open in Xcode**
    - Open `DatalyrTestApp.xcodeproj` in Xcode
@@ -51,8 +51,8 @@ A comprehensive debug and test application for the Datalyr iOS SDK - similar to 
 2. **Update Configuration**
    ```swift
    try await DatalyrSDK.configure(
-       workspaceId: "your_workspace_id", // 👈 Change this!
-       apiKey: "dk_your_api_key",        // 👈 Change this!
+       workspaceId: "your_workspace_id", // Change this
+       apiKey: "dk_your_api_key",        // Change this
        debug: true,
        enableAutoEvents: true,
        enableAttribution: true
@@ -63,10 +63,10 @@ A comprehensive debug and test application for the Datalyr iOS SDK - similar to 
    - Select iOS Simulator or device
    - Press ⌘+R to build and run
 
-## 🔧 Testing Workflow
+## Testing Workflow
 
 ### 1. Verify SDK Status
-- Check that "Initialized" shows ✅ Yes
+- Check that "Initialized" shows Yes
 - Verify your workspace ID appears
 - Note the visitor ID (stays same across sessions)
 
@@ -90,7 +90,7 @@ A comprehensive debug and test application for the Datalyr iOS SDK - similar to 
 - Events queue up (see Queue Size in status)
 - Tap "Flush Queue" to send when back online
 
-## 📊 Monitoring Results
+## Monitoring Results
 
 ### In the App
 - **Recent Logs** section shows last 5 activities
@@ -99,10 +99,10 @@ A comprehensive debug and test application for the Datalyr iOS SDK - similar to 
 
 ### In Xcode Console
 ```bash
-✅ Datalyr SDK initialized successfully
-📊 Tracked: simple_event
-🔗 Simulated deep link: utm_source=facebook&utm_campaign=test
-🚀 Events flushed to server
+Datalyr SDK initialized successfully
+Tracked: simple_event
+Simulated deep link: utm_source=facebook&utm_campaign=test
+Events flushed to server
 ```
 
 ### In Datalyr Dashboard
@@ -113,7 +113,7 @@ Events appear with:
 - Session information
 - All custom properties
 
-## 🔗 Deep Link Testing
+## Deep Link Testing
 
 Test attribution in iOS Simulator:
 
@@ -128,7 +128,7 @@ xcrun simctl openurl booted "datalyr-test://test?fbclid=IwAR123456789"
 xcrun simctl openurl booted "datalyr-test://test?utm_source=google&gclid=abc123&dl_tag=test"
 ```
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 test-app/
@@ -138,7 +138,7 @@ test-app/
 └── Package.swift                 # Swift Package config (if needed)
 ```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 **"Not Initialized" Status:**
 - Check that workspaceId and apiKey are set
@@ -160,7 +160,7 @@ test-app/
 - Check that DatalyrSDK dependency is resolved
 - Clean build folder (⇧⌘K) and rebuild
 
-## 📈 What to Expect
+## What to Expect
 
 ### Events in Dashboard
 ```json
@@ -188,12 +188,12 @@ test-app/
 }
 ```
 
-## 📧 Support
+## Support
 
-- **Issues**: [GitHub Issues](https://github.com/datalyr/datalyr-ios-sdk/issues)
+- **Issues**: [GitHub Issues](https://github.com/datalyr/swift/issues)
 - **Email**: support@datalyr.com
 - **Docs**: https://docs.datalyr.com
 
 ---
 
-**🎯 This test app demonstrates the complete iOS SDK functionality in a single, easy-to-use interface - just like the React Native version!** 
+This test app demonstrates the complete iOS SDK functionality in a single, easy-to-use interface. 

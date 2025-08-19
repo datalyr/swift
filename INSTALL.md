@@ -23,7 +23,7 @@ Swift Package Manager is the easiest way to install the Datalyr iOS SDK.
 2. Go to **File → Add Package Dependencies**
 3. In the search field, enter:
    ```
-   https://github.com/datalyr/datalyr-ios-sdk
+   https://github.com/datalyr/swift
    ```
 4. Click **Add Package**
 5. Choose the latest version (or specify a version range)
@@ -43,13 +43,13 @@ let package = Package(
         .iOS(.v13)
     ],
     dependencies: [
-        .package(url: "https://github.com/datalyr/datalyr-ios-sdk", from: "1.0.0")
+        .package(url: "https://github.com/datalyr/swift", from: "1.0.2")
     ],
     targets: [
         .target(
             name: "YourApp",
             dependencies: [
-                .product(name: "DatalyrSDK", package: "datalyr-ios-sdk")
+                .product(name: "DatalyrSDK", package: "swift")
             ]
         )
     ]
@@ -60,7 +60,7 @@ let package = Package(
 
 If you prefer to install manually:
 
-1. Download the latest release from [GitHub Releases](https://github.com/datalyr/datalyr-ios-sdk/releases)
+1. Download the latest release from [GitHub Releases](https://github.com/datalyr/swift/releases)
 2. Unzip the downloaded file
 3. Drag the `DatalyrSDK` folder into your Xcode project
 4. Make sure to check "Copy items if needed"
