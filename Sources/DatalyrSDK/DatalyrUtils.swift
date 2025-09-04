@@ -218,6 +218,20 @@ internal func getOrCreateVisitorId() async -> String {
     return newId
 }
 
+/// Get or create anonymous ID (persistent identity across app reinstalls)
+internal func getOrCreateAnonymousId() async -> String {
+    let key = "datalyr_anonymous_id"
+    
+    if let existingId = await DatalyrStorage.shared.getString(key) {
+        return existingId
+    }
+    
+    // Generate anonymous_id with anon_ prefix to match web SDK
+    let newId = "anon_\(generateUUID())"
+    await DatalyrStorage.shared.setString(key, value: newId)
+    return newId
+}
+
 /// Get or create session ID
 internal func getOrCreateSessionId() async -> String {
     let key = "datalyr_session_id"
@@ -305,6 +319,7 @@ extension DateFormatter {
 
 internal enum StorageKeys {
     static let visitorId = "datalyr_visitor_id"
+    static let anonymousId = "datalyr_anonymous_id"  // Persistent anonymous identifier
     static let sessionId = "datalyr_session_id"
     static let sessionTimestamp = "datalyr_session_timestamp"
     static let deviceId = "datalyr_device_id"

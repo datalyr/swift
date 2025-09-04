@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'DatalyrSwift'
-  s.version          = '1.0.2'
+  s.version          = '1.1.0'
   s.summary          = 'Server-side attribution tracking SDK for iOS'
   s.description      = <<-DESC
     Datalyr SDK for iOS with server-side tracking API support.

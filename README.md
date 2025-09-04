@@ -15,6 +15,7 @@ Official Datalyr SDK for iOS - Server-side attribution tracking and analytics.
 - **Session management** - Automatic session tracking
 - **Performance** - < 5MB memory, minimal battery impact
 - **SwiftUI & UIKit** - Works with both frameworks
+- **Identity Resolution** - Persistent anonymous ID for complete user journey tracking
 
 ## Installation
 
@@ -243,6 +244,35 @@ customAttribution.campaign = "summer_sale"
 customAttribution.source = "facebook"
 await DatalyrSDK.shared.setAttributionData(customAttribution)
 ```
+
+## Identity Resolution (New in v1.1.0)
+
+The SDK includes persistent anonymous IDs for complete user journey tracking:
+
+```swift
+// Get anonymous ID (persists across app sessions)
+let anonymousId = DatalyrSDK.shared.getAnonymousId()
+// Or use global function
+let anonymousId = datalyrGetAnonymousId()
+
+// Pass to your backend for attribution preservation
+let request = URLRequest(url: URL(string: "https://api.example.com/purchase")!)
+request.httpBody = try JSONSerialization.data(withJSONObject: [
+    "items": cartItems,
+    "anonymous_id": anonymousId  // Links server events to mobile events
+])
+
+// Identity is automatically linked when you identify a user
+await DatalyrSDK.shared.identify("user_123", properties: [
+    "email": "user@example.com"
+])
+// This creates a $identify event that links anonymous_id to user_id
+```
+
+### Key Benefits:
+- **Attribution Preservation**: Never lose fbclid, gclid, ttclid, or lyr tracking
+- **Complete Journey**: Track users from web → app → server
+- **Automatic Linking**: Identity resolution happens automatically
 
 ## Session Management
 

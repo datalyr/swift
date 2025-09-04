@@ -97,6 +97,7 @@ public typealias UserProperties = [String: Any]
 public struct EventPayload: Codable {
     public let workspaceId: String
     public let visitorId: String
+    public let anonymousId: String  // Persistent anonymous identifier
     public let sessionId: String
     public let eventId: String
     public let eventName: String
@@ -110,6 +111,7 @@ public struct EventPayload: Codable {
     public init(
         workspaceId: String,
         visitorId: String,
+        anonymousId: String,
         sessionId: String,
         eventId: String,
         eventName: String,
@@ -122,6 +124,7 @@ public struct EventPayload: Codable {
     ) {
         self.workspaceId = workspaceId
         self.visitorId = visitorId
+        self.anonymousId = anonymousId
         self.sessionId = sessionId
         self.eventId = eventId
         self.eventName = eventName
@@ -347,6 +350,7 @@ public struct SDKStatus {
     public let initialized: Bool
     public let workspaceId: String
     public let visitorId: String
+    public let anonymousId: String  // Persistent anonymous identifier
     public let sessionId: String
     public let currentUserId: String?
     public let queueStats: QueueStats
@@ -356,6 +360,7 @@ public struct SDKStatus {
         initialized: Bool,
         workspaceId: String,
         visitorId: String,
+        anonymousId: String,
         sessionId: String,
         currentUserId: String? = nil,
         queueStats: QueueStats,
@@ -364,6 +369,7 @@ public struct SDKStatus {
         self.initialized = initialized
         self.workspaceId = workspaceId
         self.visitorId = visitorId
+        self.anonymousId = anonymousId
         self.sessionId = sessionId
         self.currentUserId = currentUserId
         self.queueStats = queueStats

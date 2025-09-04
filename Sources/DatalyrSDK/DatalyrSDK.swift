@@ -25,6 +25,7 @@ public class DatalyrSDK {
     
     // Session and user data
     private var visitorId: String = ""
+    private var anonymousId: String = ""  // Persistent anonymous identifier
     private var sessionId: String = ""
     private var currentUserId: String?
     private var userProperties: UserProperties = [:]
@@ -93,8 +94,9 @@ public class DatalyrSDK {
         )
         self.eventQueue = DatalyrEventQueue(httpClient: httpClient!, config: queueConfig)
         
-        // Initialize visitor ID and session
+        // Initialize visitor ID, anonymous ID and session
         self.visitorId = await getOrCreateVisitorId()
+        self.anonymousId = await getOrCreateAnonymousId()
         self.sessionId = await getOrCreateSessionId()
         
         // Load persisted user data
@@ -143,6 +145,7 @@ public class DatalyrSDK {
         debugLog("Datalyr SDK initialized successfully", data: [
             "workspaceId": config.workspaceId,
             "visitorId": visitorId,
+            "anonymousId": anonymousId,
             "sessionId": sessionId
         ])
     }
@@ -213,9 +216,10 @@ public class DatalyrSDK {
         // Persist user data
         await persistUserData()
         
-        // Track identify event
-        await track("identify", eventData: [
+        // Track $identify event for identity resolution
+        await track("$identify", eventData: [
             "user_id": userId,
+            "anonymous_id": anonymousId,
             "properties": properties ?? [:]
         ])
     }
@@ -234,10 +238,11 @@ public class DatalyrSDK {
         
         debugLog("Creating alias: \(newUserId) for \(previousUserId)")
         
-        // Track alias event
+        // Track alias event with anonymous_id for identity resolution
         await track("alias", eventData: [
             "user_id": newUserId,
-            "previous_id": previousUserId
+            "previous_id": previousUserId,
+            "anonymous_id": anonymousId
         ])
         
         // Update current user
@@ -294,6 +299,7 @@ public class DatalyrSDK {
             initialized: initialized,
             workspaceId: config?.workspaceId ?? "",
             visitorId: visitorId,
+            anonymousId: anonymousId,
             sessionId: sessionId,
             currentUserId: currentUserId,
             queueStats: queueStats,
@@ -305,6 +311,12 @@ public class DatalyrSDK {
     /// - Returns: Attribution data
     public func getAttributionData() -> AttributionData {
         return attributionManager?.getAttributionData() ?? AttributionData()
+    }
+    
+    /// Get the persistent anonymous ID
+    /// - Returns: Anonymous identifier
+    public func getAnonymousId() -> String {
+        return anonymousId
     }
     
     /// Set attribution data manually
@@ -508,6 +520,7 @@ public class DatalyrSDK {
         enrichedEventData["platform"] = "ios"
         enrichedEventData["app_version"] = getAppVersion()
         enrichedEventData["app_build"] = getAppBuildNumber()
+        enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
         #if canImport(UIKit)
         enrichedEventData["os_version"] = UIDevice.current.systemVersion
         #else
@@ -518,6 +531,7 @@ public class DatalyrSDK {
         return EventPayload(
             workspaceId: config?.workspaceId?.isEmpty == false ? config!.workspaceId : "ios_sdk",
             visitorId: visitorId,
+            anonymousId: anonymousId,  // Include persistent anonymous ID
             sessionId: sessionId,
             eventId: eventId,
             eventName: eventName,

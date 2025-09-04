@@ -127,6 +127,12 @@ public func datalyrFlush() async {
     await DatalyrSDK.shared.flush()
 }
 
+/// Global convenience function to get the anonymous ID
+/// - Returns: Persistent anonymous identifier
+public func datalyrGetAnonymousId() -> String {
+    return DatalyrSDK.shared.getAnonymousId()
+}
+
 // MARK: - SKAdNetwork Global Convenience Functions
 
 /// Global convenience function to track events with automatic SKAdNetwork conversion value encoding
