@@ -203,25 +203,120 @@ public class DatalyrSDK {
             errorLog("SDK not initialized. Call initialize() first.")
             return
         }
-        
+
         debugLog("Identifying user: \(userId)", data: properties)
-        
+
         // Update current user
         currentUserId = userId
-        
+
         if let properties = properties {
             userProperties.merge(properties) { (_, new) in new }
         }
-        
+
         // Persist user data
         await persistUserData()
-        
+
         // Track $identify event for identity resolution
         await track("$identify", eventData: [
             "user_id": userId,
             "anonymous_id": anonymousId,
             "properties": properties ?? [:]
         ])
+
+        // Fetch and merge web attribution if email is provided
+        if config?.enableWebToAppAttribution != false {
+            let email = properties?["email"] as? String ?? (userId.contains("@") ? userId : nil)
+            if let email = email {
+                await fetchAndMergeWebAttribution(email: email)
+            }
+        }
+    }
+
+    /// Fetch web attribution data for user and merge into mobile session
+    /// Called automatically during identify() if email is provided
+    private func fetchAndMergeWebAttribution(email: String) async {
+        guard let apiKey = config?.apiKey else {
+            debugLog("API key not available for web attribution fetch")
+            return
+        }
+
+        debugLog("Fetching web attribution for email: \(email)")
+
+        guard let url = URL(string: "https://api.datalyr.com/attribution/lookup") else {
+            errorLog("Invalid attribution API URL")
+            return
+        }
+
+        do {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(apiKey, forHTTPHeaderField: "X-Datalyr-API-Key")
+
+            let body = ["email": email]
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                errorLog("Invalid response from attribution API")
+                return
+            }
+
+            if httpResponse.statusCode != 200 {
+                debugLog("Failed to fetch web attribution: \(httpResponse.statusCode)")
+                return
+            }
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let found = json["found"] as? Bool,
+                  found,
+                  let attribution = json["attribution"] as? [String: Any] else {
+                debugLog("No web attribution found for user")
+                return
+            }
+
+            debugLog("Web attribution found", data: [
+                "visitor_id": attribution["visitor_id"] ?? "",
+                "has_fbclid": attribution["fbclid"] != nil,
+                "has_gclid": attribution["gclid"] != nil,
+                "utm_source": attribution["utm_source"] ?? ""
+            ])
+
+            // Merge web attribution into current session
+            var mergedData: [String: Any] = [
+                "web_visitor_id": attribution["visitor_id"] ?? "",
+                "web_user_id": attribution["user_id"] ?? ""
+            ]
+
+            // Add click IDs
+            if let fbclid = attribution["fbclid"] { mergedData["fbclid"] = fbclid }
+            if let gclid = attribution["gclid"] { mergedData["gclid"] = gclid }
+            if let ttclid = attribution["ttclid"] { mergedData["ttclid"] = ttclid }
+            if let gbraid = attribution["gbraid"] { mergedData["gbraid"] = gbraid }
+            if let wbraid = attribution["wbraid"] { mergedData["wbraid"] = wbraid }
+            if let fbp = attribution["fbp"] { mergedData["fbp"] = fbp }
+            if let fbc = attribution["fbc"] { mergedData["fbc"] = fbc }
+
+            // Add UTM parameters
+            if let utmSource = attribution["utm_source"] { mergedData["utm_source"] = utmSource }
+            if let utmMedium = attribution["utm_medium"] { mergedData["utm_medium"] = utmMedium }
+            if let utmCampaign = attribution["utm_campaign"] { mergedData["utm_campaign"] = utmCampaign }
+            if let utmContent = attribution["utm_content"] { mergedData["utm_content"] = utmContent }
+            if let utmTerm = attribution["utm_term"] { mergedData["utm_term"] = utmTerm }
+            if let timestamp = attribution["timestamp"] { mergedData["web_timestamp"] = timestamp }
+
+            await track("$web_attribution_merged", eventData: mergedData)
+
+            // Update attribution manager with web data
+            await attributionManager?.mergeWebAttribution(attribution)
+
+            debugLog("Successfully merged web attribution into mobile session")
+
+        } catch {
+            errorLog("Error fetching web attribution: \(error.localizedDescription)")
+            // Non-blocking - continue even if attribution fetch fails
+        }
     }
     
     /// Create an alias for the current user

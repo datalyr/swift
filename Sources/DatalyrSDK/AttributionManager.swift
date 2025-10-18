@@ -261,7 +261,52 @@ internal class AttributionManager {
         await saveAttributionData()
         debugLog("Attribution data set manually")
     }
-    
+
+    /// Merge web attribution data into mobile session
+    /// Called when web-to-app attribution is resolved via email
+    func mergeWebAttribution(_ webAttribution: [String: Any]) async {
+        debugLog("Merging web attribution data", data: webAttribution)
+
+        // Only merge if we don't already have attribution data
+        // Web attribution takes precedence for first-touch
+        if attributionData.fbclid == nil, let fbclid = webAttribution["fbclid"] as? String {
+            attributionData.fbclid = fbclid
+        }
+        if attributionData.gclid == nil, let gclid = webAttribution["gclid"] as? String {
+            attributionData.gclid = gclid
+        }
+        if attributionData.ttclid == nil, let ttclid = webAttribution["ttclid"] as? String {
+            attributionData.ttclid = ttclid
+        }
+
+        // Merge UTM parameters
+        if attributionData.utmSource == nil, let utmSource = webAttribution["utm_source"] as? String {
+            attributionData.utmSource = utmSource
+            attributionData.campaignSource = utmSource
+        }
+        if attributionData.utmMedium == nil, let utmMedium = webAttribution["utm_medium"] as? String {
+            attributionData.utmMedium = utmMedium
+            attributionData.campaignMedium = utmMedium
+        }
+        if attributionData.utmCampaign == nil, let utmCampaign = webAttribution["utm_campaign"] as? String {
+            attributionData.utmCampaign = utmCampaign
+            attributionData.campaignName = utmCampaign
+        }
+        if attributionData.utmContent == nil, let utmContent = webAttribution["utm_content"] as? String {
+            attributionData.utmContent = utmContent
+            attributionData.campaignContent = utmContent
+        }
+        if attributionData.utmTerm == nil, let utmTerm = webAttribution["utm_term"] as? String {
+            attributionData.utmTerm = utmTerm
+            attributionData.campaignTerm = utmTerm
+        }
+
+        // Save merged attribution data
+        await saveAttributionData()
+
+        debugLog("Web attribution merged successfully")
+    }
+
     /// Clear attribution data
     func clearAttributionData() async {
         attributionData = AttributionData()
