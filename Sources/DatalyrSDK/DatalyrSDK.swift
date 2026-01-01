@@ -3,6 +3,9 @@ import StoreKit
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(AppTrackingTransparency)
+import AppTrackingTransparency
+#endif
 
 // MARK: - Main SDK Class
 
@@ -32,7 +35,10 @@ public class DatalyrSDK {
     
     // SKAdNetwork conversion value encoder
     private var conversionEncoder: ConversionValueEncoder?
-    
+
+    // Platform SDK integrations (Meta, TikTok)
+    private var platformIntegrationManager: PlatformIntegrationManager?
+
     // App lifecycle monitoring
     private var appStateObserver: NSObjectProtocol?
     #if canImport(UIKit)
@@ -128,14 +134,27 @@ public class DatalyrSDK {
             default:
                 template = .ecommerce
             }
-            
+
             self.conversionEncoder = ConversionValueEncoder(template: template)
-            
+
             if config.debug {
                 debugLog("SKAdNetwork encoder initialized with template: \(templateName)")
             }
         }
-        
+
+        // Initialize platform SDK integrations (Meta, TikTok)
+        if config.metaAppId != nil || config.tiktokAppId != nil {
+            self.platformIntegrationManager = PlatformIntegrationManager()
+            await platformIntegrationManager?.initialize(config: config)
+
+            // Fetch deferred deep link attribution on first launch
+            if config.enableAttribution {
+                if let deferredData = await platformIntegrationManager?.fetchDeferredAttribution() {
+                    await mergeDeferredAttribution(deferredData)
+                }
+            }
+        }
+
         // Mark as initialized
         self.initialized = true
         
@@ -224,12 +243,37 @@ public class DatalyrSDK {
         ])
 
         // Fetch and merge web attribution if email is provided
-        if config?.enableWebToAppAttribution != false {
-            let email = properties?["email"] as? String ?? (userId.contains("@") ? userId : nil)
-            if let email = email {
-                await fetchAndMergeWebAttribution(email: email)
-            }
+        let emailForAttribution = properties?["email"] as? String ?? (userId.contains("@") ? userId : nil)
+        if let email = emailForAttribution {
+            await fetchAndMergeWebAttribution(email: email)
         }
+
+        // Identify user on platform SDKs for improved attribution matching (Advanced Matching)
+        // Extract all available user properties for better match rates
+        let email = properties?["email"] as? String
+        let phone = properties?["phone"] as? String
+        let firstName = properties?["first_name"] as? String ?? properties?["firstName"] as? String
+        let lastName = properties?["last_name"] as? String ?? properties?["lastName"] as? String
+        let dateOfBirth = properties?["date_of_birth"] as? String ?? properties?["dob"] as? String ?? properties?["birthday"] as? String
+        let gender = properties?["gender"] as? String
+        let city = properties?["city"] as? String
+        let state = properties?["state"] as? String
+        let zip = properties?["zip"] as? String ?? properties?["postal_code"] as? String ?? properties?["zipcode"] as? String
+        let country = properties?["country"] as? String
+
+        platformIntegrationManager?.identifyUser(
+            userId: userId,
+            email: email,
+            phone: phone,
+            firstName: firstName,
+            lastName: lastName,
+            dateOfBirth: dateOfBirth,
+            gender: gender,
+            city: city,
+            state: state,
+            zip: zip,
+            country: country
+        )
     }
 
     /// Fetch web attribution data for user and merge into mobile session
@@ -369,7 +413,10 @@ public class DatalyrSDK {
         
         // Clear attribution data
         await attributionManager?.clearAttributionData()
-        
+
+        // Clear user data from platform SDKs
+        platformIntegrationManager?.clearUserData()
+
         debugLog("User session reset complete")
     }
     
@@ -419,7 +466,114 @@ public class DatalyrSDK {
     public func setAttributionData(_ data: AttributionData) async {
         await attributionManager?.setAttributionData(data)
     }
-    
+
+    /// Get deferred deep link attribution data from platform SDKs (Meta, TikTok)
+    /// - Returns: Deferred deep link result if available
+    public func getDeferredAttributionData() -> DeferredDeepLinkResult? {
+        return platformIntegrationManager?.getDeferredAttributionData()
+    }
+
+    /// Get Apple Search Ads attribution data
+    /// - Returns: Apple Search Ads attribution if available
+    public func getAppleSearchAdsAttribution() -> AppleSearchAdsAttribution? {
+        return platformIntegrationManager?.getAppleSearchAdsAttribution()
+    }
+
+    /// Get platform integration status
+    /// - Returns: Dictionary with platform availability status
+    public func getPlatformIntegrationStatus() -> [String: Bool] {
+        return [
+            "meta": platformIntegrationManager?.isMetaAvailable() ?? false,
+            "tiktok": platformIntegrationManager?.isTikTokAvailable() ?? false,
+            "appleSearchAds": platformIntegrationManager?.isAppleSearchAdsAvailable() ?? false
+        ]
+    }
+
+    // MARK: - App Tracking Transparency (ATT)
+
+    /// Update tracking authorization status on all platform SDKs
+    /// Call this AFTER the user responds to the ATT permission dialog
+    ///
+    /// Example usage:
+    /// ```swift
+    /// ATTrackingManager.requestTrackingAuthorization { status in
+    ///     Task {
+    ///         await DatalyrSDK.shared.updateTrackingAuthorization(status: status)
+    ///     }
+    /// }
+    /// ```
+    public func updateTrackingAuthorization(status: UInt? = nil) async {
+        guard initialized else {
+            errorLog("SDK not initialized. Call initialize() first.")
+            return
+        }
+
+        platformIntegrationManager?.updateTrackingAuthorization()
+
+        // Track ATT status event
+        let attStatus = status ?? (platformIntegrationManager?.getTrackingAuthorizationStatus() ?? 0)
+        let statusName: String
+        switch attStatus {
+        case 0: statusName = "notDetermined"
+        case 1: statusName = "restricted"
+        case 2: statusName = "denied"
+        case 3: statusName = "authorized"
+        default: statusName = "unknown"
+        }
+
+        await track("$att_status", eventData: [
+            "status": attStatus,
+            "status_name": statusName,
+            "authorized": attStatus == 3
+        ])
+
+        debugLog("ATT status updated: \(statusName) (\(attStatus))")
+    }
+
+    /// Check if App Tracking Transparency is authorized
+    /// - Returns: true if ATT is authorized or not required (pre-iOS 14.5)
+    public func isTrackingAuthorized() -> Bool {
+        return platformIntegrationManager?.isTrackingAuthorized() ?? true
+    }
+
+    /// Get current ATT authorization status
+    /// - Returns: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
+    public func getTrackingAuthorizationStatus() -> UInt {
+        return platformIntegrationManager?.getTrackingAuthorizationStatus() ?? 3
+    }
+
+    /// Request ATT permission and update platform SDKs
+    /// Convenience method that handles the full ATT flow
+    ///
+    /// - Returns: The ATT authorization status after user response
+    #if os(iOS)
+    @available(iOS 14.5, *)
+    public func requestTrackingAuthorization() async -> UInt {
+        #if canImport(AppTrackingTransparency)
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                ATTrackingManager.requestTrackingAuthorization { status in
+                    Task {
+                        await self.updateTrackingAuthorization(status: status.rawValue)
+                        continuation.resume(returning: status.rawValue)
+                    }
+                }
+            }
+        }
+        #else
+        return 3 // authorized
+        #endif
+    }
+
+    /// Static convenience method for requesting ATT
+    @available(iOS 14.5, *)
+    public static func requestTrackingAuthorization() async -> UInt {
+        return await shared.requestTrackingAuthorization()
+    }
+    #endif
+
+    // MARK: - App Update Tracking
+
     /// Track app update
     /// - Parameters:
     ///   - previousVersion: Previous app version
@@ -455,8 +609,8 @@ public class DatalyrSDK {
     ) async throws {
         // Create config with SKAdNetwork template
         let skadConfig = DatalyrConfig(
-            workspaceId: config.workspaceId,
             apiKey: config.apiKey,
+            workspaceId: config.workspaceId,
             debug: config.debug,
             endpoint: config.endpoint,
             maxRetries: config.maxRetries,
@@ -523,19 +677,27 @@ public class DatalyrSDK {
     ///   - currency: Currency code (default: "USD")
     ///   - productId: Product identifier (optional)
     public func trackPurchase(
-        value: Double, 
-        currency: String = "USD", 
+        value: Double,
+        currency: String = "USD",
         productId: String? = nil
     ) async {
         var properties: EventData = [
-            "revenue": value, 
+            "revenue": value,
             "currency": currency
         ]
         if let productId = productId {
             properties["product_id"] = productId
         }
-        
+
         await trackWithSKAdNetwork("purchase", eventData: properties)
+
+        // Forward to Meta and TikTok
+        platformIntegrationManager?.forwardPurchase(
+            value: value,
+            currency: currency,
+            productId: productId,
+            parameters: properties
+        )
     }
     
     /// Track subscription with automatic revenue encoding
@@ -544,21 +706,167 @@ public class DatalyrSDK {
     ///   - currency: Currency code (default: "USD")
     ///   - plan: Subscription plan (optional)
     public func trackSubscription(
-        value: Double, 
-        currency: String = "USD", 
+        value: Double,
+        currency: String = "USD",
         plan: String? = nil
     ) async {
         var properties: EventData = [
-            "revenue": value, 
+            "revenue": value,
             "currency": currency
         ]
         if let plan = plan {
             properties["plan"] = plan
         }
-        
+
         await trackWithSKAdNetwork("subscribe", eventData: properties)
+
+        // Forward to Meta and TikTok
+        platformIntegrationManager?.forwardSubscription(
+            value: value,
+            currency: currency,
+            plan: plan
+        )
     }
-    
+
+    // MARK: - Standard E-commerce Events
+
+    /// Track add to cart event
+    /// - Parameters:
+    ///   - value: Cart item value
+    ///   - currency: Currency code (default: "USD")
+    ///   - productId: Product identifier
+    ///   - productName: Product name (optional)
+    public func trackAddToCart(
+        value: Double,
+        currency: String = "USD",
+        productId: String? = nil,
+        productName: String? = nil
+    ) async {
+        var properties: EventData = [
+            "value": value,
+            "currency": currency
+        ]
+        if let productId = productId { properties["product_id"] = productId }
+        if let productName = productName { properties["product_name"] = productName }
+
+        await trackWithSKAdNetwork("add_to_cart", eventData: properties)
+
+        platformIntegrationManager?.forwardAddToCart(
+            value: value,
+            currency: currency,
+            productId: productId,
+            productName: productName
+        )
+    }
+
+    /// Track view content/product event
+    /// - Parameters:
+    ///   - contentId: Content or product ID
+    ///   - contentName: Content or product name
+    ///   - contentType: Type of content (default: "product")
+    ///   - value: Value of the content (optional)
+    ///   - currency: Currency code (optional)
+    public func trackViewContent(
+        contentId: String? = nil,
+        contentName: String? = nil,
+        contentType: String = "product",
+        value: Double? = nil,
+        currency: String? = nil
+    ) async {
+        var properties: EventData = ["content_type": contentType]
+        if let contentId = contentId { properties["content_id"] = contentId }
+        if let contentName = contentName { properties["content_name"] = contentName }
+        if let value = value { properties["value"] = value }
+        if let currency = currency { properties["currency"] = currency }
+
+        await track("view_content", eventData: properties)
+
+        platformIntegrationManager?.forwardViewContent(
+            contentId: contentId,
+            contentName: contentName,
+            contentType: contentType,
+            value: value,
+            currency: currency
+        )
+    }
+
+    /// Track initiate checkout event
+    /// - Parameters:
+    ///   - value: Checkout value
+    ///   - currency: Currency code (default: "USD")
+    ///   - numItems: Number of items in cart
+    ///   - productIds: Array of product IDs in cart
+    public func trackInitiateCheckout(
+        value: Double,
+        currency: String = "USD",
+        numItems: Int? = nil,
+        productIds: [String]? = nil
+    ) async {
+        var properties: EventData = [
+            "value": value,
+            "currency": currency
+        ]
+        if let numItems = numItems { properties["num_items"] = numItems }
+        if let productIds = productIds { properties["product_ids"] = productIds }
+
+        await trackWithSKAdNetwork("initiate_checkout", eventData: properties)
+
+        platformIntegrationManager?.forwardInitiateCheckout(
+            value: value,
+            currency: currency,
+            numItems: numItems,
+            contentIds: productIds
+        )
+    }
+
+    /// Track complete registration event
+    /// - Parameter method: Registration method (e.g., "email", "facebook", "google")
+    public func trackCompleteRegistration(method: String? = nil) async {
+        var properties: EventData = [:]
+        if let method = method { properties["method"] = method }
+
+        await trackWithSKAdNetwork("complete_registration", eventData: properties)
+
+        platformIntegrationManager?.forwardCompleteRegistration(method: method)
+    }
+
+    /// Track search event
+    /// - Parameters:
+    ///   - query: Search query string
+    ///   - resultIds: Array of result product IDs (optional)
+    public func trackSearch(query: String, resultIds: [String]? = nil) async {
+        var properties: EventData = ["query": query]
+        if let resultIds = resultIds { properties["result_ids"] = resultIds }
+
+        await track("search", eventData: properties)
+
+        platformIntegrationManager?.forwardSearch(query: query, contentIds: resultIds)
+    }
+
+    /// Track lead/contact form submission
+    /// - Parameters:
+    ///   - value: Lead value (optional)
+    ///   - currency: Currency code (optional)
+    public func trackLead(value: Double? = nil, currency: String? = nil) async {
+        var properties: EventData = [:]
+        if let value = value { properties["value"] = value }
+        if let currency = currency { properties["currency"] = currency }
+
+        await trackWithSKAdNetwork("lead", eventData: properties)
+
+        platformIntegrationManager?.forwardLead(value: value, currency: currency)
+    }
+
+    /// Track add payment info event
+    /// - Parameter success: Whether payment info was added successfully
+    public func trackAddPaymentInfo(success: Bool = true) async {
+        await track("add_payment_info", eventData: ["success": success])
+
+        platformIntegrationManager?.forwardAddPaymentInfo(success: success)
+    }
+
+    // MARK: - Conversion Value
+
     /// Get current conversion value for testing
     /// - Parameters:
     ///   - event: Event name
@@ -595,7 +903,58 @@ public class DatalyrSDK {
     ) async {
         await shared.trackSubscription(value: value, currency: currency, plan: plan)
     }
-    
+
+    /// Track add to cart (static)
+    public static func trackAddToCart(
+        value: Double,
+        currency: String = "USD",
+        productId: String? = nil,
+        productName: String? = nil
+    ) async {
+        await shared.trackAddToCart(value: value, currency: currency, productId: productId, productName: productName)
+    }
+
+    /// Track view content (static)
+    public static func trackViewContent(
+        contentId: String? = nil,
+        contentName: String? = nil,
+        contentType: String = "product",
+        value: Double? = nil,
+        currency: String? = nil
+    ) async {
+        await shared.trackViewContent(contentId: contentId, contentName: contentName, contentType: contentType, value: value, currency: currency)
+    }
+
+    /// Track initiate checkout (static)
+    public static func trackInitiateCheckout(
+        value: Double,
+        currency: String = "USD",
+        numItems: Int? = nil,
+        productIds: [String]? = nil
+    ) async {
+        await shared.trackInitiateCheckout(value: value, currency: currency, numItems: numItems, productIds: productIds)
+    }
+
+    /// Track complete registration (static)
+    public static func trackCompleteRegistration(method: String? = nil) async {
+        await shared.trackCompleteRegistration(method: method)
+    }
+
+    /// Track search (static)
+    public static func trackSearch(query: String, resultIds: [String]? = nil) async {
+        await shared.trackSearch(query: query, resultIds: resultIds)
+    }
+
+    /// Track lead (static)
+    public static func trackLead(value: Double? = nil, currency: String? = nil) async {
+        await shared.trackLead(value: value, currency: currency)
+    }
+
+    /// Track add payment info (static)
+    public static func trackAddPaymentInfo(success: Bool = true) async {
+        await shared.trackAddPaymentInfo(success: success)
+    }
+
     /// Get conversion value for testing (static)
     public static func getConversionValue(for event: String, properties: EventData? = nil) -> Int? {
         return shared.getConversionValue(for: event, properties: properties)
@@ -608,9 +967,9 @@ public class DatalyrSDK {
         let eventId = generateUUID()
         let timestamp = DateFormatter.iso8601.string(from: Date())
         let fingerprintData = await createFingerprintData()
-        
+
         var enrichedEventData = eventData ?? [:]
-        
+
         // Add standard properties
         enrichedEventData["platform"] = "ios"
         enrichedEventData["app_version"] = getAppVersion()
@@ -621,10 +980,16 @@ public class DatalyrSDK {
         #else
         enrichedEventData["os_version"] = ProcessInfo.processInfo.operatingSystemVersionString
         #endif
-        enrichedEventData["sdk_version"] = "1.1.0"
-        
+        enrichedEventData["sdk_version"] = "1.2.0"
+
+        // Add Apple Search Ads attribution if available
+        if let asaData = platformIntegrationManager?.getAppleSearchAdsData() {
+            enrichedEventData.merge(asaData) { (_, new) in new }
+        }
+
+        let workspaceIdValue = config?.workspaceId ?? ""
         return EventPayload(
-            workspaceId: config?.workspaceId?.isEmpty == false ? config!.workspaceId : "ios_sdk",
+            workspaceId: workspaceIdValue.isEmpty ? "ios_sdk" : workspaceIdValue,
             visitorId: visitorId,
             anonymousId: anonymousId,  // Include persistent anonymous ID
             sessionId: sessionId,
@@ -682,7 +1047,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "1.1.0",
+                "sdk_version": "1.2.0",
                 "install_time": installTime
             ]
             
@@ -775,6 +1140,69 @@ public class DatalyrSDK {
         }
     }
     
+    /// Merge deferred attribution data from platform SDKs into attribution manager
+    private func mergeDeferredAttribution(_ data: DeferredDeepLinkResult) async {
+        debugLog("Processing deferred deep link attribution", data: [
+            "source": data.source ?? "unknown",
+            "has_fbclid": data.fbclid != nil,
+            "has_ttclid": data.ttclid != nil
+        ])
+
+        var attributionData = getAttributionData()
+
+        if let fbclid = data.fbclid {
+            attributionData.fbclid = fbclid
+            debugLog("Captured fbclid from deferred deep link: \(fbclid)")
+        }
+        if let ttclid = data.ttclid {
+            attributionData.ttclid = ttclid
+            debugLog("Captured ttclid from deferred deep link: \(ttclid)")
+        }
+        if let utmSource = data.utmSource {
+            attributionData.utmSource = utmSource
+            attributionData.campaignSource = utmSource
+        }
+        if let utmMedium = data.utmMedium {
+            attributionData.utmMedium = utmMedium
+            attributionData.campaignMedium = utmMedium
+        }
+        if let utmCampaign = data.utmCampaign {
+            attributionData.utmCampaign = utmCampaign
+            attributionData.campaignName = utmCampaign
+        }
+        if let utmContent = data.utmContent {
+            attributionData.utmContent = utmContent
+            attributionData.campaignContent = utmContent
+        }
+        if let utmTerm = data.utmTerm {
+            attributionData.utmTerm = utmTerm
+            attributionData.campaignTerm = utmTerm
+        }
+        if let campaignId = data.campaignId {
+            attributionData.campaignId = campaignId
+        }
+        if let adsetId = data.adsetId {
+            attributionData.adsetId = adsetId
+        }
+        if let adId = data.adId {
+            attributionData.adId = adId
+        }
+        if let deepLinkUrl = data.url {
+            attributionData.deepLinkUrl = deepLinkUrl
+        }
+
+        await setAttributionData(attributionData)
+
+        // Track deferred attribution event
+        await track("$deferred_attribution", eventData: [
+            "source": data.source ?? "unknown",
+            "fbclid": data.fbclid ?? "",
+            "ttclid": data.ttclid ?? "",
+            "campaign_id": data.campaignId ?? "",
+            "deep_link_url": data.url ?? ""
+        ])
+    }
+
     /// Cleanup resources
     private func cleanup() {
         NotificationCenter.default.removeObserver(self)

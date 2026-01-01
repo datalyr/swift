@@ -235,6 +235,7 @@ internal class DatalyrHTTPClient {
         let testPayload = EventPayload(
             workspaceId: "test",
             visitorId: "test",
+            anonymousId: "test",
             sessionId: "test",
             eventId: "test",
             eventName: "connection_test"

@@ -20,7 +20,20 @@ public struct DatalyrConfig {
     public let enableAttribution: Bool
     public let autoEventConfig: AutoEventConfig?
     public let skadTemplate: String?
-    
+
+    // Meta (Facebook) SDK Configuration
+    public let metaAppId: String?
+    public let metaClientToken: String?
+    public let enableMetaAttribution: Bool
+    public let forwardEventsToMeta: Bool
+
+    // TikTok SDK Configuration
+    public let tiktokAppId: String?         // TikTok App ID (from TikTok Developer Portal)
+    public let tiktokEventsAppId: String?   // Events API App ID (from TikTok Events Manager)
+    public let tiktokAccessToken: String?
+    public let enableTikTokAttribution: Bool
+    public let forwardEventsToTikTok: Bool
+
     public init(
         apiKey: String,
         workspaceId: String = "",
@@ -37,7 +50,18 @@ public struct DatalyrConfig {
         enableAutoEvents: Bool = false,
         enableAttribution: Bool = false,
         autoEventConfig: AutoEventConfig? = nil,
-        skadTemplate: String? = nil
+        skadTemplate: String? = nil,
+        // Meta (Facebook) SDK Configuration
+        metaAppId: String? = nil,
+        metaClientToken: String? = nil,
+        enableMetaAttribution: Bool = true,
+        forwardEventsToMeta: Bool = true,
+        // TikTok SDK Configuration
+        tiktokAppId: String? = nil,
+        tiktokEventsAppId: String? = nil,
+        tiktokAccessToken: String? = nil,
+        enableTikTokAttribution: Bool = true,
+        forwardEventsToTikTok: Bool = true
     ) {
         self.apiKey = apiKey
         self.workspaceId = workspaceId
@@ -55,6 +79,15 @@ public struct DatalyrConfig {
         self.enableAttribution = enableAttribution
         self.autoEventConfig = autoEventConfig
         self.skadTemplate = skadTemplate
+        self.metaAppId = metaAppId
+        self.metaClientToken = metaClientToken
+        self.enableMetaAttribution = enableMetaAttribution
+        self.forwardEventsToMeta = forwardEventsToMeta
+        self.tiktokAppId = tiktokAppId
+        self.tiktokEventsAppId = tiktokEventsAppId
+        self.tiktokAccessToken = tiktokAccessToken
+        self.enableTikTokAttribution = enableTikTokAttribution
+        self.forwardEventsToTikTok = forwardEventsToTikTok
     }
 }
 
@@ -447,5 +480,51 @@ public struct AnyCodable: Codable {
         default:
             try container.encodeNil()
         }
+    }
+}
+
+// MARK: - Deferred Deep Link Result
+
+/// Result from platform SDK deferred deep link fetch
+public struct DeferredDeepLinkResult {
+    public var url: String?
+    public var source: String?
+    public var fbclid: String?
+    public var ttclid: String?
+    public var utmSource: String?
+    public var utmMedium: String?
+    public var utmCampaign: String?
+    public var utmContent: String?
+    public var utmTerm: String?
+    public var campaignId: String?
+    public var adsetId: String?
+    public var adId: String?
+
+    public init(
+        url: String? = nil,
+        source: String? = nil,
+        fbclid: String? = nil,
+        ttclid: String? = nil,
+        utmSource: String? = nil,
+        utmMedium: String? = nil,
+        utmCampaign: String? = nil,
+        utmContent: String? = nil,
+        utmTerm: String? = nil,
+        campaignId: String? = nil,
+        adsetId: String? = nil,
+        adId: String? = nil
+    ) {
+        self.url = url
+        self.source = source
+        self.fbclid = fbclid
+        self.ttclid = ttclid
+        self.utmSource = utmSource
+        self.utmMedium = utmMedium
+        self.utmCampaign = utmCampaign
+        self.utmContent = utmContent
+        self.utmTerm = utmTerm
+        self.campaignId = campaignId
+        self.adsetId = adsetId
+        self.adId = adId
     }
 } 

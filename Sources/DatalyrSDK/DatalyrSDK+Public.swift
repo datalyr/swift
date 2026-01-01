@@ -7,29 +7,29 @@ public extension DatalyrSDK {
     
     /// Convenience method to initialize with basic configuration
     /// - Parameters:
-    ///   - workspaceId: Your Datalyr workspace ID
     ///   - apiKey: Your Datalyr API key
+    ///   - workspaceId: Your Datalyr workspace ID
     ///   - debug: Enable debug logging (default: false)
-    static func configure(workspaceId: String, apiKey: String, debug: Bool = false) async throws {
+    static func configure(apiKey: String, workspaceId: String = "", debug: Bool = false) async throws {
         let config = DatalyrConfig(
-            workspaceId: workspaceId,
             apiKey: apiKey,
+            workspaceId: workspaceId,
             debug: debug
         )
-        
+
         try await shared.initialize(config: config)
     }
     
     /// Convenience method to initialize with full configuration
     /// - Parameters:
-    ///   - workspaceId: Your Datalyr workspace ID
     ///   - apiKey: Your Datalyr API key
+    ///   - workspaceId: Your Datalyr workspace ID
     ///   - debug: Enable debug logging
     ///   - enableAutoEvents: Enable automatic event tracking
     ///   - enableAttribution: Enable attribution tracking
     static func configure(
-        workspaceId: String,
         apiKey: String,
+        workspaceId: String = "",
         debug: Bool = false,
         enableAutoEvents: Bool = true,
         enableAttribution: Bool = true
@@ -40,30 +40,30 @@ public extension DatalyrSDK {
             trackAppUpdates: true,
             trackPerformance: false
         )
-        
+
         let config = DatalyrConfig(
-            workspaceId: workspaceId,
             apiKey: apiKey,
+            workspaceId: workspaceId,
             debug: debug,
             enableAutoEvents: enableAutoEvents,
             enableAttribution: enableAttribution,
             autoEventConfig: autoEventConfig
         )
-        
+
         try await shared.initialize(config: config)
     }
     
     /// Convenience method to initialize with SKAdNetwork conversion value encoding
     /// - Parameters:
-    ///   - workspaceId: Your Datalyr workspace ID
     ///   - apiKey: Your Datalyr API key
+    ///   - workspaceId: Your Datalyr workspace ID
     ///   - template: SKAdNetwork conversion template ("ecommerce", "gaming", "subscription")
     ///   - debug: Enable debug logging
     ///   - enableAutoEvents: Enable automatic event tracking
     ///   - enableAttribution: Enable attribution tracking
     static func configureWithSKAdNetwork(
-        workspaceId: String,
         apiKey: String,
+        workspaceId: String = "",
         template: String = "ecommerce",
         debug: Bool = false,
         enableAutoEvents: Bool = true,
@@ -71,8 +71,8 @@ public extension DatalyrSDK {
     ) async throws {
         try await DatalyrSDK.initializeWithSKAdNetwork(
             config: DatalyrConfig(
-                workspaceId: workspaceId,
                 apiKey: apiKey,
+                workspaceId: workspaceId,
                 debug: debug,
                 enableAutoEvents: enableAutoEvents,
                 enableAttribution: enableAttribution,
