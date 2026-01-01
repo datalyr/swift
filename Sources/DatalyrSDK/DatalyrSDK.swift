@@ -621,7 +621,7 @@ public class DatalyrSDK {
         #else
         enrichedEventData["os_version"] = ProcessInfo.processInfo.operatingSystemVersionString
         #endif
-        enrichedEventData["sdk_version"] = "1.0.1"
+        enrichedEventData["sdk_version"] = "1.1.0"
         
         return EventPayload(
             workspaceId: config?.workspaceId?.isEmpty == false ? config!.workspaceId : "ios_sdk",
@@ -682,7 +682,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "1.0.1",
+                "sdk_version": "1.1.0",
                 "install_time": installTime
             ]
             

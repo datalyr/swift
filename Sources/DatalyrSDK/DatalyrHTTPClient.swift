@@ -145,7 +145,7 @@ internal class DatalyrHTTPClient {
         
         // Set headers
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("@datalyr/swift/1.0.1", forHTTPHeaderField: "User-Agent")
+        request.setValue("@datalyr/swift/1.1.0", forHTTPHeaderField: "User-Agent")
         
         // Server-side tracking uses X-API-Key header
         if config.useServerTracking {
@@ -277,7 +277,7 @@ internal class DatalyrHTTPClient {
         // Add context with explicit source
         var context: [String: Any] = [
             "library": "@datalyr/swift",
-            "version": "1.0.2",
+            "version": "1.1.0",
             "source": "mobile_app"  // Explicitly set source for iOS
         ]
         if let userProperties = payload.userProperties {
