@@ -113,7 +113,42 @@ public class DatalyrSDK {
             self.attributionManager = AttributionManager()
             await attributionManager?.initialize()
         }
-        
+
+        // Initialize journey tracking (for first-touch, last-touch, touchpoints)
+        await JourneyManager.shared.initialize()
+
+        // Record initial attribution to journey if this is a new session with attribution
+        if let attribution = attributionManager?.getAttributionData() {
+            let hasAttribution = attribution.utmSource != nil ||
+                                attribution.fbclid != nil ||
+                                attribution.gclid != nil ||
+                                attribution.lyr != nil
+
+            if hasAttribution {
+                var touchAttribution = TouchAttribution(
+                    timestamp: 0,
+                    expiresAt: 0,
+                    capturedAt: 0
+                )
+                touchAttribution.source = attribution.utmSource ?? attribution.campaignSource
+                touchAttribution.medium = attribution.utmMedium ?? attribution.campaignMedium
+                touchAttribution.campaign = attribution.utmCampaign ?? attribution.campaignName
+                touchAttribution.fbclid = attribution.fbclid
+                touchAttribution.gclid = attribution.gclid
+                touchAttribution.ttclid = attribution.ttclid
+                touchAttribution.lyr = attribution.lyr
+                if attribution.fbclid != nil {
+                    touchAttribution.clickIdType = "fbclid"
+                } else if attribution.gclid != nil {
+                    touchAttribution.clickIdType = "gclid"
+                } else if attribution.ttclid != nil {
+                    touchAttribution.clickIdType = "ttclid"
+                }
+
+                await JourneyManager.shared.recordAttribution(sessionId: sessionId, attribution: touchAttribution)
+            }
+        }
+
         // Initialize auto-events manager
         if config.enableAutoEvents {
             self.autoEventsManager = AutoEventsManager(
@@ -449,18 +484,36 @@ public class DatalyrSDK {
         )
     }
     
-    /// Get current attribution data
-    /// - Returns: Attribution data
+    /// Get current attribution data (includes journey tracking data)
+    /// - Returns: Attribution data merged with journey tracking data
     public func getAttributionData() -> AttributionData {
         return attributionManager?.getAttributionData() ?? AttributionData()
     }
-    
+
+    /// Get journey tracking data (first-touch, last-touch, touchpoint count)
+    /// - Returns: Dictionary with journey tracking data
+    public func getJourneyData() -> [String: Any] {
+        return JourneyManager.shared.getAttributionData()
+    }
+
+    /// Get journey tracking summary for debugging
+    /// - Returns: Journey summary with key metrics
+    public func getJourneySummary() -> JourneySummary {
+        return JourneyManager.shared.getJourneySummary()
+    }
+
+    /// Get full customer journey (all touchpoints)
+    /// - Returns: Array of touchpoints
+    public func getJourney() -> [TouchPoint] {
+        return JourneyManager.shared.getJourney()
+    }
+
     /// Get the persistent anonymous ID
     /// - Returns: Anonymous identifier
     public func getAnonymousId() -> String {
         return anonymousId
     }
-    
+
     /// Set attribution data manually
     /// - Parameter data: Attribution data to set
     public func setAttributionData(_ data: AttributionData) async {
@@ -639,24 +692,47 @@ public class DatalyrSDK {
     ) async {
         // Existing tracking (keep this exactly as-is)
         await track(event, eventData: eventData)
-        
-        // NEW: Automatic SKAdNetwork encoding
+
+        // NEW: Automatic SKAdNetwork encoding with SKAN 4.0 support
         guard let encoder = conversionEncoder else {
             if config?.debug == true {
                 debugLog("SKAdNetwork encoder not initialized. Pass skadTemplate in initialize() or use initializeWithSKAdNetwork()")
             }
             return
         }
-        
-        let conversionValue = encoder.encode(event: event, properties: eventData)
-        
-        if conversionValue > 0 {
+
+        // Use SKAN 4.0 encoding to get fine value, coarse value, and lock window
+        let result = encoder.encodeWithSKAN4(event: event, properties: eventData)
+
+        if result.fineValue > 0 {
             #if os(iOS)
-            if #available(iOS 14.0, *) {
-                SKAdNetwork.updateConversionValue(conversionValue)
-                
+            // SKAN 4.0 (iOS 16.1+): Use new API with coarse value and lock window
+            if #available(iOS 16.1, *) {
+                let coarseValue: SKAdNetwork.CoarseConversionValue
+                switch result.coarseValue {
+                case "high": coarseValue = .high
+                case "medium": coarseValue = .medium
+                default: coarseValue = .low
+                }
+
+                SKAdNetwork.updatePostbackConversionValue(result.fineValue, coarseValue: coarseValue, lockWindow: result.lockWindow) { error in
+                    if let error = error {
+                        print("[DatalyrSDK] SKAdNetwork 4.0 update error: \(error.localizedDescription)")
+                    } else if self.config?.debug == true {
+                        print("[DatalyrSDK] SKAdNetwork 4.0 updated - fine: \(result.fineValue), coarse: \(result.coarseValue), lock: \(result.lockWindow) for event: \(event)")
+                    }
+                }
+
                 if config?.debug == true {
-                    debugLog("SKAdNetwork conversion value updated: \(conversionValue) for event: \(event)", data: eventData)
+                    debugLog("SKAdNetwork 4.0 conversion value updated - fine: \(result.fineValue), coarse: \(result.coarseValue), lock: \(result.lockWindow) for event: \(event)", data: eventData)
+                }
+            }
+            // SKAN 3.0 (iOS 14.0-16.0): Use deprecated API
+            else if #available(iOS 14.0, *) {
+                SKAdNetwork.updateConversionValue(result.fineValue)
+
+                if config?.debug == true {
+                    debugLog("SKAdNetwork 3.0 conversion value updated: \(result.fineValue) for event: \(event)", data: eventData)
                 }
             } else if config?.debug == true {
                 debugLog("SKAdNetwork requires iOS 14.0+")
