@@ -17,8 +17,13 @@ public class DatalyrSDK {
     /// Shared singleton instance
     public static let shared = DatalyrSDK()
     
+    // MARK: - Public Properties
+
+    /// Delegate for receiving SDK callbacks (errors, attribution, conversion updates)
+    public weak var delegate: DatalyrSDKDelegate?
+
     // MARK: - Private Properties
-    
+
     private var initialized = false
     internal var config: DatalyrConfig?
     private var httpClient: DatalyrHTTPClient?
@@ -192,16 +197,47 @@ public class DatalyrSDK {
 
         // Mark as initialized
         self.initialized = true
-        
+
         // Check for app install (after SDK is marked as initialized)
         await checkAndTrackInstall()
-        
+
+        // Register for attribution tracking (AdAttributionKit on iOS 17.4+, SKAdNetwork otherwise)
+        await UnifiedAttributionTracker.shared.register()
+
         debugLog("Datalyr SDK initialized successfully", data: [
             "workspaceId": config.workspaceId,
             "visitorId": visitorId,
             "anonymousId": anonymousId,
             "sessionId": sessionId
         ])
+
+        // Notify delegate
+        DispatchQueue.main.async { [weak self] in
+            self?.delegate?.datalyrDidInitialize()
+        }
+    }
+
+    // MARK: - Delegate Notification Helpers
+
+    /// Notify delegate of a platform error on the main thread
+    internal func notifyDelegateOfError(_ error: DatalyrPlatformError, eventName: String? = nil) {
+        DispatchQueue.main.async { [weak self] in
+            self?.delegate?.datalyrDidFailToSendEvent(error, eventName: eventName)
+        }
+    }
+
+    /// Notify delegate of attribution data on the main thread
+    internal func notifyDelegateOfAttribution(_ attribution: AttributionData) {
+        DispatchQueue.main.async { [weak self] in
+            self?.delegate?.datalyrDidReceiveAttribution(attribution)
+        }
+    }
+
+    /// Notify delegate of conversion value update on the main thread
+    internal func notifyDelegateOfConversionUpdate(fineValue: Int, coarseValue: String?) {
+        DispatchQueue.main.async { [weak self] in
+            self?.delegate?.datalyrDidUpdateConversionValue(fineValue: fineValue, coarseValue: coarseValue)
+        }
     }
     
     /// Track a custom event
@@ -624,6 +660,33 @@ public class DatalyrSDK {
         return await shared.requestTrackingAuthorization()
     }
     #endif
+
+    // MARK: - IDFA Access
+
+    /// Get the IDFA (Identifier for Advertisers) if ATT is authorized
+    /// - Returns: IDFA string or nil if not authorized/available
+    public func getIDFA() -> String? {
+        return platformIntegrationManager?.getIDFA()
+    }
+
+    /// Static convenience method to get IDFA
+    public static func getIDFA() -> String? {
+        return shared.getIDFA()
+    }
+
+    /// Get advertiser data dictionary for server-side API calls
+    /// Contains: idfa (if authorized), att_status, tracking_authorized
+    public func getAdvertiserData() -> [String: Any] {
+        return platformIntegrationManager?.getAdvertiserData() ?? [
+            "att_status": getTrackingAuthorizationStatus(),
+            "tracking_authorized": isTrackingAuthorized()
+        ]
+    }
+
+    /// Static convenience method for advertiser data
+    public static func getAdvertiserData() -> [String: Any] {
+        return shared.getAdvertiserData()
+    }
 
     // MARK: - App Update Tracking
 
@@ -1061,6 +1124,16 @@ public class DatalyrSDK {
         // Add Apple Search Ads attribution if available
         if let asaData = platformIntegrationManager?.getAppleSearchAdsData() {
             enrichedEventData.merge(asaData) { (_, new) in new }
+        }
+
+        // Add advertiser data (IDFA) for improved Event Match Quality
+        // IDFA is only included when ATT is authorized
+        if let advertiserData = platformIntegrationManager?.getAdvertiserData() {
+            enrichedEventData["advertiser_data"] = advertiserData
+            // Also include IDFA at root level for backwards compatibility with CAPI
+            if let idfa = advertiserData["idfa"] as? String {
+                enrichedEventData["idfa"] = idfa
+            }
         }
 
         let workspaceIdValue = config?.workspaceId ?? ""

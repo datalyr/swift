@@ -292,13 +292,13 @@ internal class TikTokIntegration {
         #endif
     }
 
-    /// Log lead event
+    /// Log lead event (uses Lead - current standard, SubmitForm is legacy)
     func logLead(value: Double?, currency: String?) {
         #if canImport(TikTokBusinessSDK)
         guard isInitialized && forwardEvents else { return }
 
         DispatchQueue.main.async {
-            let event = TikTokBaseEvent(eventName: "SubmitForm")
+            let event = TikTokBaseEvent(eventName: "Lead")
 
             if let value = value {
                 event.addProperty(withKey: "value", value: value)

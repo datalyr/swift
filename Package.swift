@@ -17,9 +17,9 @@ let package = Package(
     ],
     dependencies: [
         // Meta (Facebook) SDK - for deferred deep linking and attribution
-        .package(url: "https://github.com/facebook/facebook-ios-sdk.git", from: "17.0.0"),
+        .package(url: "https://github.com/facebook/facebook-ios-sdk.git", from: "18.0.0"),
         // TikTok Business SDK - for TikTok attribution and events
-        .package(url: "https://github.com/tiktok/tiktok-business-ios-sdk.git", from: "1.0.0"),
+        .package(url: "https://github.com/tiktok/tiktok-business-ios-sdk.git", from: "1.6.0"),
     ],
     targets: [
         .target(
@@ -30,7 +30,10 @@ let package = Package(
                 // TikTok SDK - provides TikTokBusinessSDK module for iOS
                 .product(name: "TikTokBusinessSDK", package: "tiktok-business-ios-sdk", condition: .when(platforms: [.iOS])),
             ],
-            path: "Sources/DatalyrSDK"
+            path: "Sources/DatalyrSDK",
+            resources: [
+                .copy("PrivacyInfo.xcprivacy")
+            ]
         ),
         .testTarget(
             name: "DatalyrSDKTests",

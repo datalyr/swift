@@ -31,6 +31,33 @@ internal struct HTTPClientConfig {
     }
 }
 
+// MARK: - Rate Limiter (Thread-Safe)
+
+/// Actor-based rate limiter for thread-safe rate limiting
+private actor RateLimiter {
+    private var lastRequestTime: TimeInterval = 0
+    private var requestCount: Int = 0
+    private let maxRequestsPerMinute: Int
+
+    init(maxRequestsPerMinute: Int = 100) {
+        self.maxRequestsPerMinute = maxRequestsPerMinute
+    }
+
+    func checkLimit() throws {
+        let now = Date().timeIntervalSince1970
+
+        if now - lastRequestTime < 60 {
+            requestCount += 1
+            if requestCount > maxRequestsPerMinute {
+                throw HTTPError.rateLimitExceeded
+            }
+        } else {
+            requestCount = 1
+            lastRequestTime = now
+        }
+    }
+}
+
 // MARK: - HTTP Client
 
 /// HTTP client for sending events to Datalyr API
@@ -38,9 +65,7 @@ internal class DatalyrHTTPClient {
     private let endpoint: String
     private let config: HTTPClientConfig
     private let session: URLSession
-    private var lastRequestTime: TimeInterval = 0
-    private var requestCount: Int = 0
-    private let rateLimitQueue = DispatchQueue(label: "com.datalyr.ratelimit")
+    private let rateLimiter = RateLimiter()
     
     init(endpoint: String, config: HTTPClientConfig) {
         // Use server-side API if flag is set (default to true for v1.0.0)
@@ -177,21 +202,9 @@ internal class DatalyrHTTPClient {
         return request
     }
     
-    /// Check rate limit
+    /// Check rate limit using thread-safe actor
     private func checkRateLimit() async throws {
-        try await rateLimitQueue.sync {
-            let now = Date().timeIntervalSince1970
-            
-            if now - lastRequestTime < 60 {
-                requestCount += 1
-                if requestCount > 100 {
-                    throw HTTPError.rateLimitExceeded
-                }
-            } else {
-                requestCount = 1
-                lastRequestTime = now
-            }
-        }
+        try await rateLimiter.checkLimit()
     }
     
     /// Determine if an error should trigger a retry

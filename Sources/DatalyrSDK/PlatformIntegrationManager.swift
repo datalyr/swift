@@ -276,6 +276,21 @@ internal class PlatformIntegrationManager {
         return asaIntegration?.toDictionary()
     }
 
+    /// Get IDFA (Identifier for Advertisers) if authorized
+    /// Returns nil if ATT not authorized or IDFA not available
+    func getIDFA() -> String? {
+        return metaIntegration?.getIDFA()
+    }
+
+    /// Get advertiser data for server-side CAPI
+    /// Returns dictionary with idfa, att_status, tracking_authorized
+    func getAdvertiserData() -> [String: Any] {
+        return metaIntegration?.getAdvertiserData() ?? [
+            "att_status": getTrackingAuthorizationStatus(),
+            "tracking_authorized": isTrackingAuthorized()
+        ]
+    }
+
     // MARK: - Private Methods
 
     private func saveDeferredAttribution(_ data: DeferredDeepLinkResult) async {

@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-01
+
+### Added
+- **AdAttributionKit Support** (iOS 17.4+) - Unified bridge for Apple's new attribution framework
+- **IDFA Client-Side Capture** - Automatic IDFA capture when ATT authorized for improved Meta Event Match Quality
+- `getIDFA()` and `getAdvertiserData()` public methods
+- iOS 18.4+ feature detection (geo-level postbacks, overlapping windows, development postbacks)
+- `AdAttributionKitBridge.swift` for unified attribution across SKAdNetwork and AdAttributionKit
+- Thread safety tests for event queue and HTTP client
+- Attribution tests for AdAttributionKit framework detection
+
+### Changed
+- Event payloads now include `advertiser_data` with IDFA and ATT status when authorized
+- `updateTrackingAuthorization()` now auto-captures IDFA when ATT authorized
+- Improved Privacy Manifest with device ID and product interaction declarations
+
+### Fixed
+- Thread safety improvements in DatalyrEventQueue and DatalyrHTTPClient
+
 ## [1.2.0] - 2025-01
 
 ### Added

@@ -37,7 +37,7 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, and a
    ```
    https://github.com/datalyr/swift
    ```
-3. Select version 1.2.0 or later
+3. Select version 1.3.0 or later
 4. Add DatalyrSDK to your target
 
 ### CocoaPods
@@ -45,7 +45,7 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, and a
 Add to your Podfile:
 
 ```ruby
-pod 'DatalyrSDK', '~> 1.2.0'
+pod 'DatalyrSDK', '~> 1.3.0'
 ```
 
 Then run:

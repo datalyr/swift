@@ -527,4 +527,75 @@ public struct DeferredDeepLinkResult {
         self.adsetId = adsetId
         self.adId = adId
     }
+}
+
+// MARK: - SDK Delegate Protocol
+
+/// Platform integration error types
+public enum DatalyrPlatformError: Error, CustomStringConvertible {
+    case metaEventFailed(eventName: String, underlyingError: Error?)
+    case tiktokEventFailed(eventName: String, underlyingError: Error?)
+    case skadnetworkUpdateFailed(underlyingError: Error?)
+    case attributionFetchFailed(platform: String, underlyingError: Error?)
+    case networkError(underlyingError: Error)
+    case configurationError(message: String)
+
+    public var description: String {
+        switch self {
+        case .metaEventFailed(let eventName, let error):
+            return "Meta event '\(eventName)' failed: \(error?.localizedDescription ?? "Unknown error")"
+        case .tiktokEventFailed(let eventName, let error):
+            return "TikTok event '\(eventName)' failed: \(error?.localizedDescription ?? "Unknown error")"
+        case .skadnetworkUpdateFailed(let error):
+            return "SKAdNetwork update failed: \(error?.localizedDescription ?? "Unknown error")"
+        case .attributionFetchFailed(let platform, let error):
+            return "Attribution fetch from \(platform) failed: \(error?.localizedDescription ?? "Unknown error")"
+        case .networkError(let error):
+            return "Network error: \(error.localizedDescription)"
+        case .configurationError(let message):
+            return "Configuration error: \(message)"
+        }
+    }
+
+    public var platform: String {
+        switch self {
+        case .metaEventFailed: return "Meta"
+        case .tiktokEventFailed: return "TikTok"
+        case .skadnetworkUpdateFailed: return "SKAdNetwork"
+        case .attributionFetchFailed(let platform, _): return platform
+        case .networkError: return "Network"
+        case .configurationError: return "Configuration"
+        }
+    }
+}
+
+/// Delegate protocol for receiving SDK callbacks
+/// Implement this protocol to receive notifications about SDK events and errors
+public protocol DatalyrSDKDelegate: AnyObject {
+    /// Called when a platform integration fails to send an event
+    /// - Parameters:
+    ///   - error: The platform error that occurred
+    ///   - eventName: The name of the event that failed (if applicable)
+    func datalyrDidFailToSendEvent(_ error: DatalyrPlatformError, eventName: String?)
+
+    /// Called when attribution data is successfully retrieved
+    /// - Parameter attribution: The attribution data
+    func datalyrDidReceiveAttribution(_ attribution: AttributionData)
+
+    /// Called when SKAdNetwork/AdAttributionKit conversion value is updated
+    /// - Parameters:
+    ///   - fineValue: The fine-grained value (0-63)
+    ///   - coarseValue: The coarse value (low/medium/high) for SKAN 4.0+
+    func datalyrDidUpdateConversionValue(fineValue: Int, coarseValue: String?)
+
+    /// Called when the SDK is fully initialized
+    func datalyrDidInitialize()
+}
+
+/// Default implementations for optional delegate methods
+public extension DatalyrSDKDelegate {
+    func datalyrDidFailToSendEvent(_ error: DatalyrPlatformError, eventName: String?) {}
+    func datalyrDidReceiveAttribution(_ attribution: AttributionData) {}
+    func datalyrDidUpdateConversionValue(fineValue: Int, coarseValue: String?) {}
+    func datalyrDidInitialize() {}
 } 

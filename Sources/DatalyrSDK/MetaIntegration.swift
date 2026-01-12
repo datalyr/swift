@@ -5,6 +5,9 @@ import UIKit
 #if canImport(AppTrackingTransparency)
 import AppTrackingTransparency
 #endif
+#if canImport(AdSupport)
+import AdSupport
+#endif
 #if canImport(FBSDKCoreKit)
 import FBSDKCoreKit
 #endif
@@ -17,6 +20,12 @@ internal class MetaIntegration {
     private let enableAttribution: Bool
     private let forwardEvents: Bool
     private let debug: Bool
+
+    /// Cached IDFA (only captured when ATT authorized)
+    private var cachedIDFA: String?
+
+    /// Zero UUID constant for comparison
+    private static let zeroUUID = "00000000-0000-0000-0000-000000000000"
 
     init(appId: String, clientToken: String?, enableAttribution: Bool, forwardEvents: Bool, debug: Bool) {
         self.appId = appId
@@ -62,7 +71,7 @@ internal class MetaIntegration {
     /// Call this after user responds to ATT prompt
     func updateTrackingAuthorization() {
         #if canImport(FBSDKCoreKit)
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
             #if os(iOS)
             #if canImport(AppTrackingTransparency)
             if #available(iOS 14.5, *) {
@@ -70,11 +79,20 @@ internal class MetaIntegration {
                 let isAuthorized = status == .authorized
                 Settings.shared.isAdvertiserTrackingEnabled = isAuthorized
                 Settings.shared.isAdvertiserIDCollectionEnabled = isAuthorized
+
+                // Capture IDFA when authorized for improved Event Match Quality
+                if isAuthorized {
+                    _ = self?.captureIDFA()
+                } else {
+                    self?.clearIDFA()
+                }
+
                 debugLog("Meta ATT status updated: \(isAuthorized ? "authorized" : "not authorized") (status: \(status.rawValue))")
             } else {
                 // Pre-iOS 14.5, tracking is allowed by default
                 Settings.shared.isAdvertiserTrackingEnabled = true
                 Settings.shared.isAdvertiserIDCollectionEnabled = true
+                _ = self?.captureIDFA()
                 debugLog("Meta tracking enabled (pre-iOS 14.5)")
             }
             #else
@@ -113,6 +131,82 @@ internal class MetaIntegration {
         #endif
         #endif
         return 3 // .authorized equivalent for pre-iOS 14.5 or non-iOS
+    }
+
+    // MARK: - IDFA Capture
+
+    /// Capture IDFA if ATT is authorized
+    /// Returns the IDFA string or nil if not available/authorized
+    func captureIDFA() -> String? {
+        #if os(iOS)
+        #if canImport(AdSupport)
+        // Check ATT authorization first
+        guard isTrackingAuthorized() else {
+            debugLog("IDFA not captured - ATT not authorized")
+            return nil
+        }
+
+        let idfa = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+
+        // Check for zeroed IDFA (indicates tracking disabled or not authorized)
+        guard idfa != MetaIntegration.zeroUUID else {
+            debugLog("IDFA is zeroed - tracking not available")
+            return nil
+        }
+
+        cachedIDFA = idfa
+        debugLog("IDFA captured: \(idfa)")
+        return idfa
+        #else
+        return nil
+        #endif
+        #else
+        return nil
+        #endif
+    }
+
+    /// Get cached IDFA (previously captured)
+    /// Does not attempt to recapture - use captureIDFA() for that
+    func getCachedIDFA() -> String? {
+        return cachedIDFA
+    }
+
+    /// Get IDFA, capturing if not already cached and ATT authorized
+    func getIDFA() -> String? {
+        if let cached = cachedIDFA {
+            return cached
+        }
+        return captureIDFA()
+    }
+
+    /// Clear cached IDFA (call on logout or when ATT revoked)
+    func clearIDFA() {
+        cachedIDFA = nil
+        debugLog("IDFA cache cleared")
+    }
+
+    /// Get advertising identifier data for server-side CAPI
+    /// Returns dictionary with idfa and att_status for inclusion in events
+    func getAdvertiserData() -> [String: Any] {
+        var data: [String: Any] = [:]
+
+        // Include ATT status
+        data["att_status"] = getTrackingAuthorizationStatus()
+        data["tracking_authorized"] = isTrackingAuthorized()
+
+        // Include IDFA if available
+        if let idfa = getIDFA() {
+            data["idfa"] = idfa
+        }
+
+        #if os(iOS)
+        #if canImport(AdSupport)
+        // Include whether advertising tracking is enabled at system level
+        data["advertising_tracking_enabled"] = ASIdentifierManager.shared().isAdvertisingTrackingEnabled
+        #endif
+        #endif
+
+        return data
     }
 
     /// Fetch deferred app link from Meta

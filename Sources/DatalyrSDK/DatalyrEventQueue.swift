@@ -31,12 +31,23 @@ internal class DatalyrEventQueue {
     private let storage = DatalyrStorage.shared
     private var queue: [QueuedEvent] = []
     private var flushTimer: Timer?
-    private var isProcessing = false
-    private var isOnline = true
-    
-    // Queue management
+    private var _isProcessing = false
+    private var _isOnline = true
+
+    // Thread-safe queue management - all mutable state protected by queueLock
     private let queueLock = NSLock()
     private let processingQueue = DispatchQueue(label: "com.datalyr.eventqueue", qos: .utility)
+
+    // Thread-safe accessors for state flags
+    private var isProcessing: Bool {
+        get { queueLock.withLock { _isProcessing } }
+        set { queueLock.withLock { _isProcessing = newValue } }
+    }
+
+    private var isOnline: Bool {
+        get { queueLock.withLock { _isOnline } }
+        set { queueLock.withLock { _isOnline = newValue } }
+    }
     
     init(httpClient: DatalyrHTTPClient, config: QueueConfig = QueueConfig()) {
         self.httpClient = httpClient
@@ -84,13 +95,17 @@ internal class DatalyrEventQueue {
     
     /// Set online/offline status
     func setOnlineStatus(_ online: Bool) {
-        let wasOnline = isOnline
-        isOnline = online
-        
+        let shouldProcess: Bool = queueLock.withLock {
+            let wasOnline = _isOnline
+            _isOnline = online
+            // Return true if we just came online and aren't already processing
+            return !wasOnline && online && !_isProcessing
+        }
+
         debugLog("Network status changed: \(online ? "online" : "offline")")
-        
+
         // If we just came online, try to process the queue
-        if !wasOnline && online && !isProcessing {
+        if shouldProcess {
             Task {
                 await processQueue()
             }
@@ -169,15 +184,21 @@ internal class DatalyrEventQueue {
     
     /// Process the queue and send events
     private func processQueue() async {
-        guard !isProcessing && !queue.isEmpty else { return }
-        
-        isProcessing = true
-        debugLog("Processing queue with \(queue.count) events")
-        
+        // Atomic check-and-set to prevent concurrent processing
+        let canProcess: Bool = queueLock.withLock {
+            guard !_isProcessing && !queue.isEmpty else { return false }
+            _isProcessing = true
+            return true
+        }
+
+        guard canProcess else { return }
+
+        debugLog("Processing queue with \(queueLock.withLock { queue.count }) events")
+
         await processingQueue.asyncTask {
             await self.processQueueInternal()
         }
-        
+
         isProcessing = false
     }
     
@@ -245,17 +266,22 @@ internal class DatalyrEventQueue {
     /// Start the periodic flush timer
     private func startFlushTimer() {
         stopFlushTimer() // Stop any existing timer
-        
+
         flushTimer = Timer.scheduledTimer(withTimeInterval: config.flushInterval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            
-            if self.isOnline && !self.queue.isEmpty {
+
+            // Thread-safe check of state
+            let shouldFlush = self.queueLock.withLock {
+                self._isOnline && !self.queue.isEmpty
+            }
+
+            if shouldFlush {
                 Task {
                     await self.processQueue()
                 }
             }
         }
-        
+
         debugLog("Flush timer started with interval: \(config.flushInterval)s")
     }
     
