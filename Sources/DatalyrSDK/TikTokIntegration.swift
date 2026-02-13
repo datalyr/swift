@@ -30,23 +30,31 @@ internal class TikTokIntegration {
         #if canImport(TikTokBusinessSDK)
         await MainActor.run {
             // Configure TikTok SDK with correct App IDs
-            let config = TikTokConfig(appId: eventsAppId, tiktokAppId: tiktokAppId)
-            config?.setLogLevel(debug ? .debug : .none)
+            // Use initializer with accessToken if provided (accessToken is read-only after init)
+            let config: TikTokConfig?
+            if let accessToken = accessToken, !accessToken.isEmpty {
+                config = TikTokConfig(accessToken: accessToken, appId: eventsAppId, tiktokAppId: tiktokAppId)
+            } else {
+                config = TikTokConfig(appId: eventsAppId, tiktokAppId: tiktokAppId)
+            }
+
+            // TikTokLogLevel is a plain C typedef enum — use global constants, not dot syntax
+            config?.setLogLevel(debug ? TikTokLogLevelDebug : TikTokLogLevelSuppress)
 
             // Set tracking based on ATT status
-            let trackingDisabled = !isTrackingAuthorized()
-            config?.disableTracking = trackingDisabled
-            config?.disableAutomaticTracking = trackingDisabled
-
-            if let accessToken = accessToken {
-                config?.accessToken = accessToken
+            let trackingEnabled = isTrackingAuthorized()
+            if !trackingEnabled {
+                config?.disableTracking()
+                config?.disableAutomaticTracking()
             }
 
             // Initialize the SDK
-            TikTokBusiness.initializeSdk(config)
+            if let validConfig = config {
+                TikTokBusiness.initializeSdk(validConfig)
+            }
 
             isInitialized = true
-            debugLog("TikTok SDK initialized with Events App ID: \(eventsAppId), TikTok App ID: \(tiktokAppId), tracking: \(trackingDisabled ? "disabled" : "enabled")")
+            debugLog("TikTok SDK initialized with Events App ID: \(eventsAppId), TikTok App ID: \(tiktokAppId), tracking: \(trackingEnabled ? "enabled" : "disabled")")
         }
         #else
         debugLog("TikTok SDK not available - TikTokBusinessSDK not imported")
@@ -77,7 +85,8 @@ internal class TikTokIntegration {
         // Log ATT status as an event for TikTok's attribution
         if isAuthorized {
             DispatchQueue.main.async {
-                TikTokBusiness.trackEvent("ATTAuthorized")
+                let event = TikTokBaseEvent(eventName: "ATTAuthorized")
+                TikTokBusiness.trackTTEvent(event)
             }
         }
         #endif

@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'DatalyrSDK'
-  s.version          = '1.2.0'
+  s.version          = '1.3.0'
   s.summary          = 'Server-side attribution tracking SDK for iOS'
   s.description      = <<-DESC
     Datalyr SDK for iOS with server-side tracking API support.
@@ -23,6 +23,9 @@ Pod::Spec.new do |s|
   s.source_files     = 'Sources/DatalyrSDK/**/*.swift'
   s.frameworks       = 'Foundation', 'UIKit', 'StoreKit', 'AdServices'
   s.weak_frameworks  = 'AdServices'
+
+  s.dependency 'FBSDKCoreKit', '~> 18.0'
+  s.dependency 'TikTokBusinessSDK', '1.6.0'
 
   s.requires_arc     = true
 end
