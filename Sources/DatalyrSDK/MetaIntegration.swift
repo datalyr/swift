@@ -364,10 +364,9 @@ internal class MetaIntegration {
 
         DispatchQueue.main.async {
             // Set user data for Advanced Matching
-            AppEvents.shared.setUserData(
-                email,
-                forType: .email
-            )
+            if let email = email {
+                AppEvents.shared.setUserData(email, forType: .email)
+            }
             if let firstName = firstName {
                 AppEvents.shared.setUserData(firstName, forType: .firstName)
             }

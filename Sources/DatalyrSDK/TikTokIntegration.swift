@@ -30,13 +30,12 @@ internal class TikTokIntegration {
         #if canImport(TikTokBusinessSDK)
         await MainActor.run {
             // Configure TikTok SDK with correct App IDs
-            // Use initializer with accessToken if provided (accessToken is read-only after init)
-            let config: TikTokConfig?
-            if let accessToken = accessToken, !accessToken.isEmpty {
-                config = TikTokConfig(accessToken: accessToken, appId: eventsAppId, tiktokAppId: tiktokAppId)
-            } else {
-                config = TikTokConfig(appId: eventsAppId, tiktokAppId: tiktokAppId)
+            // accessToken is required — the deprecated initWithAppId:tiktokAppId: has been removed
+            guard let accessToken = accessToken, !accessToken.isEmpty else {
+                errorLog("TikTok SDK initialization skipped: accessToken is required")
+                return
             }
+            let config = TikTokConfig(accessToken: accessToken, appId: eventsAppId, tiktokAppId: tiktokAppId)
 
             // TikTokLogLevel is a plain C typedef enum — use global constants, not dot syntax
             config?.setLogLevel(debug ? TikTokLogLevelDebug : TikTokLogLevelSuppress)
@@ -49,9 +48,11 @@ internal class TikTokIntegration {
             }
 
             // Initialize the SDK
-            if let validConfig = config {
-                TikTokBusiness.initializeSdk(validConfig)
+            guard let validConfig = config else {
+                errorLog("TikTok SDK initialization failed: could not create config")
+                return
             }
+            TikTokBusiness.initializeSdk(validConfig)
 
             isInitialized = true
             debugLog("TikTok SDK initialized with Events App ID: \(eventsAppId), TikTok App ID: \(tiktokAppId), tracking: \(trackingEnabled ? "enabled" : "disabled")")
