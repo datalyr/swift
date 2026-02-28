@@ -337,11 +337,23 @@ Initialize:
 ```swift
 let config = DatalyrConfig(
     apiKey: "dk_your_api_key",
-    tiktokAppId: "7123456789",         // TikTok App ID
-    tiktokEventsAppId: "your_events_id", // Events API App ID
+    tiktokAppId: "7123456789",              // TikTok App ID (Developer Portal)
+    tiktokEventsAppId: "your_events_id",    // Events API App ID (Events Manager)
+    tiktokAccessToken: "your_access_token", // Events API Access Token
     enableTikTokAttribution: true,
     forwardEventsToTikTok: true
 )
+```
+
+**Where to find your TikTok credentials:**
+
+| Credential | Where to get it |
+|------------|----------------|
+| `tiktokAppId` | [TikTok Developer Portal](https://developers.tiktok.com) → Your App → App ID |
+| `tiktokEventsAppId` | TikTok Business Center → Assets → Events → Your App → App ID |
+| `tiktokAccessToken` | TikTok Business Center → Assets → Events → Your App → Settings → Access Token |
+
+> **Note:** The `tiktokAccessToken` enables client-side TikTok SDK features (enhanced attribution matching, real-time event forwarding). Without it, events are still tracked server-side via Datalyr postbacks — you'll see a warning in debug mode.
 ```
 
 ### Apple Search Ads
@@ -550,9 +562,16 @@ File > Packages > Reset Package Caches
 File > Packages > Update to Latest Package Versions
 ```
 
-### Meta/TikTok not working
+### Meta not working
 
-Verify Info.plist contains required keys (see Platform Integrations).
+Verify Info.plist contains required keys (see [Meta setup](#meta-facebook)). Check status with `DatalyrSDK.shared.getPlatformIntegrationStatus()`.
+
+### TikTok not working
+
+1. Make sure you have all three TikTok credentials (see [TikTok setup](#tiktok))
+2. The `tiktokAccessToken` is required for client-side SDK — without it, you'll see a warning in debug mode but server-side tracking still works
+3. Verify Info.plist contains `LSApplicationQueriesSchemes`
+4. Check status: `DatalyrSDK.shared.getPlatformIntegrationStatus()`
 
 ---
 

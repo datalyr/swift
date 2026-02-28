@@ -32,7 +32,7 @@ internal class TikTokIntegration {
             // Configure TikTok SDK with correct App IDs
             // accessToken is required — the deprecated initWithAppId:tiktokAppId: has been removed
             guard let accessToken = accessToken, !accessToken.isEmpty else {
-                errorLog("TikTok SDK initialization skipped: accessToken is required")
+                errorLog("TikTok SDK not initialized: accessToken is required. Get it from TikTok Business Center > Assets > App > Events API. Events will still be sent server-side via Datalyr postbacks.")
                 return
             }
             let config = TikTokConfig(accessToken: accessToken, appId: eventsAppId, tiktokAppId: tiktokAppId)

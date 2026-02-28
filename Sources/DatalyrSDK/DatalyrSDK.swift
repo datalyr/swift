@@ -44,6 +44,9 @@ public class DatalyrSDK {
     // Platform SDK integrations (Meta, TikTok)
     private var platformIntegrationManager: PlatformIntegrationManager?
 
+    // Cached advertiser data (IDFA, ATT status) — refreshed on ATT change
+    private var cachedAdvertiserData: [String: Any]?
+
     // App lifecycle monitoring
     private var appStateObserver: NSObjectProtocol?
     #if canImport(UIKit)
@@ -73,7 +76,7 @@ public class DatalyrSDK {
         
         // Validate configuration
         guard !config.apiKey.isEmpty else {
-            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v1.0.0")
+            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v2.0.2")
         }
         
         // workspaceId is now optional (for backward compatibility)
@@ -194,6 +197,9 @@ public class DatalyrSDK {
                 }
             }
         }
+
+        // Cache advertiser data (IDFA, ATT status) once at init — refreshed on ATT change
+        cachedAdvertiserData = platformIntegrationManager?.getAdvertiserData()
 
         // Mark as initialized
         self.initialized = true
@@ -357,7 +363,8 @@ public class DatalyrSDK {
 
         debugLog("Fetching web attribution for email: \(email)")
 
-        guard let url = URL(string: "https://api.datalyr.com/attribution/lookup") else {
+        let baseUrl = config?.endpoint.isEmpty == false ? config!.endpoint : "https://api.datalyr.com"
+        guard let url = URL(string: "\(baseUrl)/attribution/lookup") else {
             errorLog("Invalid attribution API URL")
             return
         }
@@ -598,6 +605,9 @@ public class DatalyrSDK {
         }
 
         platformIntegrationManager?.updateTrackingAuthorization()
+
+        // Refresh cached advertiser data after ATT status change
+        cachedAdvertiserData = platformIntegrationManager?.getAdvertiserData()
 
         // Track ATT status event
         let attStatus = status ?? (platformIntegrationManager?.getTrackingAuthorizationStatus() ?? 0)
@@ -1111,28 +1121,55 @@ public class DatalyrSDK {
 
         // Add standard properties
         enrichedEventData["platform"] = "ios"
+        enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
+        enrichedEventData["sdk_version"] = "2.0.2"
+
+        // App info from Bundle
+        let bundle = Bundle.main
+        enrichedEventData["app_name"] = bundle.infoDictionary?["CFBundleDisplayName"] as? String
+            ?? bundle.infoDictionary?["CFBundleName"] as? String ?? ""
         enrichedEventData["app_version"] = getAppVersion()
         enrichedEventData["app_build"] = getAppBuildNumber()
-        enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
+        enrichedEventData["app_namespace"] = bundle.bundleIdentifier ?? ""
+
+        // Device info
         #if canImport(UIKit)
-        enrichedEventData["os_version"] = UIDevice.current.systemVersion
+        let device = UIDevice.current
+        enrichedEventData["os_version"] = device.systemVersion
+        enrichedEventData["device_model"] = getDeviceModelName()
+        enrichedEventData["idfv"] = device.identifierForVendor?.uuidString
+
+        let screen = UIScreen.main
+        enrichedEventData["screen_width"] = Int(screen.bounds.width)
+        enrichedEventData["screen_height"] = Int(screen.bounds.height)
+        enrichedEventData["screen_density"] = screen.scale
         #else
         enrichedEventData["os_version"] = ProcessInfo.processInfo.operatingSystemVersionString
         #endif
-        enrichedEventData["sdk_version"] = "1.2.0"
 
-        // Add Apple Search Ads attribution if available
+        // Locale, timezone, carrier
+        enrichedEventData["locale"] = Locale.current.identifier
+        enrichedEventData["timezone"] = TimeZone.current.identifier
+        enrichedEventData["carrier"] = getCarrierName()
+
+        // Apple Search Ads attribution if available
         if let asaData = platformIntegrationManager?.getAppleSearchAdsData() {
             enrichedEventData.merge(asaData) { (_, new) in new }
         }
 
-        // Add advertiser data (IDFA) for improved Event Match Quality
-        // IDFA is only included when ATT is authorized
-        if let advertiserData = platformIntegrationManager?.getAdvertiserData() {
+        // Advertiser data (IDFA, ATT status) for Meta CAPI / TikTok Events API
+        // Uses cached data — refreshed at init and on ATT change
+        if let advertiserData = cachedAdvertiserData {
             enrichedEventData["advertiser_data"] = advertiserData
-            // Also include IDFA at root level for backwards compatibility with CAPI
+            // Include key fields at root level for postback workers
             if let idfa = advertiserData["idfa"] as? String {
                 enrichedEventData["idfa"] = idfa
+            }
+            if let attStatus = advertiserData["att_status"] {
+                enrichedEventData["att_status"] = attStatus
+            }
+            if let trackingAuthorized = advertiserData["tracking_authorized"] {
+                enrichedEventData["advertiser_tracking_enabled"] = trackingAuthorized
             }
         }
 
@@ -1196,7 +1233,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "1.2.0",
+                "sdk_version": "2.0.2",
                 "install_time": installTime
             ]
             

@@ -69,8 +69,8 @@ internal class DatalyrHTTPClient {
     
     init(endpoint: String, config: HTTPClientConfig) {
         // Use server-side API if flag is set (default to true for v1.0.0)
-        self.endpoint = config.useServerTracking 
-            ? "https://api.datalyr.com" 
+        self.endpoint = config.useServerTracking
+            ? (endpoint.isEmpty ? "https://api.datalyr.com" : endpoint)
             : endpoint
         self.config = config
         
@@ -170,7 +170,7 @@ internal class DatalyrHTTPClient {
         
         // Set headers
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("@datalyr/swift/1.1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue("@datalyr/swift/2.0.2", forHTTPHeaderField: "User-Agent")
         
         // Server-side tracking uses X-API-Key header
         if config.useServerTracking {
@@ -277,7 +277,7 @@ internal class DatalyrHTTPClient {
         } else {
             result["userId"] = payload.visitorId
         }
-        result["anonymousId"] = payload.visitorId
+        result["anonymousId"] = payload.anonymousId ?? payload.visitorId
         
         // Add properties
         var properties: [String: Any] = payload.eventData ?? [:]
@@ -291,7 +291,7 @@ internal class DatalyrHTTPClient {
         // Add context with explicit source
         var context: [String: Any] = [
             "library": "@datalyr/swift",
-            "version": "1.1.0",
+            "version": "2.0.2",
             "source": "mobile_app"  // Explicitly set source for iOS
         ]
         if let userProperties = payload.userProperties {

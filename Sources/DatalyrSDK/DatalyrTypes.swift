@@ -47,8 +47,8 @@ public struct DatalyrConfig {
         flushInterval: TimeInterval = 10.0,
         maxQueueSize: Int = 100,
         respectDoNotTrack: Bool = true,
-        enableAutoEvents: Bool = false,
-        enableAttribution: Bool = false,
+        enableAutoEvents: Bool = true,
+        enableAttribution: Bool = true,
         autoEventConfig: AutoEventConfig? = nil,
         skadTemplate: String? = nil,
         // Meta (Facebook) SDK Configuration

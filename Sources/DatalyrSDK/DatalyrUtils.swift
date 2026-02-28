@@ -107,8 +107,15 @@ internal func getDeviceInfo() -> DeviceInfo {
     )
 }
 
+/// Cached device model name — computed once since it never changes at runtime
+private var cachedDeviceModelName: String?
+
 /// Get device model name (iPhone 14 Pro, iPad Air, etc.)
 private func getDeviceModelName() -> String {
+    if let cached = cachedDeviceModelName {
+        return cached
+    }
+
     var systemInfo = utsname()
     uname(&systemInfo)
     let machineMirror = Mirror(reflecting: systemInfo.machine)
@@ -116,9 +123,11 @@ private func getDeviceModelName() -> String {
         guard let value = element.value as? Int8, value != 0 else { return identifier }
         return identifier + String(UnicodeScalar(UInt8(value)))
     }
-    
+
     // Map hardware identifiers to human-readable names
-    return mapDeviceIdentifier(identifier)
+    let result = mapDeviceIdentifier(identifier)
+    cachedDeviceModelName = result
+    return result
 }
 
 /// Map device identifier to human-readable name
