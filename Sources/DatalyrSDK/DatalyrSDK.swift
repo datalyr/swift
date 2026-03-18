@@ -204,6 +204,11 @@ public class DatalyrSDK {
         // Mark as initialized
         self.initialized = true
 
+        // Attempt deferred web-to-app attribution on first install (IP-based matching)
+        if config.enableAttribution, attributionManager?.isInstall() == true {
+            await fetchDeferredWebAttribution()
+        }
+
         // Check for app install (after SDK is marked as initialized)
         await checkAndTrackInstall()
 
@@ -440,7 +445,89 @@ public class DatalyrSDK {
             // Non-blocking - continue even if attribution fetch fails
         }
     }
-    
+
+    /// Fetch deferred web attribution on first app install via IP-based matching.
+    /// Recovers attribution data (fbclid, utm_*, etc.) from a prelander web visit
+    /// by matching the device's IP to a recent $app_download_click web event.
+    /// Called automatically during initialize() when a fresh install is detected.
+    private func fetchDeferredWebAttribution() async {
+        guard let apiKey = config?.apiKey else {
+            debugLog("API key not available for deferred attribution fetch")
+            return
+        }
+
+        debugLog("Fetching deferred web attribution via IP matching...")
+
+        let baseUrl = config?.endpoint.isEmpty == false ? config!.endpoint : "https://api.datalyr.com"
+        guard let url = URL(string: "\(baseUrl)/attribution/deferred-lookup") else {
+            errorLog("Invalid deferred attribution API URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-Datalyr-API-Key")
+        request.timeoutInterval = 10
+
+        let body: [String: Any] = ["platform": "ios"]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                debugLog("Deferred attribution lookup failed")
+                return
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let found = json["found"] as? Bool, found,
+                  let attribution = json["attribution"] as? [String: Any] else {
+                debugLog("No deferred web attribution found for this IP")
+                return
+            }
+
+            debugLog("Deferred web attribution found", data: [
+                "visitor_id": attribution["visitor_id"] ?? "nil",
+                "has_fbclid": attribution["fbclid"] != nil ? "YES" : "NO",
+                "has_gclid": attribution["gclid"] != nil ? "YES" : "NO",
+                "utm_source": attribution["utm_source"] ?? "nil"
+            ])
+
+            // Merge web attribution into current session
+            await attributionManager?.mergeWebAttribution(attribution)
+
+            // Track match event for analytics
+            var matchData: EventData = [
+                "match_method": "ip"
+            ]
+            if let webVisitorId = attribution["visitor_id"] { matchData["web_visitor_id"] = webVisitorId }
+            if let webUserId = attribution["user_id"] { matchData["web_user_id"] = webUserId }
+            if let fbclid = attribution["fbclid"] { matchData["fbclid"] = fbclid }
+            if let gclid = attribution["gclid"] { matchData["gclid"] = gclid }
+            if let ttclid = attribution["ttclid"] { matchData["ttclid"] = ttclid }
+            if let gbraid = attribution["gbraid"] { matchData["gbraid"] = gbraid }
+            if let wbraid = attribution["wbraid"] { matchData["wbraid"] = wbraid }
+            if let fbp = attribution["fbp"] { matchData["fbp"] = fbp }
+            if let fbc = attribution["fbc"] { matchData["fbc"] = fbc }
+            if let utmSource = attribution["utm_source"] { matchData["utm_source"] = utmSource }
+            if let utmMedium = attribution["utm_medium"] { matchData["utm_medium"] = utmMedium }
+            if let utmCampaign = attribution["utm_campaign"] { matchData["utm_campaign"] = utmCampaign }
+            if let utmContent = attribution["utm_content"] { matchData["utm_content"] = utmContent }
+            if let utmTerm = attribution["utm_term"] { matchData["utm_term"] = utmTerm }
+            if let timestamp = attribution["timestamp"] { matchData["web_timestamp"] = timestamp }
+
+            await track("$web_attribution_matched", eventData: matchData)
+
+            debugLog("Successfully merged deferred web attribution")
+
+        } catch {
+            errorLog("Error fetching deferred web attribution: \(error.localizedDescription)")
+            // Non-blocking - email-based fallback will catch this on identify()
+        }
+    }
+
     /// Create an alias for the current user
     /// - Parameters:
     ///   - newUserId: New user identifier
