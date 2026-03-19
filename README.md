@@ -44,7 +44,7 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, and a
    ```
    https://github.com/datalyr/swift
    ```
-3. Select version 1.3.0 or later
+3. Select version 1.4.0 or later
 4. Add DatalyrSDK to your target
 
 ### CocoaPods
@@ -52,7 +52,7 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, and a
 Add to your Podfile:
 
 ```ruby
-pod 'DatalyrSDK', '~> 1.3.0'
+pod 'DatalyrSDK', '~> 1.4.0'
 ```
 
 Then run:
@@ -304,7 +304,7 @@ No Facebook SDK, no `Info.plist` changes, no `FacebookAppID` needed in your app.
 
 Conversions are sent to TikTok via the [Events API](https://business-api.tiktok.com/portal/docs?id=1741601162187777).
 
-**What the SDK does:** Captures `ttclid` from ad click URLs and collects device identifiers (IDFA/GAID).
+**What the SDK does:** Captures `ttclid` from ad click URLs and collects IDFA (when ATT authorized).
 
 **What the backend does:** Hashes user data, formats the Events API payload, and sends conversions with the `ttclid` and `_ttp` cookie for matching.
 
@@ -328,7 +328,7 @@ Conversions are sent to Google via the [Google Ads API](https://developers.googl
 2. Select your conversion actions
 3. Create postback rules to map events (e.g., `purchase` → your Google conversion action)
 
-No Google SDK needed in your app beyond the Play Install Referrer (already included).
+No Google SDK needed in your app.
 
 ### Apple Search Ads
 
@@ -391,7 +391,7 @@ await DatalyrSDK.shared.trackPurchase(value: 99.99, currency: "USD")
 
 ## App Tracking Transparency
 
-Update platform SDKs after ATT dialog:
+Update tracking status after the ATT dialog:
 
 ### Built-in ATT Request (Recommended)
 
