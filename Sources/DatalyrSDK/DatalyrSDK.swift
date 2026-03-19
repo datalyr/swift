@@ -749,6 +749,93 @@ public class DatalyrSDK {
         return shared.getAdvertiserData()
     }
 
+    // MARK: - Third-Party Integration Methods
+
+    /// Get attribution data formatted for Superwall's `setUserAttributes()`
+    /// Returns a flat `[String: String]` dictionary with only non-empty values
+    ///
+    /// Usage:
+    /// ```swift
+    /// Superwall.shared.setUserAttributes(DatalyrSDK.shared.getSuperwallAttributes())
+    /// ```
+    public func getSuperwallAttributes() -> [String: String] {
+        let attribution = attributionManager?.getAttributionData() ?? AttributionData()
+        let advertiser = cachedAdvertiserData
+        var attrs: [String: String] = [:]
+
+        func set(_ key: String, _ value: Any?) {
+            if let v = value, "\(v)" != "" { attrs[key] = "\(v)" }
+        }
+
+        set("datalyr_id", visitorId.isEmpty ? nil : visitorId)
+        set("media_source", attribution.utmSource)
+        set("campaign", attribution.utmCampaign)
+        set("adgroup", attribution.adsetId ?? attribution.utmContent)
+        set("ad", attribution.adId)
+        set("keyword", attribution.keyword)
+        set("network", attribution.network)
+        set("utm_source", attribution.utmSource)
+        set("utm_medium", attribution.utmMedium)
+        set("utm_campaign", attribution.utmCampaign)
+        set("utm_term", attribution.utmTerm)
+        set("utm_content", attribution.utmContent)
+        set("lyr", attribution.lyr)
+        set("fbclid", attribution.fbclid)
+        set("gclid", attribution.gclid)
+        set("ttclid", attribution.ttclid)
+        set("idfa", advertiser?["idfa"])
+        set("att_status", advertiser?["att_status"])
+
+        return attrs
+    }
+
+    /// Get attribution data formatted for RevenueCat's `Purchases.shared.attribution.setAttributes()`
+    /// Returns a flat `[String: String]` dictionary with `$`-prefixed reserved keys
+    ///
+    /// Usage:
+    /// ```swift
+    /// Purchases.shared.attribution.setAttributes(DatalyrSDK.shared.getRevenueCatAttributes())
+    /// ```
+    public func getRevenueCatAttributes() -> [String: String] {
+        let attribution = attributionManager?.getAttributionData() ?? AttributionData()
+        let advertiser = cachedAdvertiserData
+        var attrs: [String: String] = [:]
+
+        func set(_ key: String, _ value: Any?) {
+            if let v = value, "\(v)" != "" { attrs[key] = "\(v)" }
+        }
+
+        // Reserved attributes ($ prefix)
+        set("$datalyrId", visitorId.isEmpty ? nil : visitorId)
+        set("$mediaSource", attribution.utmSource)
+        set("$campaign", attribution.utmCampaign)
+        set("$adGroup", attribution.adsetId)
+        set("$ad", attribution.adId)
+        set("$keyword", attribution.keyword)
+        set("$idfa", advertiser?["idfa"])
+        if let attStatus = advertiser?["att_status"] as? UInt {
+            let statusMap: [UInt: String] = [0: "notDetermined", 1: "restricted", 2: "denied", 3: "authorized"]
+            set("$attConsentStatus", statusMap[attStatus] ?? "\(attStatus)")
+        }
+
+        // Custom attributes
+        set("utm_source", attribution.utmSource)
+        set("utm_medium", attribution.utmMedium)
+        set("utm_campaign", attribution.utmCampaign)
+        set("utm_term", attribution.utmTerm)
+        set("utm_content", attribution.utmContent)
+        set("lyr", attribution.lyr)
+        set("fbclid", attribution.fbclid)
+        set("gclid", attribution.gclid)
+        set("ttclid", attribution.ttclid)
+        set("wbraid", attribution.wbraid)
+        set("gbraid", attribution.gbraid)
+        set("network", attribution.network)
+        set("creative_id", attribution.creativeId)
+
+        return attrs
+    }
+
     // MARK: - App Update Tracking
 
     /// Track app update

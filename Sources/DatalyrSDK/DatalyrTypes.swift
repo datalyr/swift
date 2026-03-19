@@ -211,6 +211,8 @@ public struct AttributionData: Codable {
     public var fbclid: String?
     public var ttclid: String?
     public var gclid: String?
+    public var wbraid: String?
+    public var gbraid: String?
     public var twclid: String?
     public var liClickId: String?
     public var msclkid: String?
@@ -263,7 +265,7 @@ public struct AttributionData: Codable {
         case utmSourcePlatform = "utm_source_platform"
         case utmCreativeFormat = "utm_creative_format"
         case utmMarketingTactic = "utm_marketing_tactic"
-        case fbclid, ttclid, gclid, twclid
+        case fbclid, ttclid, gclid, wbraid, gbraid, twclid
         case liClickId = "li_click_id"
         case msclkid
         case partnerId = "partner_id"

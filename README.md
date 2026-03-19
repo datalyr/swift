@@ -16,14 +16,19 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, and a
   - [Identifying Users](#identifying-users)
 - [Attribution](#attribution)
   - [Automatic Capture](#automatic-capture)
-  - [Deferred Deep Links](#deferred-deep-links)
   - [Web-to-App Attribution](#web-to-app-attribution)
 - [Platform Integrations](#platform-integrations)
-  - [Meta](#meta-facebook)
+  - [Meta (Facebook)](#meta-facebook)
+  - [TikTok](#tiktok)
+  - [Google Ads](#google-ads)
   - [Apple Search Ads](#apple-search-ads)
 - [SKAdNetwork](#skadnetwork)
 - [App Tracking Transparency](#app-tracking-transparency)
+- [Auto Events](#auto-events)
 - [Offline Support](#offline-support)
+- [Third-Party Integrations](#third-party-integrations)
+  - [Superwall](#superwall)
+  - [RevenueCat](#revenuecat)
 - [SwiftUI and UIKit](#swiftui-and-uikit)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -278,7 +283,52 @@ After a match, the SDK:
 
 ## Platform Integrations
 
-Conversion events are routed to ad platforms (Meta CAPI, TikTok Events API, Google Ads) server-side via the Datalyr postback system. No client-side ad SDKs are needed.
+Conversion events are routed to ad platforms server-side via the Datalyr postback system. No client-side ad SDKs (Facebook SDK, TikTok SDK, etc.) are needed in your app. The SDK captures click IDs and attribution data from ad URLs, then the backend handles hashing, formatting, and sending conversions to each platform's API.
+
+### Meta (Facebook)
+
+Conversions are sent to Meta via the [Conversions API (CAPI)](https://developers.facebook.com/docs/marketing-api/conversions-api/).
+
+**What the SDK does:** Captures `fbclid` from ad click URLs, collects IDFA (when ATT authorized), and sends user data (email, phone) with events.
+
+**What the backend does:** Hashes PII (SHA-256), formats the CAPI payload, and sends conversions with the `fbclid` and `_fbc`/`_fbp` cookies for matching.
+
+**Setup:**
+1. Connect your Meta ad account in the Datalyr dashboard (Settings > Connections)
+2. Select your Meta Pixel
+3. Create postback rules to map events (e.g., `purchase` → `Purchase`, `lead` → `Lead`)
+
+No Facebook SDK, no `Info.plist` changes, no `FacebookAppID` needed in your app.
+
+### TikTok
+
+Conversions are sent to TikTok via the [Events API](https://business-api.tiktok.com/portal/docs?id=1741601162187777).
+
+**What the SDK does:** Captures `ttclid` from ad click URLs and collects device identifiers (IDFA/GAID).
+
+**What the backend does:** Hashes user data, formats the Events API payload, and sends conversions with the `ttclid` and `_ttp` cookie for matching.
+
+**Setup:**
+1. Connect your TikTok Ads account in the Datalyr dashboard (Settings > Connections)
+2. Select your TikTok Pixel
+3. Create postback rules to map events (e.g., `purchase` → `CompletePayment`, `add_to_cart` → `AddToCart`)
+
+No TikTok SDK, no `LSApplicationQueriesSchemes`, no access tokens needed in your app.
+
+### Google Ads
+
+Conversions are sent to Google via the [Google Ads API](https://developers.google.com/google-ads/api/docs/conversions/overview).
+
+**What the SDK does:** Captures `gclid`, `gbraid`, and `wbraid` from ad click URLs. Collects user data for enhanced conversions.
+
+**What the backend does:** Hashes user data, maps events to Google conversion actions, and sends conversions with click IDs for attribution.
+
+**Setup:**
+1. Connect your Google Ads account in the Datalyr dashboard (Settings > Connections)
+2. Select your conversion actions
+3. Create postback rules to map events (e.g., `purchase` → your Google conversion action)
+
+No Google SDK needed in your app beyond the Play Install Referrer (already included).
 
 ### Apple Search Ads
 
@@ -310,7 +360,7 @@ No additional configuration needed. The SDK uses Apple's AdServices API.
 
 ```swift
 let status = DatalyrSDK.shared.getPlatformIntegrationStatus()
-// ["meta": true, "tiktok": true, "appleSearchAds": true]
+// ["appleSearchAds": true]
 ```
 
 ---
@@ -463,6 +513,37 @@ let config = DatalyrConfig(
 
 ---
 
+## Third-Party Integrations
+
+### Superwall
+
+Pass Datalyr attribution data to Superwall to personalize paywalls by ad source, campaign, ad set, and keyword.
+
+```swift
+// After both SDKs are initialized
+Superwall.shared.setUserAttributes(DatalyrSDK.shared.getSuperwallAttributes())
+
+// Your placements will now have attribution data available as filters
+Superwall.shared.register(placement: "onboarding_paywall")
+```
+
+Call after `DatalyrSDK.shared.initialize()` completes. If using ATT on iOS, call again after the user responds to the ATT prompt to include the IDFA.
+
+### RevenueCat
+
+Pass Datalyr attribution data to RevenueCat for revenue attribution and offering targeting.
+
+```swift
+// After both SDKs are configured
+Purchases.shared.attribution.setAttributes(DatalyrSDK.shared.getRevenueCatAttributes())
+```
+
+Call after configuring the Purchases SDK and before the first purchase. If using ATT, call again after permission is granted to include IDFA. The AdSupport framework is required for IDFA collection.
+
+> Datalyr also receives Superwall and RevenueCat events via server-side webhooks for analytics. The SDK methods and webhook integration are independent — you can use one or both.
+
+---
+
 ## Troubleshooting
 
 ### Events not appearing
@@ -485,8 +566,6 @@ File > Packages > Reset Package Caches
 # Update packages
 File > Packages > Update to Latest Package Versions
 ```
-
-### Meta not working
 
 ---
 
