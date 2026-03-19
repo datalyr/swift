@@ -26,6 +26,7 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, and a
 - [App Tracking Transparency](#app-tracking-transparency)
 - [Auto Events](#auto-events)
 - [Offline Support](#offline-support)
+- [Enhanced App Campaigns](#enhanced-app-campaigns)
 - [Third-Party Integrations](#third-party-integrations)
   - [Superwall](#superwall)
   - [RevenueCat](#revenuecat)
@@ -510,6 +511,94 @@ let config = DatalyrConfig(
 | `app_update` | App version changes |
 | `session_start` | New session begins |
 | `session_end` | Session expires (30 min inactivity) |
+
+---
+
+## Enhanced App Campaigns
+
+Run mobile app ads through web campaigns (Meta Sales, TikTok Traffic, Google Ads) that redirect users to the app store through your own domain. This bypasses SKAN restrictions, ATT requirements, and adset limits — ad platforms treat these as regular web campaigns.
+
+### How It Works
+
+1. User clicks your ad → lands on a page on your domain with the Datalyr web SDK (`dl.js`)
+2. SDK captures attribution (fbclid, ttclid, gclid, UTMs, ad cookies like `_fbp`/`_fbc`/`_ttp`)
+3. User redirects to app store (via button click or auto-redirect)
+4. User installs app → mobile SDK matches via IP matching (~90%+ for immediate installs)
+5. In-app events fire → conversions sent to Meta/TikTok/Google server-side via postbacks
+
+### Setup
+
+**1. Create a tracking link** in the Datalyr dashboard: Track → Create Link → App Link. Enter your prelander page URL and app store URLs.
+
+**2. Host a page on your domain** with one of these options:
+
+#### Option A: Prelander (Recommended)
+
+A real landing page with a download button. Better ad platform compliance, higher intent.
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Download Your App</title>
+  <script src="https://cdn.datalyr.com/dl.js" data-workspace="YOUR_WORKSPACE_ID"></script>
+</head>
+<body>
+  <h1>Download Our App</h1>
+  <button id="download">Download for iOS</button>
+
+  <script>
+    document.getElementById('download').addEventListener('click', function() {
+      Datalyr.trackAppDownloadClick({
+        targetPlatform: 'ios',
+        appStoreUrl: 'https://apps.apple.com/app/idXXXXXXXXXX'
+      });
+    });
+  </script>
+</body>
+</html>
+```
+
+#### Option B: Redirect Page
+
+Instant redirect — no visible content, user goes straight to app store.
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdn.datalyr.com/dl.js" data-workspace="YOUR_WORKSPACE_ID"></script>
+  <script>
+    window.addEventListener('DOMContentLoaded', function() {
+      Datalyr.trackAppDownloadClick({
+        targetPlatform: 'ios',
+        appStoreUrl: 'https://apps.apple.com/app/idXXXXXXXXXX'
+      });
+    });
+  </script>
+</head>
+<body></body>
+</html>
+```
+
+**3. Set up your ad campaign:**
+
+- **Meta Ads**: Campaign objective → Sales, conversion location → Website, placements → Mobile only. Paste your page URL as the Website URL. No SKAN, no ATT, no adset limits.
+- **TikTok Ads**: Campaign objective → Website Conversions, paste your page URL as destination.
+- **Google Ads**: Performance Max or Search campaign. Use your page URL as the landing page.
+
+Add UTM parameters to the URL so attribution flows through:
+- Meta: `?utm_source=facebook&utm_medium=cpc&utm_campaign={{campaign.name}}&utm_content={{adset.name}}&utm_term={{ad.name}}`
+- TikTok: `?utm_source=tiktok&utm_medium=cpc&utm_campaign=__CAMPAIGN_NAME__&utm_content=__AID_NAME__&utm_term=__CID_NAME__`
+- Google: `?utm_source=google&utm_medium=cpc&utm_campaign={campaignid}&utm_content={adgroupid}&utm_term={keyword}`
+
+### Important
+
+- The page **must load JavaScript**. Server-side redirects (301/302, nginx, Cloudflare Page Rules) will NOT work.
+- Host on your own domain — do not use `datalyr.com` or shared domains.
+- The redirect page adds ~300-500ms for the SDK to load. Prelander has no latency since the user clicks a button.
 
 ---
 
