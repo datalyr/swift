@@ -41,7 +41,7 @@ public class DatalyrSDK {
     // SKAdNetwork conversion value encoder
     private var conversionEncoder: ConversionValueEncoder?
 
-    // Platform SDK integrations (Meta, TikTok)
+    // Platform integrations (Apple Search Ads, IDFA/ATT)
     private var platformIntegrationManager: PlatformIntegrationManager?
 
     // Cached advertiser data (IDFA, ATT status) — refreshed on ATT change
@@ -185,18 +185,9 @@ public class DatalyrSDK {
             }
         }
 
-        // Initialize platform SDK integrations (Meta, TikTok)
-        if config.metaAppId != nil || config.tiktokAppId != nil {
-            self.platformIntegrationManager = PlatformIntegrationManager()
-            await platformIntegrationManager?.initialize(config: config)
-
-            // Fetch deferred deep link attribution on first launch
-            if config.enableAttribution {
-                if let deferredData = await platformIntegrationManager?.fetchDeferredAttribution() {
-                    await mergeDeferredAttribution(deferredData)
-                }
-            }
-        }
+        // Initialize platform integrations (Apple Search Ads, IDFA/ATT)
+        self.platformIntegrationManager = PlatformIntegrationManager()
+        await platformIntegrationManager?.initialize(config: config)
 
         // Cache advertiser data (IDFA, ATT status) once at init — refreshed on ATT change
         cachedAdvertiserData = platformIntegrationManager?.getAdvertiserData()
@@ -336,26 +327,6 @@ public class DatalyrSDK {
         let phone = properties?["phone"] as? String
         let firstName = properties?["first_name"] as? String ?? properties?["firstName"] as? String
         let lastName = properties?["last_name"] as? String ?? properties?["lastName"] as? String
-        let dateOfBirth = properties?["date_of_birth"] as? String ?? properties?["dob"] as? String ?? properties?["birthday"] as? String
-        let gender = properties?["gender"] as? String
-        let city = properties?["city"] as? String
-        let state = properties?["state"] as? String
-        let zip = properties?["zip"] as? String ?? properties?["postal_code"] as? String ?? properties?["zipcode"] as? String
-        let country = properties?["country"] as? String
-
-        platformIntegrationManager?.identifyUser(
-            userId: userId,
-            email: email,
-            phone: phone,
-            firstName: firstName,
-            lastName: lastName,
-            dateOfBirth: dateOfBirth,
-            gender: gender,
-            city: city,
-            state: state,
-            zip: zip,
-            country: country
-        )
     }
 
     /// Fetch web attribution data for user and merge into mobile session
@@ -579,9 +550,6 @@ public class DatalyrSDK {
         // Clear attribution data
         await attributionManager?.clearAttributionData()
 
-        // Clear user data from platform SDKs
-        platformIntegrationManager?.clearUserData()
-
         debugLog("User session reset complete")
     }
     
@@ -650,10 +618,10 @@ public class DatalyrSDK {
         await attributionManager?.setAttributionData(data)
     }
 
-    /// Get deferred deep link attribution data from platform SDKs (Meta, TikTok)
-    /// - Returns: Deferred deep link result if available
+    /// Get deferred deep link attribution data
+    /// - Returns: nil — deferred deep linking is now handled via prelanders
     public func getDeferredAttributionData() -> DeferredDeepLinkResult? {
-        return platformIntegrationManager?.getDeferredAttributionData()
+        return nil
     }
 
     /// Get Apple Search Ads attribution data
@@ -666,8 +634,6 @@ public class DatalyrSDK {
     /// - Returns: Dictionary with platform availability status
     public func getPlatformIntegrationStatus() -> [String: Bool] {
         return [
-            "meta": platformIntegrationManager?.isMetaAvailable() ?? false,
-            "tiktok": platformIntegrationManager?.isTikTokAvailable() ?? false,
             "appleSearchAds": platformIntegrationManager?.isAppleSearchAdsAvailable() ?? false
         ]
     }
@@ -690,8 +656,6 @@ public class DatalyrSDK {
             errorLog("SDK not initialized. Call initialize() first.")
             return
         }
-
-        platformIntegrationManager?.updateTrackingAuthorization()
 
         // Refresh cached advertiser data after ATT status change
         cachedAdvertiserData = platformIntegrationManager?.getAdvertiserData()
@@ -926,14 +890,6 @@ public class DatalyrSDK {
         }
 
         await trackWithSKAdNetwork("purchase", eventData: properties)
-
-        // Forward to Meta and TikTok
-        platformIntegrationManager?.forwardPurchase(
-            value: value,
-            currency: currency,
-            productId: productId,
-            parameters: properties
-        )
     }
     
     /// Track subscription with automatic revenue encoding
@@ -955,13 +911,6 @@ public class DatalyrSDK {
         }
 
         await trackWithSKAdNetwork("subscribe", eventData: properties)
-
-        // Forward to Meta and TikTok
-        platformIntegrationManager?.forwardSubscription(
-            value: value,
-            currency: currency,
-            plan: plan
-        )
     }
 
     // MARK: - Standard E-commerce Events
@@ -986,13 +935,6 @@ public class DatalyrSDK {
         if let productName = productName { properties["product_name"] = productName }
 
         await trackWithSKAdNetwork("add_to_cart", eventData: properties)
-
-        platformIntegrationManager?.forwardAddToCart(
-            value: value,
-            currency: currency,
-            productId: productId,
-            productName: productName
-        )
     }
 
     /// Track view content/product event
@@ -1016,14 +958,6 @@ public class DatalyrSDK {
         if let currency = currency { properties["currency"] = currency }
 
         await track("view_content", eventData: properties)
-
-        platformIntegrationManager?.forwardViewContent(
-            contentId: contentId,
-            contentName: contentName,
-            contentType: contentType,
-            value: value,
-            currency: currency
-        )
     }
 
     /// Track initiate checkout event
@@ -1046,13 +980,6 @@ public class DatalyrSDK {
         if let productIds = productIds { properties["product_ids"] = productIds }
 
         await trackWithSKAdNetwork("initiate_checkout", eventData: properties)
-
-        platformIntegrationManager?.forwardInitiateCheckout(
-            value: value,
-            currency: currency,
-            numItems: numItems,
-            contentIds: productIds
-        )
     }
 
     /// Track complete registration event
@@ -1062,8 +989,6 @@ public class DatalyrSDK {
         if let method = method { properties["method"] = method }
 
         await trackWithSKAdNetwork("complete_registration", eventData: properties)
-
-        platformIntegrationManager?.forwardCompleteRegistration(method: method)
     }
 
     /// Track search event
@@ -1075,8 +1000,6 @@ public class DatalyrSDK {
         if let resultIds = resultIds { properties["result_ids"] = resultIds }
 
         await track("search", eventData: properties)
-
-        platformIntegrationManager?.forwardSearch(query: query, contentIds: resultIds)
     }
 
     /// Track lead/contact form submission
@@ -1089,16 +1012,12 @@ public class DatalyrSDK {
         if let currency = currency { properties["currency"] = currency }
 
         await trackWithSKAdNetwork("lead", eventData: properties)
-
-        platformIntegrationManager?.forwardLead(value: value, currency: currency)
     }
 
     /// Track add payment info event
     /// - Parameter success: Whether payment info was added successfully
     public func trackAddPaymentInfo(success: Bool = true) async {
         await track("add_payment_info", eventData: ["success": success])
-
-        platformIntegrationManager?.forwardAddPaymentInfo(success: success)
     }
 
     // MARK: - Conversion Value
@@ -1244,7 +1163,7 @@ public class DatalyrSDK {
             enrichedEventData.merge(asaData) { (_, new) in new }
         }
 
-        // Advertiser data (IDFA, ATT status) for Meta CAPI / TikTok Events API
+        // Advertiser data (IDFA, ATT status) for server-side postback
         // Uses cached data — refreshed at init and on ATT change
         if let advertiserData = cachedAdvertiserData {
             enrichedEventData["advertiser_data"] = advertiserData

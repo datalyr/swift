@@ -20,7 +20,6 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, and a
   - [Web-to-App Attribution](#web-to-app-attribution)
 - [Platform Integrations](#platform-integrations)
   - [Meta](#meta-facebook)
-  - [TikTok](#tiktok)
   - [Apple Search Ads](#apple-search-ads)
 - [SKAdNetwork](#skadnetwork)
 - [App Tracking Transparency](#app-tracking-transparency)
@@ -105,19 +104,7 @@ let config = DatalyrConfig(
     maxQueueSize: 100,                     // Max queued events
 
     // iOS
-    skadTemplate: "ecommerce",             // SKAdNetwork template
-
-    // Meta SDK
-    metaAppId: "1234567890",
-    metaClientToken: "abc123",
-    enableMetaAttribution: true,
-    forwardEventsToMeta: true,
-
-    // TikTok SDK
-    tiktokAppId: "7123456789",             // TikTok App ID
-    tiktokEventsAppId: "your_events_id",   // Events API App ID
-    enableTikTokAttribution: true,
-    forwardEventsToTikTok: true
+    skadTemplate: "ecommerce"              // SKAdNetwork template
 )
 ```
 
@@ -152,7 +139,7 @@ await DatalyrSDK.shared.screen("Product Details", properties: [
 
 ### E-Commerce Events
 
-Standard e-commerce events that also forward to Meta and TikTok:
+Standard e-commerce events:
 
 ```swift
 // View product
@@ -240,7 +227,7 @@ await DatalyrSDK.shared.identify("user_123", properties: [
 After `identify()`:
 - All future events include `user_id`
 - Historical anonymous events can be linked server-side
-- User data is forwarded to Meta/TikTok for Advanced Matching
+- User data is sent server-side for ad platform matching via postbacks
 
 ### Logout
 
@@ -270,27 +257,6 @@ Captured parameters:
 | Click IDs | `fbclid`, `gclid`, `ttclid`, `twclid`, `li_click_id`, `msclkid` |
 | Campaign | `campaign_id`, `adset_id`, `ad_id` |
 
-### Deferred Deep Links
-
-Capture attribution from App Store installs:
-
-```swift
-let config = DatalyrConfig(
-    apiKey: "dk_your_api_key",
-    enableAttribution: true,
-    metaAppId: "1234567890",
-    enableMetaAttribution: true
-)
-
-try await DatalyrSDK.shared.initialize(config: config)
-
-// Check for deferred attribution
-if let deferred = DatalyrSDK.shared.getDeferredAttributionData() {
-    print(deferred.fbclid ?? "none")      // Facebook click ID
-    print(deferred.campaignId ?? "none")  // Campaign ID
-}
-```
-
 ### Web-to-App Attribution
 
 Automatically recover attribution from a web prelander when users install the app from an ad.
@@ -312,69 +278,7 @@ After a match, the SDK:
 
 ## Platform Integrations
 
-Bundled Meta and TikTok SDKs. No extra dependencies needed.
-
-### Meta (Facebook)
-
-Add to Info.plist:
-
-```xml
-<key>FacebookAppID</key>
-<string>YOUR_FACEBOOK_APP_ID</string>
-<key>FacebookClientToken</key>
-<string>YOUR_CLIENT_TOKEN</string>
-<key>FacebookDisplayName</key>
-<string>Your App Name</string>
-```
-
-Initialize:
-
-```swift
-let config = DatalyrConfig(
-    apiKey: "dk_your_api_key",
-    metaAppId: "1234567890",
-    metaClientToken: "abc123",
-    enableMetaAttribution: true,
-    forwardEventsToMeta: true
-)
-```
-
-### TikTok
-
-Add to Info.plist:
-
-```xml
-<key>LSApplicationQueriesSchemes</key>
-<array>
-  <string>tiktok</string>
-  <string>snssdk1180</string>
-  <string>snssdk1233</string>
-</array>
-```
-
-Initialize:
-
-```swift
-let config = DatalyrConfig(
-    apiKey: "dk_your_api_key",
-    tiktokAppId: "7123456789",              // TikTok App ID (Developer Portal)
-    tiktokEventsAppId: "your_events_id",    // Events API App ID (Events Manager)
-    tiktokAccessToken: "your_access_token", // Events API Access Token
-    enableTikTokAttribution: true,
-    forwardEventsToTikTok: true
-)
-```
-
-**Where to find your TikTok credentials:**
-
-| Credential | Where to get it |
-|------------|----------------|
-| `tiktokAppId` | [TikTok Developer Portal](https://developers.tiktok.com) → Your App → App ID |
-| `tiktokEventsAppId` | TikTok Business Center → Assets → Events → Your App → App ID |
-| `tiktokAccessToken` | TikTok Business Center → Assets → Events → Your App → Settings → Access Token |
-
-> **Note:** The `tiktokAccessToken` enables client-side TikTok SDK features (enhanced attribution matching, real-time event forwarding). Without it, events are still tracked server-side via Datalyr postbacks — you'll see a warning in debug mode.
-```
+Conversion events are routed to ad platforms (Meta CAPI, TikTok Events API, Google Ads) server-side via the Datalyr postback system. No client-side ad SDKs are needed.
 
 ### Apple Search Ads
 
@@ -583,15 +487,6 @@ File > Packages > Update to Latest Package Versions
 ```
 
 ### Meta not working
-
-Verify Info.plist contains required keys (see [Meta setup](#meta-facebook)). Check status with `DatalyrSDK.shared.getPlatformIntegrationStatus()`.
-
-### TikTok not working
-
-1. Make sure you have all three TikTok credentials (see [TikTok setup](#tiktok))
-2. The `tiktokAccessToken` is required for client-side SDK — without it, you'll see a warning in debug mode but server-side tracking still works
-3. Verify Info.plist contains `LSApplicationQueriesSchemes`
-4. Check status: `DatalyrSDK.shared.getPlatformIntegrationStatus()`
 
 ---
 

@@ -21,19 +21,6 @@ public struct DatalyrConfig {
     public let autoEventConfig: AutoEventConfig?
     public let skadTemplate: String?
 
-    // Meta (Facebook) SDK Configuration
-    public let metaAppId: String?
-    public let metaClientToken: String?
-    public let enableMetaAttribution: Bool
-    public let forwardEventsToMeta: Bool
-
-    // TikTok SDK Configuration
-    public let tiktokAppId: String?         // TikTok App ID (from TikTok Developer Portal)
-    public let tiktokEventsAppId: String?   // Events API App ID (from TikTok Events Manager)
-    public let tiktokAccessToken: String?
-    public let enableTikTokAttribution: Bool
-    public let forwardEventsToTikTok: Bool
-
     public init(
         apiKey: String,
         workspaceId: String = "",
@@ -50,18 +37,7 @@ public struct DatalyrConfig {
         enableAutoEvents: Bool = true,
         enableAttribution: Bool = true,
         autoEventConfig: AutoEventConfig? = nil,
-        skadTemplate: String? = nil,
-        // Meta (Facebook) SDK Configuration
-        metaAppId: String? = nil,
-        metaClientToken: String? = nil,
-        enableMetaAttribution: Bool = true,
-        forwardEventsToMeta: Bool = true,
-        // TikTok SDK Configuration
-        tiktokAppId: String? = nil,
-        tiktokEventsAppId: String? = nil,
-        tiktokAccessToken: String? = nil,
-        enableTikTokAttribution: Bool = true,
-        forwardEventsToTikTok: Bool = true
+        skadTemplate: String? = nil
     ) {
         self.apiKey = apiKey
         self.workspaceId = workspaceId
@@ -79,15 +55,6 @@ public struct DatalyrConfig {
         self.enableAttribution = enableAttribution
         self.autoEventConfig = autoEventConfig
         self.skadTemplate = skadTemplate
-        self.metaAppId = metaAppId
-        self.metaClientToken = metaClientToken
-        self.enableMetaAttribution = enableMetaAttribution
-        self.forwardEventsToMeta = forwardEventsToMeta
-        self.tiktokAppId = tiktokAppId
-        self.tiktokEventsAppId = tiktokEventsAppId
-        self.tiktokAccessToken = tiktokAccessToken
-        self.enableTikTokAttribution = enableTikTokAttribution
-        self.forwardEventsToTikTok = forwardEventsToTikTok
     }
 }
 
@@ -533,8 +500,6 @@ public struct DeferredDeepLinkResult {
 
 /// Platform integration error types
 public enum DatalyrPlatformError: Error, CustomStringConvertible {
-    case metaEventFailed(eventName: String, underlyingError: Error?)
-    case tiktokEventFailed(eventName: String, underlyingError: Error?)
     case skadnetworkUpdateFailed(underlyingError: Error?)
     case attributionFetchFailed(platform: String, underlyingError: Error?)
     case networkError(underlyingError: Error)
@@ -542,10 +507,6 @@ public enum DatalyrPlatformError: Error, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .metaEventFailed(let eventName, let error):
-            return "Meta event '\(eventName)' failed: \(error?.localizedDescription ?? "Unknown error")"
-        case .tiktokEventFailed(let eventName, let error):
-            return "TikTok event '\(eventName)' failed: \(error?.localizedDescription ?? "Unknown error")"
         case .skadnetworkUpdateFailed(let error):
             return "SKAdNetwork update failed: \(error?.localizedDescription ?? "Unknown error")"
         case .attributionFetchFailed(let platform, let error):
@@ -559,8 +520,6 @@ public enum DatalyrPlatformError: Error, CustomStringConvertible {
 
     public var platform: String {
         switch self {
-        case .metaEventFailed: return "Meta"
-        case .tiktokEventFailed: return "TikTok"
         case .skadnetworkUpdateFailed: return "SKAdNetwork"
         case .attributionFetchFailed(let platform, _): return platform
         case .networkError: return "Network"

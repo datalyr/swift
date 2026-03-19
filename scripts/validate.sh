@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Validates that DatalyrSDK compiles for iOS Simulator.
-# Catches Swift compile errors (TikTok/Meta API changes, etc.) before tagging a release.
+# Catches Swift compile errors before tagging a release.
 #
 # Usage:
 #   ./scripts/validate.sh

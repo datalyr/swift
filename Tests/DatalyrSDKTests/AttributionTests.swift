@@ -156,16 +156,6 @@ final class AttributionTests: XCTestCase {
     // MARK: - SDK Delegate Tests
 
     func testDatalyrPlatformErrorDescriptions() {
-        let metaError = DatalyrPlatformError.metaEventFailed(eventName: "purchase", underlyingError: nil)
-        XCTAssertTrue(metaError.description.contains("Meta"))
-        XCTAssertTrue(metaError.description.contains("purchase"))
-        XCTAssertEqual(metaError.platform, "Meta")
-
-        let tiktokError = DatalyrPlatformError.tiktokEventFailed(eventName: "add_to_cart", underlyingError: nil)
-        XCTAssertTrue(tiktokError.description.contains("TikTok"))
-        XCTAssertTrue(tiktokError.description.contains("add_to_cart"))
-        XCTAssertEqual(tiktokError.platform, "TikTok")
-
         let skadError = DatalyrPlatformError.skadnetworkUpdateFailed(underlyingError: nil)
         XCTAssertTrue(skadError.description.contains("SKAdNetwork"))
         XCTAssertEqual(skadError.platform, "SKAdNetwork")

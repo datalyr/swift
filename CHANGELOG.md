@@ -2,11 +2,55 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-03
+
+### Removed
+- **Meta (Facebook) SDK** - Removed FBSDKCoreKit dependency and all client-side Meta integration code
+- **TikTok Business SDK** - Removed TikTokBusinessSDK dependency and all client-side TikTok integration code
+- Removed `metaAppId`, `metaClientToken`, `tiktokAppId`, `tiktokEventsAppId`, `tiktokAccessToken` config properties
+- Removed all client-side event forwarding to Meta/TikTok (purchase, add_to_cart, etc.)
+- Removed deferred deep linking via Meta SDK (`AppLinkUtility.fetchDeferredAppLink`)
+- Removed `MetaIntegration.swift`, `TikTokIntegration.swift`, `DatalyrObjCExceptionCatcher`
+- Removed `metaEventFailed`/`tiktokEventFailed` error types
+
+### Changed
+- Conversion event routing to Meta (CAPI), TikTok (Events API), and Google Ads is now handled entirely server-side via the Datalyr postback system
+- IDFA/ATT helpers now use native Apple frameworks directly (ASIdentifierManager, ATTrackingManager) instead of routing through Meta SDK
+- Web-to-app attribution is handled via prelanders and IP-based deferred matching
+
+### Migration from v1.3.x
+Remove Meta/TikTok config properties from your `DatalyrConfig` initializer:
+```swift
+// Before (v1.3.x)
+let config = DatalyrConfig(
+    apiKey: "dk_...",
+    metaAppId: "1234567890",          // REMOVE
+    metaClientToken: "abc123",        // REMOVE
+    enableMetaAttribution: true,      // REMOVE
+    forwardEventsToMeta: true,        // REMOVE
+    tiktokAppId: "7123456789",        // REMOVE
+    tiktokEventsAppId: "...",         // REMOVE
+    tiktokAccessToken: "...",         // REMOVE
+    enableTikTokAttribution: true,    // REMOVE
+    forwardEventsToTikTok: true       // REMOVE
+)
+
+// After (v1.4.0)
+let config = DatalyrConfig(
+    apiKey: "dk_..."
+)
+```
+No other code changes needed. All tracking methods (`trackPurchase`, `trackAddToCart`, etc.) work the same — events are now routed to ad platforms server-side via your Datalyr postback rules.
+
+You can also remove from your Info.plist:
+- `FacebookAppID`, `FacebookClientToken`, `FacebookDisplayName`
+- `LSApplicationQueriesSchemes` entries for `tiktok`, `snssdk1180`, `snssdk1233`
+
 ## [1.3.0] - 2026-01
 
 ### Added
 - **AdAttributionKit Support** (iOS 17.4+) - Unified bridge for Apple's new attribution framework
-- **IDFA Client-Side Capture** - Automatic IDFA capture when ATT authorized for improved Meta Event Match Quality
+- **IDFA Client-Side Capture** - Automatic IDFA capture when ATT authorized for improved ad platform match quality
 - `getIDFA()` and `getAdvertiserData()` public methods
 - iOS 18.4+ feature detection (geo-level postbacks, overlapping windows, development postbacks)
 - `AdAttributionKitBridge.swift` for unified attribution across SKAdNetwork and AdAttributionKit
