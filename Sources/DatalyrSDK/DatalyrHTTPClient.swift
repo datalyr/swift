@@ -268,9 +268,10 @@ internal class DatalyrHTTPClient {
     private func transformForServerAPI(_ payload: EventPayload) -> [String: Any] {
         var result: [String: Any] = [
             "event": payload.eventName,
+            "eventId": payload.eventId,
             "timestamp": payload.timestamp ?? Date().toISOString()
         ]
-        
+
         // Add user identifiers
         if let userId = payload.userId {
             result["userId"] = userId
@@ -278,27 +279,27 @@ internal class DatalyrHTTPClient {
             result["userId"] = payload.visitorId
         }
         result["anonymousId"] = payload.anonymousId ?? payload.visitorId
-        
+
         // Add properties
         var properties: [String: Any] = payload.eventData ?? [:]
         properties["sessionId"] = payload.sessionId
-        properties["source"] = payload.source ?? "ios_app"
+        properties["source"] = payload.source ?? "mobile_app"
         if let fingerprint = payload.fingerprintData {
             properties["fingerprint"] = fingerprint
         }
         result["properties"] = properties
-        
+
         // Add context with explicit source
         var context: [String: Any] = [
             "library": "@datalyr/swift",
-            "version": "2.0.2",
-            "source": "mobile_app"  // Explicitly set source for iOS
+            "version": "2.1.1",
+            "source": "mobile_app"
         ]
         if let userProperties = payload.userProperties {
             context["userProperties"] = userProperties
         }
         result["context"] = context
-        
+
         return result
     }
 }
