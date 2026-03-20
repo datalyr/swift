@@ -76,7 +76,7 @@ public class DatalyrSDK {
         
         // Validate configuration
         guard !config.apiKey.isEmpty else {
-            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v2.0.2")
+            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v2.1.0")
         }
         
         // workspaceId is now optional (for backward compatibility)
@@ -1237,7 +1237,7 @@ public class DatalyrSDK {
         // Add standard properties
         enrichedEventData["platform"] = "ios"
         enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
-        enrichedEventData["sdk_version"] = "2.0.2"
+        enrichedEventData["sdk_version"] = "2.1.0"
 
         // App info from Bundle
         let bundle = Bundle.main
@@ -1348,7 +1348,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "2.0.2",
+                "sdk_version": "2.1.0",
                 "install_time": installTime
             ]
             
