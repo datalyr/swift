@@ -176,13 +176,14 @@ internal class AutoEventsManager {
     }
 
     /// Get session data to enrich a pageview event.
-    /// Called by the SDK's `screen()` method to attach session info.
+    /// Called by the SDK's `screen()` method *before* `recordScreenView()`,
+    /// so we add 1 to account for the current view being tracked.
     func getScreenViewEnrichment() -> EventData? {
         guard let session = currentSession else { return nil }
 
         var enrichment: EventData = [
             "session_id": session.sessionId,
-            "pageviews_in_session": session.pageviewCount
+            "pageviews_in_session": session.pageviewCount + 1
         ]
 
         if let previousScreen = currentScreen {

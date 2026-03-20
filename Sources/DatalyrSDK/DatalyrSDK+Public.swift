@@ -303,11 +303,16 @@ public extension DatalyrSDK {
             "UISystemInputAssistantViewController",
             "UIEditingOverlayViewController",
             "UIReferenceLibraryViewController",
+            "UIVideoEditorController",
+            "UIColorPickerViewController",
+            "UIFontPickerViewController",
             "SFSafariViewController",
             "SKStoreProductViewController",
             "MFMailComposeViewController",
             "MFMessageComposeViewController",
             "PHPickerViewController",
+            "CNContactPickerViewController",
+            "QLPreviewController",
         ]
         if systemClassNames.contains(className) {
             return true
