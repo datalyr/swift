@@ -214,15 +214,22 @@ public extension UIViewController {
     /// Automatically track screen view when view controller appears
     /// Override this method to customize screen tracking
     @objc func datalyrTrackScreenView() {
-        let screenName = String(describing: type(of: self))
-        
+        // Filter out system/container view controllers that aren't meaningful screens
+        if DatalyrSDK.shouldFilterViewController(self) {
+            return
+        }
+
+        let controllerClass = String(describing: type(of: self))
+        let screenName = DatalyrSDK.cleanScreenName(controllerClass)
+
         Task {
             await DatalyrSDK.shared.screen(screenName, properties: [
-                "controller_class": screenName
+                "controller_class": controllerClass,
+                "source": "auto_swizzle"
             ])
         }
     }
-    
+
     /// Track custom event from view controller
     /// - Parameters:
     ///   - eventName: Name of the event
@@ -237,30 +244,127 @@ public extension UIViewController {
 // MARK: - UIViewController Swizzling Helper
 
 public extension DatalyrSDK {
-    /// Enable automatic screen tracking for all UIViewControllers
-    /// Call this method after SDK initialization to automatically track screen views
+    /// Enable automatic screen tracking for all UIViewControllers.
+    /// System view controllers (UINavigationController, UITabBarController, etc.) are
+    /// automatically filtered out. Only your app's meaningful screens are tracked.
+    ///
+    /// **Important:** For SwiftUI apps, automatic UIViewController swizzling will not
+    /// capture SwiftUI views (UIHostingController is filtered). Use the
+    /// `.datalyrScreen("ScreenName")` view modifier on your SwiftUI views instead.
+    ///
+    /// You can also enable this via config:
+    /// ```swift
+    /// AutoEventConfig(autoTrackScreenViews: true)
+    /// ```
     static func enableAutomaticScreenTracking() {
-        UIViewController.swizzleViewDidAppear()
+        UIViewController.datalyr_swizzleViewDidAppear()
+    }
+
+    /// Additional view controller class names to exclude from automatic tracking.
+    /// Set this *before* calling `enableAutomaticScreenTracking()` or before SDK init
+    /// if using `autoTrackScreenViews: true`.
+    ///
+    /// ```swift
+    /// DatalyrSDK.excludedScreenClasses = ["OnboardingContainerVC", "DebugMenuVC"]
+    /// ```
+    static var excludedScreenClasses: [String] = []
+
+    /// Check if a view controller should be filtered from automatic tracking.
+    internal static func shouldFilterViewController(_ vc: UIViewController) -> Bool {
+        // 1. Type-based checks (reliable across Swift versions)
+        if vc is UINavigationController ||
+           vc is UITabBarController ||
+           vc is UIPageViewController ||
+           vc is UISplitViewController ||
+           vc is UIAlertController ||
+           vc is UISearchController ||
+           vc is UIImagePickerController ||
+           vc is UIDocumentPickerViewController ||
+           vc is UIActivityViewController {
+            return true
+        }
+
+        let className = String(describing: type(of: vc))
+
+        // 2. User-configured exclusions
+        if excludedScreenClasses.contains(className) {
+            return true
+        }
+
+        // 3. Private Apple framework classes (underscore prefix)
+        if className.hasPrefix("_") {
+            return true
+        }
+
+        // 4. Known system classes we can't check with `is` (may not be linked)
+        let systemClassNames: Set<String> = [
+            "UIInputWindowController",
+            "UICompatibilityInputViewController",
+            "UISystemInputAssistantViewController",
+            "UIEditingOverlayViewController",
+            "UIReferenceLibraryViewController",
+            "SFSafariViewController",
+            "SKStoreProductViewController",
+            "MFMailComposeViewController",
+            "MFMessageComposeViewController",
+            "PHPickerViewController",
+        ]
+        if systemClassNames.contains(className) {
+            return true
+        }
+
+        // 5. SwiftUI UIHostingController — check superclass chain rather than
+        //    relying on mangled class names which change across Swift versions.
+        var superclass: AnyClass? = type(of: vc)
+        while let sc = superclass {
+            let scName = String(describing: sc)
+            if scName.contains("UIHostingController") {
+                return true
+            }
+            superclass = class_getSuperclass(sc)
+        }
+
+        return false
+    }
+
+    /// Clean up a view controller class name into a readable screen name.
+    /// "MyProfileViewController" → "MyProfile"
+    /// "SettingsVC" → "Settings"
+    internal static func cleanScreenName(_ className: String) -> String {
+        var name = className
+
+        // Only strip suffixes that are unambiguously VC naming conventions.
+        // "ViewController" and "VC" are safe; bare "Controller" is NOT stripped
+        // because names like "GameController" are legitimate screen names.
+        let suffixes = ["ViewController", "VC"]
+        for suffix in suffixes {
+            if name.hasSuffix(suffix) && name.count > suffix.count {
+                name = String(name.dropLast(suffix.count))
+                break
+            }
+        }
+        return name
     }
 }
 
 private extension UIViewController {
-    static func swizzleViewDidAppear() {
+    // Thread-safe swizzle guard using dispatch_once semantics via a static let
+    private static let datalyr_swizzleToken: Void = {
         let originalSelector = #selector(viewDidAppear(_:))
         let swizzledSelector = #selector(datalyr_viewDidAppear(_:))
-        
+
         guard let originalMethod = class_getInstanceMethod(UIViewController.self, originalSelector),
               let swizzledMethod = class_getInstanceMethod(UIViewController.self, swizzledSelector) else {
             return
         }
-        
+
         let didAddMethod = class_addMethod(
             UIViewController.self,
             originalSelector,
             method_getImplementation(swizzledMethod),
             method_getTypeEncoding(swizzledMethod)
         )
-        
+
         if didAddMethod {
             class_replaceMethod(
                 UIViewController.self,
@@ -271,12 +375,17 @@ private extension UIViewController {
         } else {
             method_exchangeImplementations(originalMethod, swizzledMethod)
         }
+    }()
+
+    static func datalyr_swizzleViewDidAppear() {
+        // Static let is guaranteed to execute exactly once, thread-safely
+        _ = datalyr_swizzleToken
     }
-    
+
     @objc func datalyr_viewDidAppear(_ animated: Bool) {
-        // Call original method
+        // Call original method (swizzled — this actually calls the real viewDidAppear)
         datalyr_viewDidAppear(animated)
-        
+
         // Track screen view
         datalyrTrackScreenView()
     }

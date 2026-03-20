@@ -131,10 +131,11 @@ let config = DatalyrConfig(
     // Auto Events
     autoEventConfig: AutoEventConfig(
         trackSessions: true,               // Session start/end
-        trackScreenViews: true,            // Automatic screen views
+        trackScreenViews: true,            // Enable screen view events via screen()
         trackAppUpdates: true,             // App version changes
         trackPerformance: false,           // Performance metrics
-        sessionTimeoutMs: 1_800_000        // 30 minutes
+        sessionTimeoutMs: 1_800_000,       // 30 minutes
+        autoTrackScreenViews: false        // Auto-swizzle UIViewController (UIKit only)
     ),
 
     // SKAdNetwork
@@ -197,6 +198,8 @@ await DatalyrSDK.shared.screen("Product Details", properties: [
     "product_id": "SKU123"
 ])
 ```
+
+Each `screen()` call fires a single `pageview` event with the `screen` property set. Session data (`session_id`, `pageviews_in_session`, `previous_screen`) is automatically attached when auto-events are enabled.
 
 ### E-Commerce Events
 
@@ -732,12 +735,41 @@ class ProductViewController: UIViewController {
 
 ### Automatic Screen Tracking
 
-Swizzle `viewDidAppear` on all view controllers to track screen views automatically:
+Enable automatic screen tracking for UIKit apps by swizzling `viewDidAppear` on all view controllers. System view controllers (`UINavigationController`, `UITabBarController`, `UIAlertController`, etc.) are automatically filtered out. Screen names are cleaned up (`MyProfileViewController` → `MyProfile`).
+
+**Option 1: Enable via config** (recommended):
 
 ```swift
-// Call once after SDK initialization
+let config = DatalyrConfig(
+    apiKey: "dk_your_api_key",
+    autoEventConfig: AutoEventConfig(autoTrackScreenViews: true)
+)
+try await DatalyrSDK.shared.initialize(config: config)
+```
+
+**Option 2: Enable manually** after initialization:
+
+```swift
 DatalyrSDK.enableAutomaticScreenTracking()
 ```
+
+**Exclude specific screens:**
+
+```swift
+// Set before enabling automatic tracking
+DatalyrSDK.excludedScreenClasses = ["OnboardingContainerVC", "DebugMenuVC"]
+```
+
+> **SwiftUI apps:** Automatic UIViewController swizzling does not capture SwiftUI views (`UIHostingController` is filtered). Use the `.datalyrScreen()` view modifier on your SwiftUI views instead:
+>
+> ```swift
+> struct HomeView: View {
+>     var body: some View {
+>         Text("Home")
+>             .datalyrScreen("Home")
+>     }
+> }
+> ```
 
 ### App Delegate Initialization
 
@@ -748,8 +780,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
     ) -> Bool {
         Task {
-            try? await DatalyrSDK.configure(apiKey: "dk_your_api_key")
-            DatalyrSDK.enableAutomaticScreenTracking()
+            let config = DatalyrConfig(
+                apiKey: "dk_your_api_key",
+                autoEventConfig: AutoEventConfig(autoTrackScreenViews: true)
+            )
+            try? await DatalyrSDK.shared.initialize(config: config)
         }
         return true
     }
@@ -905,7 +940,8 @@ let config = DatalyrConfig(
         trackScreenViews: true,
         trackAppUpdates: true,
         trackPerformance: false,
-        sessionTimeoutMs: 1_800_000  // 30 minutes
+        sessionTimeoutMs: 1_800_000,  // 30 minutes
+        autoTrackScreenViews: true    // Auto-track UIKit screens via swizzle
     )
 )
 ```
@@ -919,6 +955,8 @@ let config = DatalyrConfig(
 | `app_update` | App version changes |
 | `session_start` | New session begins |
 | `session_end` | Session expires (configurable timeout, default 30 min inactivity) |
+| `pageview` | Screen view (when `autoTrackScreenViews: true` or manual `screen()`) |
+| `screen_end` | Previous screen dismissed (includes `view_duration`) |
 
 ---
 

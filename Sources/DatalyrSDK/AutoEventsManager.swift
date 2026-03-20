@@ -5,10 +5,12 @@ import UIKit
 
 // MARK: - Auto Events Tracking Delegate
 
-/// Protocol for auto events to communicate with the main SDK
+/// Protocol for auto events to communicate with the main SDK.
+/// Screen view events are now fired by the SDK's `screen()` method directly;
+/// the auto-events manager only uses `trackEvent` for lifecycle events
+/// (session_start, session_end, screen_end, app lifecycle, etc.).
 internal protocol AutoEventsTrackingDelegate: AnyObject {
     func trackEvent(_ eventName: String, properties: EventData?)
-    func trackScreenView(_ screenName: String, properties: EventData?)
 }
 
 // MARK: - Auto Events Manager
@@ -141,46 +143,53 @@ internal class AutoEventsManager {
     }
     
     // MARK: - Screen Tracking
-    
-    /// Track screen view
-    func trackScreenView(_ screenName: String, properties: EventData? = nil) {
+
+    /// Update session counters and screen duration tracking for a screen view.
+    /// The actual `pageview` event is fired by the SDK's `screen()` method —
+    /// this only updates internal state to avoid double-firing.
+    func recordScreenView(_ screenName: String) {
         guard config.trackScreenViews else { return }
-        
-        // End previous screen tracking
+
+        // End previous screen tracking (fire screen_end event for duration)
         if let currentScreen = currentScreen, let screenStartTime = screenStartTime {
             let viewDuration = Date().timeIntervalSince(screenStartTime)
-            
+
             trackingDelegate?.trackEvent("screen_end", properties: [
                 "screen": currentScreen,
                 "view_duration": viewDuration
             ])
         }
-        
+
         // Start new screen tracking
         self.currentScreen = screenName
         self.screenStartTime = Date()
-        
-        var screenProperties: EventData = [
-            "screen": screenName,
-            "platform": "ios",
-            "app_version": getAppVersion()
-        ]
-        
-        if let properties = properties {
-            screenProperties.merge(properties) { (_, new) in new }
-        }
-        
-        trackingDelegate?.trackScreenView(screenName, properties: screenProperties)
-        
+
         // Update session pageview count
         if var session = currentSession {
             session.pageviewCount += 1
             currentSession = session
         }
-        
+
         updateSessionActivity()
-        
-        debugLog("Screen view tracked", data: ["screen": screenName])
+
+        debugLog("Screen view recorded", data: ["screen": screenName])
+    }
+
+    /// Get session data to enrich a pageview event.
+    /// Called by the SDK's `screen()` method to attach session info.
+    func getScreenViewEnrichment() -> EventData? {
+        guard let session = currentSession else { return nil }
+
+        var enrichment: EventData = [
+            "session_id": session.sessionId,
+            "pageviews_in_session": session.pageviewCount
+        ]
+
+        if let previousScreen = currentScreen {
+            enrichment["previous_screen"] = previousScreen
+        }
+
+        return enrichment
     }
     
     // MARK: - App Lifecycle Tracking

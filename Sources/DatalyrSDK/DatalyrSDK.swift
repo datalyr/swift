@@ -158,13 +158,23 @@ public class DatalyrSDK {
         }
 
         // Initialize auto-events manager
+        let autoConfig = config.autoEventConfig ?? AutoEventConfig()
         if config.enableAutoEvents {
             self.autoEventsManager = AutoEventsManager(
                 trackingDelegate: self,
-                config: config.autoEventConfig ?? AutoEventConfig()
+                config: autoConfig
             )
             await autoEventsManager?.initialize()
         }
+
+        // Enable automatic UIViewController screen tracking if configured
+        #if canImport(UIKit)
+        if autoConfig.autoTrackScreenViews {
+            DispatchQueue.main.async {
+                DatalyrSDK.enableAutomaticScreenTracking()
+            }
+        }
+        #endif
         
         // Initialize SKAdNetwork conversion encoder
         if let templateName = config.skadTemplate {
@@ -278,11 +288,22 @@ public class DatalyrSDK {
     ///   - properties: Optional screen properties
     public func screen(_ screenName: String, properties: EventData? = nil) async {
         var screenData: EventData = ["screen": screenName]
-        
+
         if let properties = properties {
             screenData.merge(properties) { (_, new) in new }
         }
-        
+
+        // Enrich with session data (pageview count, previous screen) if available
+        if let enrichment = autoEventsManager?.getScreenViewEnrichment() {
+            // Don't overwrite explicit properties from the caller
+            for (key, value) in enrichment where screenData[key] == nil {
+                screenData[key] = value
+            }
+        }
+
+        // Update session counters and screen duration tracking (does NOT fire a second event)
+        autoEventsManager?.recordScreenView(screenName)
+
         await track("pageview", eventData: screenData)
     }
     
@@ -1499,12 +1520,6 @@ extension DatalyrSDK: AutoEventsTrackingDelegate {
     func trackEvent(_ eventName: String, properties: EventData?) {
         Task {
             await track(eventName, eventData: properties)
-        }
-    }
-    
-    func trackScreenView(_ screenName: String, properties: EventData?) {
-        Task {
-            await screen(screenName, properties: properties)
         }
     }
 }

@@ -63,23 +63,37 @@ public struct DatalyrConfig {
 /// Configuration for automatic event tracking
 public struct AutoEventConfig {
     public let trackSessions: Bool
+    /// Enable screen view event tracking via `screen()` calls (manual or automatic).
+    /// When false, all screen events are suppressed. Default: true
     public let trackScreenViews: Bool
     public let trackAppUpdates: Bool
     public let trackPerformance: Bool
     public let sessionTimeoutMs: TimeInterval
-    
+    /// Automatically swizzle UIViewController.viewDidAppear to detect screen changes.
+    /// When enabled, the SDK calls `enableAutomaticScreenTracking()` during initialization.
+    /// System view controllers (UINavigationController, UITabBarController, etc.) are
+    /// filtered out automatically.
+    ///
+    /// **For SwiftUI apps:** UIHostingController is filtered — use the `.datalyrScreen()`
+    /// view modifier instead for SwiftUI views.
+    ///
+    /// Default: false (opt-in)
+    public let autoTrackScreenViews: Bool
+
     public init(
         trackSessions: Bool = true,
         trackScreenViews: Bool = true,
         trackAppUpdates: Bool = true,
         trackPerformance: Bool = false,
-        sessionTimeoutMs: TimeInterval = 30 * 60 * 1000 // 30 minutes
+        sessionTimeoutMs: TimeInterval = 30 * 60 * 1000, // 30 minutes
+        autoTrackScreenViews: Bool = false
     ) {
         self.trackSessions = trackSessions
         self.trackScreenViews = trackScreenViews
         self.trackAppUpdates = trackAppUpdates
         self.trackPerformance = trackPerformance
         self.sessionTimeoutMs = sessionTimeoutMs
+        self.autoTrackScreenViews = autoTrackScreenViews
     }
 }
 
