@@ -25,6 +25,9 @@ public class DatalyrSDK {
     // MARK: - Private Properties
 
     private var initialized = false
+    /// Events that arrived before initialize() completed. Flushed once init finishes.
+    private var preInitQueue: [(eventName: String, eventData: EventData?)] = []
+    private static let preInitQueueMax = 50
     internal var config: DatalyrConfig?
     private var httpClient: DatalyrHTTPClient?
     private var eventQueue: DatalyrEventQueue?
@@ -76,7 +79,7 @@ public class DatalyrSDK {
         
         // Validate configuration
         guard !config.apiKey.isEmpty else {
-            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v2.1.1")
+            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v2.1.2")
         }
         
         // workspaceId is now optional (for backward compatibility)
@@ -205,6 +208,16 @@ public class DatalyrSDK {
         // Mark as initialized
         self.initialized = true
 
+        // Flush any events that were queued before init completed (e.g. screen tracking)
+        if !preInitQueue.isEmpty {
+            debugLog("Flushing \(preInitQueue.count) pre-init event(s)")
+            let queued = preInitQueue
+            preInitQueue = []
+            for item in queued {
+                await track(item.eventName, eventData: item.eventData)
+            }
+        }
+
         // Attempt deferred web-to-app attribution on first install (IP-based matching)
         if config.enableAttribution, attributionManager?.isInstall() == true {
             await fetchDeferredWebAttribution()
@@ -258,7 +271,12 @@ public class DatalyrSDK {
     ///   - eventData: Optional event properties
     public func track(_ eventName: String, eventData: EventData? = nil) async {
         guard initialized else {
-            errorLog("SDK not initialized. Call initialize() first.")
+            if preInitQueue.count < DatalyrSDK.preInitQueueMax {
+                debugLog("Queuing pre-init event: \(eventName)")
+                preInitQueue.append((eventName: eventName, eventData: eventData))
+            } else {
+                errorLog("Pre-init event queue full, dropping event: \(eventName)")
+            }
             return
         }
         
@@ -1237,7 +1255,7 @@ public class DatalyrSDK {
         // Add standard properties
         enrichedEventData["platform"] = "ios"
         enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
-        enrichedEventData["sdk_version"] = "2.1.1"
+        enrichedEventData["sdk_version"] = "2.1.2"
 
         // App info from Bundle
         let bundle = Bundle.main
@@ -1348,7 +1366,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "2.1.1",
+                "sdk_version": "2.1.2",
                 "install_time": installTime
             ]
             
