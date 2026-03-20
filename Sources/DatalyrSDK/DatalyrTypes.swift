@@ -26,7 +26,7 @@ public struct DatalyrConfig {
         workspaceId: String = "",
         useServerTracking: Bool = true,
         debug: Bool = false,
-        endpoint: String = "https://api.datalyr.com",
+        endpoint: String = "https://ingest.datalyr.com/track",
         maxRetries: Int = 3,
         retryDelay: TimeInterval = 1.0,
         timeout: TimeInterval = 15.0,

@@ -70,7 +70,7 @@ internal class DatalyrHTTPClient {
     init(endpoint: String, config: HTTPClientConfig) {
         // Use server-side API if flag is set (default to true for v1.0.0)
         self.endpoint = config.useServerTracking
-            ? (endpoint.isEmpty ? "https://api.datalyr.com" : endpoint)
+            ? (endpoint.isEmpty ? "https://ingest.datalyr.com/track" : endpoint)
             : endpoint
         self.config = config
         

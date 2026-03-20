@@ -97,7 +97,7 @@ public class DatalyrSDK {
             useServerTracking: config.useServerTracking,
             debug: config.debug
         )
-        self.httpClient = DatalyrHTTPClient(endpoint: config.endpoint.isEmpty ? "https://api.datalyr.com" : config.endpoint, config: httpConfig)
+        self.httpClient = DatalyrHTTPClient(endpoint: config.endpoint.isEmpty ? "https://ingest.datalyr.com/track" : config.endpoint, config: httpConfig)
         
         // Initialize event queue
         let queueConfig = QueueConfig(
@@ -339,8 +339,7 @@ public class DatalyrSDK {
 
         debugLog("Fetching web attribution for email: \(email)")
 
-        let baseUrl = config?.endpoint.isEmpty == false ? config!.endpoint : "https://api.datalyr.com"
-        guard let url = URL(string: "\(baseUrl)/attribution/lookup") else {
+        guard let url = URL(string: "https://api.datalyr.com/attribution/lookup") else {
             errorLog("Invalid attribution API URL")
             return
         }
@@ -429,8 +428,7 @@ public class DatalyrSDK {
 
         debugLog("Fetching deferred web attribution via IP matching...")
 
-        let baseUrl = config?.endpoint.isEmpty == false ? config!.endpoint : "https://api.datalyr.com"
-        guard let url = URL(string: "\(baseUrl)/attribution/deferred-lookup") else {
+        guard let url = URL(string: "https://api.datalyr.com/attribution/deferred-lookup") else {
             errorLog("Invalid deferred attribution API URL")
             return
         }
