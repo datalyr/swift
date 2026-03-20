@@ -37,7 +37,7 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, SKAdN
    ```
    https://github.com/datalyr/swift
    ```
-3. Select version 2.1.0 or later
+3. Select version 2.1.1 or later
 4. Add DatalyrSDK to your target
 
 ### CocoaPods
@@ -45,7 +45,7 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, SKAdN
 Add to your Podfile:
 
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.0'
+pod 'DatalyrSDK', '~> 2.1.1'
 ```
 
 Then run:
@@ -273,7 +273,7 @@ await DatalyrSDK.shared.trackRevenue("custom_revenue_event", properties: [
 ```swift
 await DatalyrSDK.shared.trackAppUpdate(
     previousVersion: "2.0.1",
-    currentVersion: "2.1.0"
+    currentVersion: "2.1.1"
 )
 ```
 
