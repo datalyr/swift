@@ -518,6 +518,51 @@ Datalyr sends conversions to ad platforms **server-side** via their APIs (Meta C
 3. Authorize your Google Ads account
 4. Select your **conversion actions**
 
+### Apple Search Ads
+
+Apple Search Ads attribution is handled automatically by the Datalyr SDK. No dashboard setup required — the SDK uses Apple's AdServices framework to fetch attribution data on first launch (iOS 14.3+).
+
+**What happens automatically:**
+- On first app launch, the SDK checks if the install came from an Apple Search Ads campaign
+- If attributed, the data is included in all events with the `asa_` prefix
+- No additional code or configuration needed
+
+**Access the data in your code:**
+```swift
+if let asa = DatalyrSDK.shared.getAppleSearchAdsAttribution() {
+    if asa.attribution {
+        print(asa.campaignId)       // Campaign ID
+        print(asa.campaignName)     // Campaign name
+        print(asa.adGroupId)        // Ad group ID
+        print(asa.adGroupName)      // Ad group name
+        print(asa.keyword)          // Search keyword that triggered the ad
+        print(asa.keywordId)        // Keyword ID
+        print(asa.clickDate)        // Click date
+        print(asa.conversionType)   // "Download" or "Redownload"
+        print(asa.orgId)            // Organization ID
+        print(asa.orgName)          // Organization name
+        print(asa.region)           // Region/country code
+    }
+}
+```
+
+**Fields automatically added to all events:**
+
+| Event Field | Description |
+|---|---|
+| `asa_campaign_id` | Campaign ID |
+| `asa_campaign_name` | Campaign name |
+| `asa_ad_group_id` | Ad group ID |
+| `asa_ad_group_name` | Ad group name |
+| `asa_keyword_id` | Keyword ID |
+| `asa_keyword` | Search keyword |
+| `asa_org_id` | Organization ID |
+| `asa_org_name` | Organization name |
+| `asa_click_date` | Date of the ad click |
+| `asa_conversion_type` | Conversion type |
+
+These fields are included automatically — you don't need to pass them manually. They flow through to your conversion rules and postbacks so your Apple Search Ads campaigns get proper attribution.
+
 **Links:** [Meta Ads](https://docs.datalyr.com/integrations/meta-ads) | [TikTok Ads](https://docs.datalyr.com/integrations/tiktok-ads) | [Google Ads](https://docs.datalyr.com/integrations/google-ads)
 
 ---
@@ -1038,6 +1083,7 @@ Reset packages: **File > Packages > Reset Package Caches**
 | `DatalyrSDK.shared.getAttributionData()` | Get captured attribution data |
 | `DatalyrSDK.shared.setAttributionData(_:)` | Set attribution manually |
 | `DatalyrSDK.shared.getDeferredAttributionData()` | Get deferred deep link attribution |
+| `DatalyrSDK.shared.getAppleSearchAdsAttribution()` | Get Apple Search Ads data (iOS 14.3+) |
 | `DatalyrSDK.shared.updateTrackingAuthorization(_:)` | Update ATT status |
 
 ### Sessions
