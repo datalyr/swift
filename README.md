@@ -111,7 +111,7 @@ let config = DatalyrConfig(
     debug: false,                          // Console logging
 
     // API
-    endpoint: "https://api.datalyr.com",   // API endpoint
+    endpoint: "https://ingest.datalyr.com/track",   // API endpoint
     maxRetries: 3,                         // Max retry attempts
     retryDelay: 1.0,                       // Retry delay (seconds)
     timeout: 15.0,                         // Request timeout (seconds)
