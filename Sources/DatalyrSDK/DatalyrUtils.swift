@@ -111,7 +111,7 @@ internal func getDeviceInfo() -> DeviceInfo {
 private var cachedDeviceModelName: String?
 
 /// Get device model name (iPhone 14 Pro, iPad Air, etc.)
-private func getDeviceModelName() -> String {
+internal func getDeviceModelName() -> String {
     if let cached = cachedDeviceModelName {
         return cached
     }
@@ -173,7 +173,7 @@ private func isRunningOnSimulator() -> Bool {
 }
 
 /// Get carrier name
-private func getCarrierName() -> String? {
+internal func getCarrierName() -> String? {
     // Note: CTTelephonyNetworkInfo is deprecated in iOS 16+
     // For privacy reasons, carrier information is limited
     return nil
