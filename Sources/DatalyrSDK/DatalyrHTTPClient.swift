@@ -280,12 +280,14 @@ internal class DatalyrHTTPClient {
         }
         result["anonymousId"] = payload.anonymousId ?? payload.visitorId
 
-        // Add properties
-        var properties: [String: Any] = payload.eventData ?? [:]
+        // Add properties (sanitized for JSON compatibility)
+        var properties: [String: Any] = sanitizeForJSON(payload.eventData ?? [:])
         properties["sessionId"] = payload.sessionId
         properties["source"] = payload.source ?? "mobile_app"
-        if let fingerprint = payload.fingerprintData {
-            properties["fingerprint"] = fingerprint
+        if let fingerprint = payload.fingerprintData,
+           let fpData = try? JSONEncoder().encode(fingerprint),
+           let fpDict = try? JSONSerialization.jsonObject(with: fpData) as? [String: Any] {
+            properties["fingerprint"] = fpDict
         }
         result["properties"] = properties
 
@@ -296,11 +298,54 @@ internal class DatalyrHTTPClient {
             "source": "mobile_app"
         ]
         if let userProperties = payload.userProperties {
-            context["userProperties"] = userProperties
+            context["userProperties"] = sanitizeForJSON(userProperties)
         }
         result["context"] = context
 
         return result
+    }
+
+    /// Recursively sanitize a dictionary to only contain JSON-compatible types
+    private func sanitizeForJSON(_ dict: [String: Any]) -> [String: Any] {
+        var result: [String: Any] = [:]
+        for (key, value) in dict {
+            if let sanitized = sanitizeValue(value) {
+                result[key] = sanitized
+            }
+        }
+        return result
+    }
+
+    /// Sanitize a single value for JSON compatibility
+    private func sanitizeValue(_ value: Any) -> Any? {
+        // Unwrap AnyCodable
+        if let anyCodable = value as? AnyCodable {
+            return sanitizeValue(anyCodable.value)
+        }
+        // Primitives
+        if let v = value as? String { return v }
+        if let v = value as? Int { return v }
+        if let v = value as? Double { return v }
+        if let v = value as? Bool { return v }
+        if let v = value as? Float { return Double(v) }
+        // Collections
+        if let dict = value as? [String: Any] {
+            return sanitizeForJSON(dict)
+        }
+        if let arr = value as? [Any] {
+            return arr.compactMap { sanitizeValue($0) }
+        }
+        // Null
+        if value is NSNull { return nil }
+        // Optional nil check
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional && mirror.children.isEmpty {
+            return nil
+        }
+        // Last resort — string conversion
+        let str = "\(value)"
+        if str == "nil" || str == "Optional(nil)" { return nil }
+        return str
     }
 }
 

@@ -27,6 +27,7 @@ public class DatalyrSDK {
     private var initialized = false
     /// Events that arrived before initialize() completed. Flushed once init finishes.
     private var preInitQueue: [(eventName: String, eventData: EventData?)] = []
+    private let preInitLock = NSLock()
     private static let preInitQueueMax = 50
     internal var config: DatalyrConfig?
     private var httpClient: DatalyrHTTPClient?
@@ -209,10 +210,13 @@ public class DatalyrSDK {
         self.initialized = true
 
         // Flush any events that were queued before init completed (e.g. screen tracking)
-        if !preInitQueue.isEmpty {
-            debugLog("Flushing \(preInitQueue.count) pre-init event(s)")
-            let queued = preInitQueue
+        let queued: [(eventName: String, eventData: EventData?)] = preInitLock.withLock {
+            let items = preInitQueue
             preInitQueue = []
+            return items
+        }
+        if !queued.isEmpty {
+            debugLog("Flushing \(queued.count) pre-init event(s)")
             for item in queued {
                 await track(item.eventName, eventData: item.eventData)
             }
@@ -271,11 +275,13 @@ public class DatalyrSDK {
     ///   - eventData: Optional event properties
     public func track(_ eventName: String, eventData: EventData? = nil) async {
         guard initialized else {
-            if preInitQueue.count < DatalyrSDK.preInitQueueMax {
-                debugLog("Queuing pre-init event: \(eventName)")
-                preInitQueue.append((eventName: eventName, eventData: eventData))
-            } else {
-                errorLog("Pre-init event queue full, dropping event: \(eventName)")
+            preInitLock.withLock {
+                if preInitQueue.count < DatalyrSDK.preInitQueueMax {
+                    debugLog("Queuing pre-init event: \(eventName)")
+                    preInitQueue.append((eventName: eventName, eventData: eventData))
+                } else {
+                    errorLog("Pre-init event queue full, dropping event: \(eventName)")
+                }
             }
             return
         }
@@ -292,12 +298,8 @@ public class DatalyrSDK {
         
         debugLog("Tracking event: \(eventName)", data: eventData)
         
-        do {
-            let payload = await createEventPayload(eventName: eventName, eventData: eventData)
-            await eventQueue?.enqueue(payload)
-        } catch {
-            errorLog("Error tracking event \(eventName)", error: error)
-        }
+        let payload = await createEventPayload(eventName: eventName, eventData: eventData)
+        await eventQueue?.enqueue(payload)
     }
     
     /// Track a screen view
@@ -311,16 +313,15 @@ public class DatalyrSDK {
             screenData.merge(properties) { (_, new) in new }
         }
 
+        // Update session counters FIRST so enrichment has correct pageview count
+        autoEventsManager?.recordScreenView(screenName)
+
         // Enrich with session data (pageview count, previous screen) if available
         if let enrichment = autoEventsManager?.getScreenViewEnrichment() {
-            // Don't overwrite explicit properties from the caller
             for (key, value) in enrichment where screenData[key] == nil {
                 screenData[key] = value
             }
         }
-
-        // Update session counters and screen duration tracking (does NOT fire a second event)
-        autoEventsManager?.recordScreenView(screenName)
 
         await track("pageview", eventData: screenData)
     }
@@ -347,25 +348,31 @@ public class DatalyrSDK {
         // Persist user data
         await persistUserData()
 
-        // Track $identify event for identity resolution
-        await track("$identify", eventData: [
-            "user_id": userId,
-            "anonymous_id": anonymousId,
-            "properties": properties ?? [:]
-        ])
-
-        // Fetch and merge web attribution if email is provided
-        let emailForAttribution = properties?["email"] as? String ?? (userId.contains("@") ? userId : nil)
-        if let email = emailForAttribution {
-            await fetchAndMergeWebAttribution(email: email)
-        }
-
-        // Identify user on platform SDKs for improved attribution matching (Advanced Matching)
-        // Extract all available user properties for better match rates
+        // Extract identity fields for advanced matching
         let email = properties?["email"] as? String
         let phone = properties?["phone"] as? String
         let firstName = properties?["first_name"] as? String ?? properties?["firstName"] as? String
         let lastName = properties?["last_name"] as? String ?? properties?["lastName"] as? String
+
+        // Track $identify event for identity resolution
+        var identifyData: EventData = [
+            "user_id": userId,
+            "anonymous_id": anonymousId,
+            "properties": properties ?? [:]
+        ]
+        // Include PII fields at root level for server-side identity resolution
+        if let email = email { identifyData["email"] = email }
+        if let phone = phone { identifyData["phone"] = phone }
+        if let firstName = firstName { identifyData["first_name"] = firstName }
+        if let lastName = lastName { identifyData["last_name"] = lastName }
+
+        await track("$identify", eventData: identifyData)
+
+        // Fetch and merge web attribution if email is provided
+        let emailForAttribution = email ?? (userId.contains("@") ? userId : nil)
+        if let emailForLookup = emailForAttribution {
+            await fetchAndMergeWebAttribution(email: emailForLookup)
+        }
     }
 
     /// Fetch web attribution data for user and merge into mobile session
@@ -801,7 +808,16 @@ public class DatalyrSDK {
         var attrs: [String: String] = [:]
 
         func set(_ key: String, _ value: Any?) {
-            if let v = value, "\(v)" != "" { attrs[key] = "\(v)" }
+            guard let v = value else { return }
+            if v is NSNull { return }
+            let str: String
+            if let s = v as? String {
+                str = s
+            } else {
+                str = "\(v)"
+            }
+            guard !str.isEmpty, str != "nil", str != "<null>" else { return }
+            attrs[key] = str
         }
 
         set("datalyr_id", visitorId.isEmpty ? nil : visitorId)
@@ -845,7 +861,16 @@ public class DatalyrSDK {
         var attrs: [String: String] = [:]
 
         func set(_ key: String, _ value: Any?) {
-            if let v = value, "\(v)" != "" { attrs[key] = "\(v)" }
+            guard let v = value else { return }
+            if v is NSNull { return }
+            let str: String
+            if let s = v as? String {
+                str = s
+            } else {
+                str = "\(v)"
+            }
+            guard !str.isEmpty, str != "nil", str != "<null>" else { return }
+            attrs[key] = str
         }
 
         // Reserved attributes ($ prefix)
@@ -1361,11 +1386,11 @@ public class DatalyrSDK {
     
     /// Check and track app install
     private func checkAndTrackInstall() async {
-        let isFirstLaunch = await DatalyrStorage.shared.getString(StorageKeys.firstLaunchTime) == nil
+        let isFirstLaunch = await DatalyrStorage.shared.getString("datalyr_app_install_tracked") == nil
         
         if isFirstLaunch {
             let installTime = DateFormatter.iso8601.string(from: Date())
-            await DatalyrStorage.shared.setString(StorageKeys.firstLaunchTime, value: installTime)
+            await DatalyrStorage.shared.setString("datalyr_app_install_tracked", value: installTime)
             
             var installData: EventData = [
                 "platform": "ios",

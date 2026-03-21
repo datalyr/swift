@@ -46,8 +46,8 @@ internal func validateEventName(_ eventName: String) -> Bool {
         return false
     }
     
-    // Check for valid characters (alphanumeric, underscore, hyphen, dot)
-    let validCharacterSet = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-."))
+    // Check for valid characters (alphanumeric, underscore, hyphen, dot, $ for internal events)
+    let validCharacterSet = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-.$"))
     return eventName.rangeOfCharacter(from: validCharacterSet.inverted) == nil
 }
 

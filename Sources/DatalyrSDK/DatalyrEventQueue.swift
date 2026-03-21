@@ -63,27 +63,28 @@ internal class DatalyrEventQueue {
     /// Add an event to the queue
     func enqueue(_ payload: EventPayload) async {
         let queuedEvent = QueuedEvent(payload: payload)
-        
-        queueLock.lock()
-        defer { queueLock.unlock() }
-        
-        // Check queue size limit
-        if queue.count >= config.maxQueueSize {
-            debugLog("Queue is full, removing oldest event")
-            queue.removeFirst()
-        }
-        
-        queue.append(queuedEvent)
-        debugLog("Event queued: \(payload.eventName) (queue size: \(queue.count))")
-        
-        // Persist to storage
-        await persistQueue()
-        
-        // Try to flush immediately if online
-        if isOnline && !isProcessing {
-            Task {
-                await processQueue()
+
+        // Add to queue under lock
+        let shouldFlush: Bool = queueLock.withLock {
+            // Check queue size limit
+            if queue.count >= config.maxQueueSize {
+                debugLog("Queue is full, removing oldest event")
+                queue.removeFirst()
             }
+
+            queue.append(queuedEvent)
+            debugLog("Event queued: \(payload.eventName) (queue size: \(queue.count))")
+
+            // Check if we should flush (while still holding lock)
+            return _isOnline && !_isProcessing
+        }
+
+        // Persist to storage (outside lock)
+        await persistQueue()
+
+        // Try to flush immediately if online
+        if shouldFlush {
+            await processQueue()
         }
     }
     
@@ -114,27 +115,22 @@ internal class DatalyrEventQueue {
     
     /// Get queue statistics
     func getStats() -> QueueStats {
-        queueLock.lock()
-        defer { queueLock.unlock() }
-        
-        let oldestEventAge: TimeInterval? = queue.first.map { queuedEvent in
-            Date().timeIntervalSince1970 - queuedEvent.timestamp
+        return queueLock.withLock {
+            let oldestEventAge: TimeInterval? = queue.first.map { queuedEvent in
+                Date().timeIntervalSince1970 - queuedEvent.timestamp
+            }
+            return QueueStats(
+                queueSize: queue.count,
+                isProcessing: _isProcessing,
+                isOnline: _isOnline,
+                oldestEventAge: oldestEventAge
+            )
         }
-        
-        return QueueStats(
-            queueSize: queue.count,
-            isProcessing: isProcessing,
-            isOnline: isOnline,
-            oldestEventAge: oldestEventAge
-        )
     }
-    
+
     /// Clear the queue
     func clear() async {
-        queueLock.lock()
-        queue.removeAll()
-        queueLock.unlock()
-        
+        queueLock.withLock { queue.removeAll() }
         await storage.removeValue(StorageKeys.eventQueue)
         debugLog("Event queue cleared")
     }
@@ -166,20 +162,15 @@ internal class DatalyrEventQueue {
     
     /// Initialize the queue by loading persisted events
     private func initializeQueue() async {
-        do {
-            if let persistedQueue = await storage.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) {
-                queueLock.lock()
+        if let persistedQueue = await storage.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) {
+            let count = queueLock.withLock {
                 queue = persistedQueue
-                queueLock.unlock()
-                
-                debugLog("Loaded \(queue.count) events from storage")
+                return queue.count
             }
-            
-            // Start the flush timer
-            startFlushTimer()
-        } catch {
-            errorLog("Failed to initialize event queue", error: error)
+            debugLog("Loaded \(count) events from storage")
         }
+
+        startFlushTimer()
     }
     
     /// Process the queue and send events
@@ -195,71 +186,60 @@ internal class DatalyrEventQueue {
 
         debugLog("Processing queue with \(queueLock.withLock { queue.count }) events")
 
-        await processingQueue.asyncTask {
-            await self.processQueueInternal()
-        }
+        await processQueueInternal()
 
-        isProcessing = false
+        queueLock.withLock { _isProcessing = false }
     }
     
     /// Internal queue processing logic
     private func processQueueInternal() async {
-        var eventsToProcess: [QueuedEvent] = []
-        
         // Get events to process (up to batch size)
-        queueLock.lock()
-        let batchSize = min(config.batchSize, queue.count)
-        eventsToProcess = Array(queue.prefix(batchSize))
-        queueLock.unlock()
-        
+        let eventsToProcess: [QueuedEvent] = queueLock.withLock {
+            let batchSize = min(config.batchSize, queue.count)
+            return Array(queue.prefix(batchSize))
+        }
+
         var processedEvents: [QueuedEvent] = []
-        
+
         // Process events
         for queuedEvent in eventsToProcess {
             let response = await httpClient.sendEvent(queuedEvent.payload)
-            
+
             if response.success {
                 debugLog("Event sent successfully: \(queuedEvent.payload.eventName)")
                 processedEvents.append(queuedEvent)
             } else {
-                // Increment retry count
                 var updatedEvent = queuedEvent
                 updatedEvent.retryCount += 1
-                
+
                 if updatedEvent.retryCount >= config.maxRetryCount {
                     debugLog("Event exceeded max retries, dropping: \(queuedEvent.payload.eventName)")
-                    processedEvents.append(queuedEvent) // Remove from queue
+                    processedEvents.append(queuedEvent)
                 } else {
                     debugLog("Event failed, will retry: \(queuedEvent.payload.eventName) (attempt \(updatedEvent.retryCount))")
-                    // Update the event in the queue
-                    queueLock.lock()
-                    if let index = queue.firstIndex(where: { $0.payload.eventId == queuedEvent.payload.eventId }) {
-                        queue[index] = updatedEvent
+                    queueLock.withLock {
+                        if let index = queue.firstIndex(where: { $0.payload.eventId == queuedEvent.payload.eventId }) {
+                            queue[index] = updatedEvent
+                        }
                     }
-                    queueLock.unlock()
                 }
             }
         }
-        
+
         // Remove successfully processed events from queue
         if !processedEvents.isEmpty {
-            queueLock.lock()
-            queue.removeAll { processedEvent in
-                processedEvents.contains { $0.payload.eventId == processedEvent.payload.eventId }
+            queueLock.withLock {
+                queue.removeAll { processedEvent in
+                    processedEvents.contains { $0.payload.eventId == processedEvent.payload.eventId }
+                }
             }
-            queueLock.unlock()
-            
-            // Persist updated queue
             await persistQueue()
         }
     }
-    
+
     /// Persist queue to storage
     private func persistQueue() async {
-        queueLock.lock()
-        let currentQueue = queue
-        queueLock.unlock()
-        
+        let currentQueue = queueLock.withLock { queue }
         await storage.setCodableArray(StorageKeys.eventQueue, value: currentQueue)
     }
     

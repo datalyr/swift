@@ -440,18 +440,31 @@ public struct AnyCodable: Codable {
     
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        
+
         switch value {
         case let intValue as Int:
             try container.encode(intValue)
         case let doubleValue as Double:
             try container.encode(doubleValue)
         case let floatValue as Float:
-            try container.encode(floatValue)
+            try container.encode(Double(floatValue))
         case let stringValue as String:
             try container.encode(stringValue)
         case let boolValue as Bool:
             try container.encode(boolValue)
+        case let dateValue as Date:
+            try container.encode(ISO8601DateFormatter().string(from: dateValue))
+        case let urlValue as URL:
+            try container.encode(urlValue.absoluteString)
+        case let numberValue as NSNumber:
+            // NSNumber can wrap bool, int, or double
+            if CFGetTypeID(numberValue) == CFBooleanGetTypeID() {
+                try container.encode(numberValue.boolValue)
+            } else if numberValue.doubleValue == Double(numberValue.intValue) {
+                try container.encode(numberValue.intValue)
+            } else {
+                try container.encode(numberValue.doubleValue)
+            }
         case let arrayValue as [Any]:
             let codableArray = arrayValue.map { AnyCodable($0) }
             try container.encode(codableArray)
@@ -460,8 +473,11 @@ public struct AnyCodable: Codable {
             try container.encode(codableDict)
         case is NSNull:
             try container.encodeNil()
-        default:
+        case let optional as Any? where optional == nil:
             try container.encodeNil()
+        default:
+            // Convert unknown types to string rather than dropping
+            try container.encode("\(value)")
         }
     }
 }

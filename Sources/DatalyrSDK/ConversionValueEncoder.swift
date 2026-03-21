@@ -1,7 +1,10 @@
 import Foundation
+#if canImport(StoreKit)
 import StoreKit
+#endif
 
 // MARK: - SKAdNetwork 4.0 Coarse Value
+#if os(iOS)
 @available(iOS 16.1, *)
 public enum SKANCoarseValue: String {
     case low = "low"
@@ -17,6 +20,13 @@ public enum SKANCoarseValue: String {
         }
     }
 }
+#else
+public enum SKANCoarseValue: String {
+    case low = "low"
+    case medium = "medium"
+    case high = "high"
+}
+#endif
 
 /// Result from conversion value encoding (SKAN 4.0 compatible)
 public struct ConversionResult {
