@@ -999,7 +999,7 @@ Public types available after importing `DatalyrSDK`:
 | `AppleSearchAdsAttribution` | Apple Search Ads attribution fields |
 | `DeferredDeepLinkResult` | Deferred deep link result |
 | `EventPayload` | Complete event payload |
-| `FingerprintData` | Device fingerprint data |
+| `DeviceContext` | Device context data |
 | `DeviceInfo` | Device information |
 | `SDKStatus` | SDK status with queue stats and attribution |
 | `QueueStats` | Event queue statistics |

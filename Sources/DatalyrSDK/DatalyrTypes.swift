@@ -116,11 +116,18 @@ public struct EventPayload: Codable {
     public let eventId: String
     public let eventName: String
     public let eventData: [String: AnyCodable]?
-    public let fingerprintData: FingerprintData?
+    public let deviceContext: DeviceContext?
     public let source: String
     public let timestamp: String
     public let userId: String?
     public let userProperties: [String: AnyCodable]?
+
+    private enum CodingKeys: String, CodingKey {
+        case workspaceId, visitorId, anonymousId, sessionId
+        case eventId, eventName, eventData
+        case deviceContext = "fingerprintData"
+        case source, timestamp, userId, userProperties
+    }
     
     public init(
         workspaceId: String,
@@ -130,7 +137,7 @@ public struct EventPayload: Codable {
         eventId: String,
         eventName: String,
         eventData: EventData? = nil,
-        fingerprintData: FingerprintData? = nil,
+        deviceContext: DeviceContext? = nil,
         source: String = "mobile_app",
         timestamp: String = ISO8601DateFormatter().string(from: Date()),
         userId: String? = nil,
@@ -143,7 +150,7 @@ public struct EventPayload: Codable {
         self.eventId = eventId
         self.eventName = eventName
         self.eventData = eventData?.mapValues { AnyCodable($0) }
-        self.fingerprintData = fingerprintData
+        self.deviceContext = deviceContext
         self.source = source
         self.timestamp = timestamp
         self.userId = userId
@@ -151,10 +158,10 @@ public struct EventPayload: Codable {
     }
 }
 
-// MARK: - Device Fingerprinting
+// MARK: - Device Context
 
-/// Device fingerprint data
-public struct FingerprintData: Codable {
+/// Device context data
+public struct DeviceContext: Codable {
     public let deviceId: String?
     public let deviceInfo: DeviceInfo?
     

@@ -284,10 +284,10 @@ internal class DatalyrHTTPClient {
         var properties: [String: Any] = sanitizeForJSON(payload.eventData ?? [:])
         properties["sessionId"] = payload.sessionId
         properties["source"] = payload.source ?? "mobile_app"
-        if let fingerprint = payload.fingerprintData,
-           let fpData = try? JSONEncoder().encode(fingerprint),
-           let fpDict = try? JSONSerialization.jsonObject(with: fpData) as? [String: Any] {
-            properties["fingerprint"] = fpDict
+        if let deviceCtx = payload.deviceContext,
+           let ctxData = try? JSONEncoder().encode(deviceCtx),
+           let ctxDict = try? JSONSerialization.jsonObject(with: ctxData) as? [String: Any] {
+            properties["fingerprint"] = ctxDict
         }
         result["properties"] = properties
 

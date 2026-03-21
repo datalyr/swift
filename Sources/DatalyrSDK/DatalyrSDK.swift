@@ -80,7 +80,7 @@ public class DatalyrSDK {
         
         // Validate configuration
         guard !config.apiKey.isEmpty else {
-            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v2.1.2")
+            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v2.1.3")
         }
         
         // workspaceId is now optional (for backward compatibility)
@@ -1276,14 +1276,14 @@ public class DatalyrSDK {
     private func createEventPayload(eventName: String, eventData: EventData?) async -> EventPayload {
         let eventId = generateUUID()
         let timestamp = DateFormatter.iso8601.string(from: Date())
-        let fingerprintData = await createFingerprintData()
+        let deviceContext = await createDeviceContext()
 
         var enrichedEventData = eventData ?? [:]
 
         // Add standard properties
         enrichedEventData["platform"] = "ios"
         enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
-        enrichedEventData["sdk_version"] = "2.1.2"
+        enrichedEventData["sdk_version"] = "2.1.3"
 
         // App info from Bundle
         let bundle = Bundle.main
@@ -1343,7 +1343,7 @@ public class DatalyrSDK {
             eventId: eventId,
             eventName: eventName,
             eventData: enrichedEventData,
-            fingerprintData: fingerprintData,
+            deviceContext: deviceContext,
             source: "mobile_app",
             timestamp: timestamp,
             userId: currentUserId,
@@ -1394,7 +1394,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "2.1.2",
+                "sdk_version": "2.1.3",
                 "install_time": installTime
             ]
             

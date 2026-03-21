@@ -179,14 +179,14 @@ internal func getCarrierName() -> String? {
     return nil
 }
 
-// MARK: - Fingerprint Data
+// MARK: - Device Context
 
-/// Create device fingerprint data
-internal func createFingerprintData() async -> FingerprintData {
+/// Create device context data
+internal func createDeviceContext() async -> DeviceContext {
     let deviceId = await getOrCreateDeviceId()
     let deviceInfo = getDeviceInfo()
-    
-    return FingerprintData(
+
+    return DeviceContext(
         deviceId: deviceId,
         deviceInfo: deviceInfo
     )
