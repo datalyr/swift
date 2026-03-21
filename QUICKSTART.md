@@ -144,13 +144,9 @@ When `enableAutoEvents` is `true` (default), these events fire without any code:
 
 | Event | Trigger |
 |---|---|
-| `app_install` | First app open ever |
-| `app_open` | App launches / comes to foreground |
-| `app_background` | App enters background |
-| `app_foreground` | App returns from background |
-| `app_update` | App version changes |
+| `app_install` | First app open ever (includes attribution data) |
 | `session_start` | New session begins |
-| `session_end` | 30 min inactivity timeout |
+| `session_end` | 30 min inactivity timeout or app terminated |
 
 **Links:** [iOS SDK Docs](https://docs.datalyr.com/sdks/mobile#ios-sdk-swift) | [GitHub](https://github.com/datalyr/swift)
 
@@ -991,7 +987,7 @@ Purchases, renewals, cancellations, expirations, billing issues, refunds, trial 
 ### Technical
 
 **What gets tracked automatically?**
-`app_install`, `app_open`, `app_background`, `app_foreground`, `app_update`, `session_start`, `session_end`.
+`app_install`, `session_start`, `session_end`.
 
 **Will Datalyr slow down my app?**
 No. Events batch (default 10 events or 10 seconds) and queue offline. Minimal footprint.

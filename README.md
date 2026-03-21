@@ -950,15 +950,10 @@ let config = DatalyrConfig(
 
 | Event | Trigger |
 |-------|---------|
-| `app_install` | First app open |
-| `app_open` | App launch |
-| `app_background` | App enters background |
-| `app_foreground` | App returns to foreground |
-| `app_update` | App version changes |
+| `app_install` | First app open (includes attribution data) |
 | `session_start` | New session begins |
-| `session_end` | Session expires (configurable timeout, default 30 min inactivity) |
-| `pageview` | Screen view (when `autoTrackScreenViews: true` or manual `screen()`) |
-| `screen_end` | Previous screen dismissed (includes `view_duration`) |
+| `session_end` | 30 min inactivity timeout or app terminated |
+| `pageview` | Screen view (via `screen()` method) |
 
 ---
 
