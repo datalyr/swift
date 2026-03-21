@@ -22,13 +22,13 @@ That's all you need. Only the API key is required -- `workspaceId` is no longer 
 
 1. In Xcode, select **File > Add Package Dependencies**
 2. Enter the repository URL: `https://github.com/datalyr/swift`
-3. Select version **1.0.2** or later
+3. Select version **2.1.3** or later
 4. Add **DatalyrSDK** to your app target
 
 Or in `Package.swift`:
 ```swift
 dependencies: [
-  .package(url: "https://github.com/datalyr/swift", from: "1.0.2")
+  .package(url: "https://github.com/datalyr/swift", from: "2.1.3")
 ]
 ```
 
@@ -36,7 +36,7 @@ dependencies: [
 
 Add to your `Podfile`:
 ```ruby
-pod 'DatalyrSwift', '~> 1.0.2'
+pod 'DatalyrSwift', '~> 2.1.3'
 ```
 
 Then run:
