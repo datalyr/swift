@@ -821,9 +821,12 @@ public class DatalyrSDK {
         set("gclid", attribution.gclid)
         set("ttclid", attribution.ttclid)
         set("idfa", advertiser?["idfa"])
-        if let attRaw = advertiser?["att_status"], let attInt = Int(attRaw) {
-            let statusMap: [Int: String] = [0: "notDetermined", 1: "restricted", 2: "denied", 3: "authorized"]
-            set("att_status", statusMap[attInt] ?? attRaw)
+        if let attRaw = advertiser?["att_status"] {
+            let attInt = (attRaw as? Int) ?? Int("\(attRaw)")
+            if let attInt = attInt {
+                let statusMap: [Int: String] = [0: "notDetermined", 1: "restricted", 2: "denied", 3: "authorized"]
+                set("att_status", statusMap[attInt] ?? "\(attRaw)")
+            }
         }
 
         return attrs
