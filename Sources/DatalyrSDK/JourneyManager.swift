@@ -23,6 +23,7 @@ public struct TouchAttribution: Codable {
     public var ttclid: String?
     public var gbraid: String?
     public var wbraid: String?
+    public var oppref: String?
 
     // LYR tag
     public var lyr: String?

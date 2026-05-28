@@ -349,7 +349,7 @@ Returns an `AttributionData` struct with these fields:
 | Install | `installTime`, `firstOpenTime` |
 | Datalyr LYR | `lyr`, `datalyr`, `dlTag`, `dlCampaign` |
 | UTM | `utmSource`, `utmMedium`, `utmCampaign`, `utmTerm`, `utmContent`, `utmId`, `utmSourcePlatform`, `utmCreativeFormat`, `utmMarketingTactic` |
-| Click IDs | `fbclid`, `ttclid`, `gclid`, `wbraid`, `gbraid`, `twclid`, `liClickId`, `msclkid` |
+| Click IDs | `fbclid`, `ttclid`, `gclid`, `wbraid`, `gbraid`, `oppref`, `twclid`, `liClickId`, `msclkid` |
 | Partner | `partnerId`, `affiliateId`, `referrerId`, `sourceId` |
 | Campaign | `campaignId`, `adId`, `adsetId`, `creativeId`, `placementId`, `keyword`, `matchtype`, `network`, `device` |
 | Standard | `campaignSource`, `campaignMedium`, `campaignName`, `campaignTerm`, `campaignContent` |
@@ -599,6 +599,7 @@ Call after `DatalyrSDK.shared.initialize()` completes. If using ATT, call again 
 | `fbclid` | Meta click ID from the ad URL |
 | `gclid` | Google click ID from the ad URL |
 | `ttclid` | TikTok click ID from the ad URL |
+| `oppref` | OpenAI Ads click ID from the ad URL |
 | `idfa` | Apple advertising ID (only if ATT authorized) |
 | `att_status` | App Tracking Transparency status (`0`-`3`) |
 
@@ -633,6 +634,7 @@ Call after configuring the Purchases SDK and before the first purchase. If using
 | `fbclid` | Meta click ID from the ad URL |
 | `gclid` | Google click ID from the ad URL |
 | `ttclid` | TikTok click ID from the ad URL |
+| `oppref` | OpenAI Ads click ID from the ad URL |
 | `wbraid` | Google web-to-app click ID |
 | `gbraid` | Google app click ID |
 | `network` | Ad network name |

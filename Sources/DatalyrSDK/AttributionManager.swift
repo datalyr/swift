@@ -18,7 +18,10 @@ internal let ATTRIBUTION_PARAMS = [
     
     // Google Ads
     "gclid", "wbraid", "gbraid", "dclid",
-    
+
+    // OpenAI Ads
+    "oppref",
+
     // UTM Parameters (Standard)
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "utm_id", "utm_source_platform", "utm_creative_format", "utm_marketing_tactic",
@@ -185,6 +188,7 @@ internal class AttributionManager {
         attributionData.fbclid = parameters["fbclid"] ?? attributionData.fbclid
         attributionData.ttclid = parameters["ttclid"] ?? parameters["tt_click_id"] ?? parameters["tiktok_click_id"] ?? attributionData.ttclid
         attributionData.gclid = parameters["gclid"] ?? attributionData.gclid
+        attributionData.oppref = parameters["oppref"] ?? attributionData.oppref
         attributionData.twclid = parameters["twclid"] ?? attributionData.twclid
         attributionData.liClickId = parameters["li_click_id"] ?? attributionData.liClickId
         attributionData.msclkid = parameters["msclkid"] ?? attributionData.msclkid
@@ -278,6 +282,9 @@ internal class AttributionManager {
         if attributionData.ttclid == nil, let ttclid = webAttribution["ttclid"] as? String {
             attributionData.ttclid = ttclid
         }
+        if attributionData.oppref == nil, let oppref = webAttribution["oppref"] as? String {
+            attributionData.oppref = oppref
+        }
 
         // Merge UTM parameters
         if attributionData.utmSource == nil, let utmSource = webAttribution["utm_source"] as? String {
@@ -321,11 +328,12 @@ internal class AttributionManager {
                            attributionData.gclid != nil ||
                            attributionData.lyr != nil
         
-        let source = attributionData.utmSource ?? 
-                    attributionData.campaignSource ?? 
+        let source = attributionData.utmSource ??
+                    attributionData.campaignSource ??
                     (attributionData.fbclid != nil ? "facebook" : nil) ??
                     (attributionData.gclid != nil ? "google" : nil) ??
                     (attributionData.ttclid != nil ? "tiktok" : nil) ??
+                    (attributionData.oppref != nil ? "openai" : nil) ??
                     "organic"
         
         let campaign = attributionData.utmCampaign ?? 
@@ -337,6 +345,7 @@ internal class AttributionManager {
         if let fbclid = attributionData.fbclid { clickIds.append("fbclid:\(fbclid)") }
         if let gclid = attributionData.gclid { clickIds.append("gclid:\(gclid)") }
         if let ttclid = attributionData.ttclid { clickIds.append("ttclid:\(ttclid)") }
+        if let oppref = attributionData.oppref { clickIds.append("oppref:\(oppref)") }
         if let lyr = attributionData.lyr { clickIds.append("lyr:\(lyr)") }
         
         return (

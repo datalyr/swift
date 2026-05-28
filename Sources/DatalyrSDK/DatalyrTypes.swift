@@ -234,6 +234,7 @@ public struct AttributionData: Codable {
     public var gclid: String?
     public var wbraid: String?
     public var gbraid: String?
+    public var oppref: String?
     public var twclid: String?
     public var liClickId: String?
     public var msclkid: String?
