@@ -179,6 +179,32 @@ internal func getCarrierName() -> String? {
     return nil
 }
 
+/// Current ISO-3166-1 alpha-2 country code derived from device locale.
+///
+/// Server webhooks (Superwall/RevenueCat) have NULL geo on their own row; only
+/// the matched web visitor's lander pageview carries geo via the bridge. For
+/// users who skip a web prelander entirely, device locale is the only
+/// zero-config country signal. meta.js USER_DATA_PATHS.country picks up
+/// top-level `country` and hashes it for CAPI's `country` match key.
+///
+/// Prefers Locale.region.identifier (iOS 16+); falls back to parsing
+/// Locale.current.identifier ("en_US" → "US") for older OS versions. Returns
+/// nil for locales without a region tag (e.g. plain "en").
+internal func currentCountryCode() -> String? {
+    if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) {
+        if let region = Locale.current.region?.identifier, region.count == 2 {
+            return region.uppercased()
+        }
+    }
+    // Fallback: identifier is "<language>_<REGION>[@calendar=...]"
+    let id = Locale.current.identifier
+    let beforeAt = id.split(separator: "@").first.map(String.init) ?? id
+    let parts = beforeAt.split { $0 == "_" || $0 == "-" }
+    guard parts.count >= 2 else { return nil }
+    let region = String(parts[1]).uppercased()
+    return region.count == 2 && region.allSatisfy({ $0.isLetter }) ? region : nil
+}
+
 // MARK: - Device Context
 
 /// Create device context data

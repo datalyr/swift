@@ -1313,6 +1313,17 @@ public class DatalyrSDK {
         enrichedEventData["timezone"] = TimeZone.current.identifier
         enrichedEventData["carrier"] = getCarrierName()
 
+        // ISO-3166-1 alpha-2 country derived from the device locale. For users
+        // who skip a web prelander entirely (no web→app bridge to inherit geo
+        // from), this is the only zero-config country signal — meta.js
+        // USER_DATA_PATHS.country picks up top-level `country` as its first
+        // match key and hashes for CAPI. Prefer Locale.region.identifier
+        // (iOS 16+ canonical API); fall back to parsing Locale.current.identifier
+        // ("en_US" → "US") for older OS versions.
+        if let country = currentCountryCode() {
+            enrichedEventData["country"] = country
+        }
+
         // Apple Search Ads attribution if available
         if let asaData = platformIntegrationManager?.getAppleSearchAdsData() {
             enrichedEventData.merge(asaData) { (_, new) in new }
