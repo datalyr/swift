@@ -1283,7 +1283,7 @@ public class DatalyrSDK {
         // Add standard properties
         enrichedEventData["platform"] = "ios"
         enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
-        enrichedEventData["sdk_version"] = "2.1.3"
+        enrichedEventData["sdk_version"] = "2.1.4"
 
         // App info from Bundle
         let bundle = Bundle.main
@@ -1405,7 +1405,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "2.1.3",
+                "sdk_version": "2.1.4",
                 "install_time": installTime
             ]
             
