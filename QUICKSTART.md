@@ -593,7 +593,7 @@ You can create multiple rules for the same event to send to multiple platforms.
 
 ## Step 8: Set Up App Campaigns (Web-to-App)
 
-This is the core of how Datalyr works for mobile apps. Run your mobile app ads as **web campaigns** (Meta Sales, TikTok Traffic, Google Ads) through your own domain. Ad platforms treat these as regular web campaigns -- **no SKAN restrictions, no ATT requirements, no adset limits.**
+This is the core of how Datalyr works for mobile apps. Run your mobile app ads as **web campaigns** (Meta Sales, TikTok Traffic, Google Ads) through your own domain. Because these are real web campaigns landing on a page you own, ad platforms treat them as regular website traffic — **full-funnel attribution and no per-campaign adset cap.**
 
 ### How It Works
 
@@ -730,7 +730,7 @@ Automatic redirect -- no visible content, user goes straight to App Store:
 ```
 9. Launch
 
-No SKAN restrictions. No ATT prompt required. No adset limits.
+Privacy-compliant. No per-campaign adset cap. Unlimited optimization signals.
 
 #### TikTok
 
