@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.1.4] - 2026-05-31
+## [2.1.5] - 2026-05-31
 
 ### Changed
 - **Web→app email attribution now emits the canonical `$web_attribution_matched` event** (with `match_method: "email"`) instead of the separate `$web_attribution_merged`. The email/`identify()` match path and the IP/deferred match path now fire the same event name, distinguished by `match_method` (`"email"` vs `"ip"`), so the server-side attribution bridges (Meta CAPI recovery, trackable-link `lyr`) recover web attribution for webhook conversions from email matches too. No API changes.
