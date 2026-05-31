@@ -1411,7 +1411,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "2.1.4",
+                "sdk_version": "2.1.5",
                 "install_time": installTime
             ]
             
