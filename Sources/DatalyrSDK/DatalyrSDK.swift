@@ -429,7 +429,8 @@ public class DatalyrSDK {
             // Merge web attribution into current session
             var mergedData: [String: Any] = [
                 "web_visitor_id": attribution["visitor_id"] ?? "",
-                "web_user_id": attribution["user_id"] ?? ""
+                "web_user_id": attribution["user_id"] ?? "",
+                "match_method": "email"
             ]
 
             // Add click IDs
@@ -449,7 +450,12 @@ public class DatalyrSDK {
             if let utmTerm = attribution["utm_term"] { mergedData["utm_term"] = utmTerm }
             if let timestamp = attribution["timestamp"] { mergedData["web_timestamp"] = timestamp }
 
-            await track("$web_attribution_merged", eventData: mergedData)
+            // Canonical web→app bridge event — email and IP paths both fire
+            // $web_attribution_matched, distinguished by match_method, so server
+            // bridges (Meta CAPI recovery, lyr) and dashboards see one event name.
+            // (Previously this path fired $web_attribution_merged, which no reader
+            // consumed — email-only matches never bridged webhook conversions.)
+            await track("$web_attribution_matched", eventData: mergedData)
 
             // Update attribution manager with web data
             await attributionManager?.mergeWebAttribution(attribution)
