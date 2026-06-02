@@ -1,5 +1,6 @@
 import Foundation
 import StoreKit
+import CryptoKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -32,7 +33,8 @@ public class DatalyrSDK {
     internal var config: DatalyrConfig?
     private var httpClient: DatalyrHTTPClient?
     private var eventQueue: DatalyrEventQueue?
-    private var attributionManager: AttributionManager?
+    // internal (not private) so DatalyrSDK+Public.handleDeepLink can reach the real parser.
+    var attributionManager: AttributionManager?
     private var autoEventsManager: AutoEventsManager?
     
     // Session and user data
@@ -378,6 +380,17 @@ public class DatalyrSDK {
     /// Fetch web attribution data for user and merge into mobile session
     /// Called automatically during identify() if email is provided
     private func fetchAndMergeWebAttribution(email: String) async {
+        // Web→app attribution is a one-time, install-time fact: a user either had a
+        // web touch before installing or didn't, and that doesn't change. So resolve
+        // it AT MOST ONCE per email per install. Without this, every identify(email)
+        // — which apps call on each session/launch — fires a fresh /attribution/lookup
+        // (measured: ~100k/day from a single app, 99.7% misses). Skip if already done.
+        let emailHash = Self.sha256Hex(email)
+        if await webAttributionAlreadyChecked(emailHash) {
+            debugLog("Web attribution already checked this install for this email; skipping lookup")
+            return
+        }
+
         guard let apiKey = config?.apiKey else {
             debugLog("API key not available for web attribution fetch")
             return
@@ -408,8 +421,13 @@ public class DatalyrSDK {
 
             if httpResponse.statusCode != 200 {
                 debugLog("Failed to fetch web attribution: \(httpResponse.statusCode)")
-                return
+                return  // transient/non-200 — do NOT mark checked, so it retries next identify
             }
+
+            // Definitive 200 answer (found or not). Record it so repeated identify(email)
+            // calls don't re-run this immutable, install-time lookup. Only after a 200 —
+            // network/non-200 errors fall through and retry on the next identify.
+            await markWebAttributionChecked(emailHash)
 
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let found = json["found"] as? Bool,
@@ -466,6 +484,32 @@ public class DatalyrSDK {
             errorLog("Error fetching web attribution: \(error.localizedDescription)")
             // Non-blocking - continue even if attribution fetch fails
         }
+    }
+
+    // MARK: - Web attribution dedup (once per email per install)
+
+    private static func sha256Hex(_ s: String) -> String {
+        let digest = SHA256.hash(data: Data(s.lowercased().utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Storage key: emails (hashed, no raw PII) whose web→app attribution we've
+    /// already definitively resolved/checked this install — so repeated
+    /// identify(email) calls don't re-run the immutable, install-time lookup.
+    private static let webAttributionCheckedKey = "datalyr_web_attribution_checked"
+
+    private func webAttributionAlreadyChecked(_ emailHash: String) async -> Bool {
+        guard let raw = await DatalyrStorage.shared.getString(Self.webAttributionCheckedKey) else { return false }
+        return raw.split(separator: ",").contains(where: { $0 == emailHash })
+    }
+
+    private func markWebAttributionChecked(_ emailHash: String) async {
+        let raw = await DatalyrStorage.shared.getString(Self.webAttributionCheckedKey) ?? ""
+        var hashes = raw.split(separator: ",").map(String.init)
+        guard !hashes.contains(emailHash) else { return }
+        hashes.append(emailHash)
+        if hashes.count > 20 { hashes = Array(hashes.suffix(20)) } // bound growth (rare account switches)
+        await DatalyrStorage.shared.setString(Self.webAttributionCheckedKey, value: hashes.joined(separator: ","))
     }
 
     /// Fetch deferred web attribution on first app install via IP-based matching.

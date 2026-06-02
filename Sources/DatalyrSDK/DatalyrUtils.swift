@@ -346,6 +346,11 @@ extension DateFormatter {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
         formatter.timeZone = TimeZone(abbreviation: "UTC")
+        // Pin POSIX locale + Gregorian calendar so the year/format stay stable on
+        // devices set to a non-Gregorian calendar (Buddhist/Japanese-era/Persian),
+        // which otherwise emit e.g. 2569 instead of 2026 on every timestamp.
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
         return formatter
     }()
 }
@@ -361,6 +366,7 @@ internal enum StorageKeys {
     static let userId = "datalyr_user_id"
     static let userProperties = "datalyr_user_properties"
     static let eventQueue = "datalyr_event_queue"
+    static let deadLetterQueue = "datalyr_dead_letter_queue"
     static let attributionData = "datalyr_attribution_data"
     static let firstLaunchTime = "datalyr_first_launch_time"
     static let installTracked = "datalyr_install_tracked"

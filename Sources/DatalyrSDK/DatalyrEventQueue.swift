@@ -213,7 +213,11 @@ internal class DatalyrEventQueue {
                 updatedEvent.retryCount += 1
 
                 if updatedEvent.retryCount >= config.maxRetryCount {
-                    debugLog("Event exceeded max retries, dropping: \(queuedEvent.payload.eventName)")
+                    // Don't SILENTLY drop — surface it (errorLog, not debugLog) and move
+                    // the event to a capped dead-letter store, so a sustained outage or a
+                    // bad payload can't invisibly destroy revenue/conversion events.
+                    errorLog("Event exceeded max retries (\(config.maxRetryCount)); moved to dead-letter: \(queuedEvent.payload.eventName)")
+                    await deadLetter(updatedEvent)
                     processedEvents.append(queuedEvent)
                 } else {
                     debugLog("Event failed, will retry: \(queuedEvent.payload.eventName) (attempt \(updatedEvent.retryCount))")
@@ -241,6 +245,15 @@ internal class DatalyrEventQueue {
     private func persistQueue() async {
         let currentQueue = queueLock.withLock { queue }
         await storage.setCodableArray(StorageKeys.eventQueue, value: currentQueue)
+    }
+
+    /// Park a permanently-failed event in a capped dead-letter store instead of
+    /// silently dropping it — visible (errorLog above) + recoverable for replay.
+    private func deadLetter(_ event: QueuedEvent) async {
+        var dl = (await storage.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self)) ?? []
+        dl.append(event)
+        if dl.count > 100 { dl = Array(dl.suffix(100)) }
+        await storage.setCodableArray(StorageKeys.deadLetterQueue, value: dl)
     }
     
     /// Start the periodic flush timer

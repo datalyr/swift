@@ -149,6 +149,13 @@ extension ConversionTemplate {
             "add_to_cart": EventMapping(bits: [4], revenueBits: nil, priority: 30, coarseValue: "low"),
             "begin_checkout": EventMapping(bits: [5], revenueBits: nil, priority: 50, coarseValue: "medium"),
             "signup": EventMapping(bits: [6], revenueBits: nil, priority: 20, coarseValue: "low"),
+            // Aliases for the public trackInitiateCheckout / trackCompleteRegistration /
+            // trackLead helpers, which fire these names (not the template keys) — without
+            // these, SKAN sent no conversion value (0) for those mid-funnel events. Reuse
+            // existing bits so this is collision-safe (no new bit allocation).
+            "initiate_checkout": EventMapping(bits: [5], revenueBits: nil, priority: 50, coarseValue: "medium"),
+            "complete_registration": EventMapping(bits: [6], revenueBits: nil, priority: 20, coarseValue: "low"),
+            "lead": EventMapping(bits: [6], revenueBits: nil, priority: 20, coarseValue: "low"),
             "subscribe": EventMapping(bits: [0, 1], revenueBits: [2, 3, 4], priority: 90, coarseValue: "high", lockWindow: true),
             "view_item": EventMapping(bits: [7], revenueBits: nil, priority: 10, coarseValue: "low")
         ]
@@ -178,6 +185,11 @@ extension ConversionTemplate {
             "upgrade": EventMapping(bits: [1, 5], revenueBits: [2, 3, 4], priority: 90, coarseValue: "high", lockWindow: true),
             "cancel": EventMapping(bits: [6], revenueBits: nil, priority: 20, coarseValue: "low"),
             "signup": EventMapping(bits: [7], revenueBits: nil, priority: 30, coarseValue: "low"),
+            // Aliases so subscription-template apps also get a SKAN value from the
+            // trackCompleteRegistration / trackLead helpers (reuse signup's bit).
+            // initiate_checkout is omitted — no checkout step in a subscription funnel.
+            "complete_registration": EventMapping(bits: [7], revenueBits: nil, priority: 30, coarseValue: "low"),
+            "lead": EventMapping(bits: [7], revenueBits: nil, priority: 30, coarseValue: "low"),
             "payment_method_added": EventMapping(bits: [0, 7], revenueBits: nil, priority: 50, coarseValue: "medium")
         ]
     )

@@ -404,9 +404,10 @@ public extension DatalyrSDK {
     /// Call this method from your AppDelegate or SceneDelegate when the app is opened via URL
     /// - Parameter url: The deep link URL
     func handleDeepLink(_ url: URL) async {
-        // Use the public setAttributionData method to handle deep links
-        let attributionData = getAttributionData()
-        await setAttributionData(attributionData)
+        // Parse the deep link's query/fragment (lyr / fbclid / gclid / ttclid / utm_*)
+        // and persist it. Previously this ignored `url` entirely — a no-op get/set
+        // round-trip — so ALL deep-link attribution was silently dropped.
+        await attributionManager?.handleDeepLink(url)
     }
 }
 
