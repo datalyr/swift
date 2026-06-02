@@ -29,6 +29,7 @@ internal class AutoEventsManager {
     
     // Screen tracking
     private var currentScreen: String?
+    private var previousScreen: String?
     private var screenStartTime: Date?
     
     // App version tracking
@@ -151,6 +152,11 @@ internal class AutoEventsManager {
     func recordScreenView(_ screenName: String) {
         guard config.trackScreenViews else { return }
 
+        // IOS-5: remember the prior screen BEFORE overwriting, so getScreenViewEnrichment
+        // reports a real previous_screen (it used to read currentScreen after this line
+        // set it to the current screen, so previous_screen always equalled the current).
+        self.previousScreen = self.currentScreen
+
         // Start new screen tracking
         self.currentScreen = screenName
         self.screenStartTime = Date()
@@ -176,7 +182,7 @@ internal class AutoEventsManager {
             "pageviews_in_session": session.pageviewCount
         ]
 
-        if let previousScreen = currentScreen {
+        if let previousScreen = self.previousScreen {
             enrichment["previous_screen"] = previousScreen
         }
 

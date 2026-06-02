@@ -396,7 +396,8 @@ public class DatalyrSDK {
             return
         }
 
-        debugLog("Fetching web attribution for email: \(email)")
+        // IOS-18: log the hash prefix, not the raw email (PII), even in debug.
+        debugLog("Fetching web attribution for email hash: \(emailHash.prefix(8))…")
 
         guard let url = URL(string: "https://api.datalyr.com/attribution/lookup") else {
             errorLog("Invalid attribution API URL")

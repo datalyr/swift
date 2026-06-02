@@ -196,7 +196,9 @@ internal class DatalyrHTTPClient {
         request.httpBody = requestBody
         
         if config.debug {
-            debugLog("Request body: \(String(data: requestBody, encoding: .utf8) ?? "Invalid JSON")")
+            // IOS-19: log the byte size, not the body — the payload carries PII
+            // (email/phone/name in event properties) even in debug builds.
+            debugLog("Request body: \(requestBody.count) bytes")
         }
         
         return request
