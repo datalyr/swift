@@ -127,6 +127,17 @@ internal class AutoEventsManager {
         debugLog("Session ended due to timeout", data: ["duration": sessionDuration])
     }
     
+    /// Keep the auto-events session id in lockstep with the SDK's session id.
+    /// The SDK rotates its session on reset() and on a foreground timeout; without this,
+    /// session_start/session_end and the pageview `session_id` enrichment kept emitting the
+    /// stale init-time id while event payloads carried the new one (IOS-14 divergence).
+    func updateSessionId(_ newSessionId: String) {
+        guard var session = currentSession, session.sessionId != newSessionId else { return }
+        session.sessionId = newSessionId
+        currentSession = session
+        debugLog("Auto-events session id synced", data: ["sessionId": newSessionId])
+    }
+
     /// Update session activity
     private func updateSessionActivity() {
         lastActivityTime = Date()

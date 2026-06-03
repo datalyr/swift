@@ -141,19 +141,20 @@ final class DatalyrHTTPClientTests: XCTestCase {
     // MARK: - HTTP Error Tests
 
     func testHTTPErrorTypes() {
-        // Test all error cases
-        let networkError = HTTPError.networkError(URLError(.notConnectedToInternet))
+        // Test all error cases (matches the current HTTPError enum)
+        let invalidURL = HTTPError.invalidURL
+        let invalidResponse = HTTPError.invalidResponse
         let authError = HTTPError.authenticationFailed
         let rateLimitError = HTTPError.rateLimitExceeded
-        let httpError = HTTPError.httpError(statusCode: 500, message: "Internal Server Error")
-        let encodingError = HTTPError.encodingError
+        let httpError = HTTPError.httpError(500, "Internal Server Error")
 
         // Verify error descriptions exist
-        XCTAssertFalse(networkError.localizedDescription.isEmpty)
+        XCTAssertFalse(invalidURL.localizedDescription.isEmpty)
+        XCTAssertFalse(invalidResponse.localizedDescription.isEmpty)
         XCTAssertFalse(authError.localizedDescription.isEmpty)
         XCTAssertFalse(rateLimitError.localizedDescription.isEmpty)
         XCTAssertFalse(httpError.localizedDescription.isEmpty)
-        XCTAssertFalse(encodingError.localizedDescription.isEmpty)
+        XCTAssertTrue(httpError.localizedDescription.contains("500"))
     }
 
     // MARK: - Retry Logic Tests

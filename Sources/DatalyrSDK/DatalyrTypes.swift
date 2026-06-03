@@ -331,7 +331,7 @@ public struct QueuedEvent: Codable {
 
 /// Session tracking data
 public struct SessionData: Codable {
-    public let sessionId: String
+    public var sessionId: String   // var: synced to the SDK session id on reset/timeout (IOS-14)
     public let startTime: Date
     public var lastActivityTime: Date
     public var eventCount: Int

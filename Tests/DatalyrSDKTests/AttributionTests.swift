@@ -176,19 +176,19 @@ final class AttributionTests: XCTestCase {
     // MARK: - Touch Attribution Tests
 
     func testTouchAttributionCreation() {
-        var touch = TouchAttribution()
-        touch.sessionId = "sess_123"
-        touch.timestamp = "2024-01-15T10:30:00Z"
+        // TouchAttribution timestamps are epoch-ms TimeIntervals (matches the 90-day window math).
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        var touch = TouchAttribution(
+            timestamp: nowMs,
+            expiresAt: nowMs + 90 * 24 * 60 * 60 * 1000,
+            capturedAt: nowMs
+        )
         touch.source = "google"
         touch.medium = "cpc"
         touch.campaign = "winter_sale"
-        touch.fbclid = nil
         touch.gclid = "google_click_456"
-        touch.ttclid = nil
-        touch.lyr = nil
         touch.clickIdType = "gclid"
 
-        XCTAssertEqual(touch.sessionId, "sess_123")
         XCTAssertEqual(touch.source, "google")
         XCTAssertEqual(touch.medium, "cpc")
         XCTAssertEqual(touch.campaign, "winter_sale")
@@ -196,54 +196,77 @@ final class AttributionTests: XCTestCase {
         XCTAssertEqual(touch.gclid, "google_click_456")
         XCTAssertNil(touch.ttclid)
         XCTAssertEqual(touch.clickIdType, "gclid")
+
+        // Codable round-trip — JourneyManager persists/loads TouchAttribution via storage.
+        let data = try! JSONEncoder().encode(touch)
+        let decoded = try! JSONDecoder().decode(TouchAttribution.self, from: data)
+        XCTAssertEqual(decoded.source, "google")
+        XCTAssertEqual(decoded.gclid, "google_click_456")
+        XCTAssertEqual(decoded.timestamp, nowMs)
     }
 
     // MARK: - Journey Data Tests
 
-    func testJourneyDataCreation() {
-        var firstTouch = TouchAttribution()
-        firstTouch.sessionId = "sess_1"
-        firstTouch.source = "facebook"
-        firstTouch.clickIdType = "fbclid"
-
-        var lastTouch = TouchAttribution()
-        lastTouch.sessionId = "sess_5"
-        lastTouch.source = "google"
-        lastTouch.clickIdType = "gclid"
-
-        let journeyData = JourneyData(
-            firstTouch: firstTouch,
-            lastTouch: lastTouch,
-            touchPoints: [firstTouch, lastTouch],
-            totalTouchPoints: 5
+    func testTouchPointCreation() {
+        // The journey is stored as [TouchPoint]; JourneyData was removed in the model redesign.
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        let touchPoint = TouchPoint(
+            timestamp: nowMs,
+            sessionId: "sess_1",
+            source: "facebook",
+            medium: "social",
+            campaign: "launch",
+            clickIdType: "fbclid"
         )
 
-        XCTAssertEqual(journeyData.firstTouch?.source, "facebook")
-        XCTAssertEqual(journeyData.lastTouch?.source, "google")
-        XCTAssertEqual(journeyData.touchPoints.count, 2)
-        XCTAssertEqual(journeyData.totalTouchPoints, 5)
+        XCTAssertEqual(touchPoint.sessionId, "sess_1")
+        XCTAssertEqual(touchPoint.source, "facebook")
+        XCTAssertEqual(touchPoint.campaign, "launch")
+        XCTAssertEqual(touchPoint.clickIdType, "fbclid")
+
+        // Codable round-trip — the journey array is persisted/loaded as [TouchPoint].
+        let data = try! JSONEncoder().encode(touchPoint)
+        let decoded = try! JSONDecoder().decode(TouchPoint.self, from: data)
+        XCTAssertEqual(decoded.sessionId, "sess_1")
+        XCTAssertEqual(decoded.source, "facebook")
     }
 
     // MARK: - Journey Summary Tests
 
     func testJourneySummaryCreation() {
         let summary = JourneySummary(
-            totalTouchPoints: 10,
-            uniqueSources: 3,
             hasFirstTouch: true,
             hasLastTouch: true,
+            touchpointCount: 10,
             daysSinceFirstTouch: 30,
-            daysSinceLastTouch: 2,
-            primaryClickIdType: "fbclid"
+            sources: ["facebook", "google", "tiktok"]
         )
 
-        XCTAssertEqual(summary.totalTouchPoints, 10)
-        XCTAssertEqual(summary.uniqueSources, 3)
         XCTAssertTrue(summary.hasFirstTouch)
         XCTAssertTrue(summary.hasLastTouch)
+        XCTAssertEqual(summary.touchpointCount, 10)
         XCTAssertEqual(summary.daysSinceFirstTouch, 30)
-        XCTAssertEqual(summary.daysSinceLastTouch, 2)
-        XCTAssertEqual(summary.primaryClickIdType, "fbclid")
+        XCTAssertEqual(summary.sources.count, 3)
+        XCTAssertTrue(summary.sources.contains("facebook"))
+    }
+
+    // MARK: - Deep Link Click-ID Capture
+
+    func testDeepLinkCapturesGoogleIOSClickIds() async {
+        // Regression: gbraid/wbraid (Google's iOS click-ids, sent in place of gclid under
+        // ATT/ITP) were listed in ATTRIBUTION_PARAMS and read by getRevenueCatAttributes()
+        // but never assigned in processAttributionParameters, so Google App-campaign
+        // attribution was silently dropped on every deep link.
+        let manager = AttributionManager()
+        let url = URL(string: "myapp://open?gbraid=GB_123&wbraid=WB_456&gclid=GC_789&utm_source=google&fbclid=FB_1")!
+        await manager.handleDeepLink(url)
+
+        let data = manager.getAttributionData()
+        XCTAssertEqual(data.gbraid, "GB_123", "gbraid must be captured from the deep link")
+        XCTAssertEqual(data.wbraid, "WB_456", "wbraid must be captured from the deep link")
+        XCTAssertEqual(data.gclid, "GC_789")
+        XCTAssertEqual(data.fbclid, "FB_1")
+        XCTAssertEqual(data.utmSource, "google")
     }
 
     // MARK: - Performance Tests

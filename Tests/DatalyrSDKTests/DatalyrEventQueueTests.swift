@@ -3,6 +3,15 @@ import XCTest
 
 final class DatalyrEventQueueTests: XCTestCase {
 
+    // DatalyrEventQueue rehydrates from shared persisted storage on init, so leftover
+    // events from earlier tests/runs would otherwise bleed in and break the "empty queue"
+    // and size-limit assertions. Wipe the persisted queues before every test for isolation.
+    override func setUp() async throws {
+        try await super.setUp()
+        await DatalyrStorage.shared.removeValue(StorageKeys.eventQueue)
+        await DatalyrStorage.shared.removeValue(StorageKeys.deadLetterQueue)
+    }
+
     // MARK: - Test Helpers
 
     private func createTestPayload(eventName: String = "test_event") -> EventPayload {

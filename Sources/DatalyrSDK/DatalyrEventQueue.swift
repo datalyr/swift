@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 // MARK: - Queue Configuration
 
@@ -30,9 +31,17 @@ internal class DatalyrEventQueue {
     private let config: QueueConfig
     private let storage = DatalyrStorage.shared
     private var queue: [QueuedEvent] = []
-    private var flushTimer: Timer?
+    // DispatchSourceTimer (not Timer): the queue initializes on a cooperative-pool Task with
+    // no running RunLoop, so a Timer.scheduledTimer registered there would NEVER fire. A
+    // dispatch-source timer on processingQueue fires regardless of any run loop. (IOS-6)
+    private var flushTimer: DispatchSourceTimer?
     private var _isProcessing = false
     private var _isOnline = true
+
+    // Drives _isOnline from real connectivity so the offline queue actually holds events
+    // during an outage instead of burning the retry budget toward dead-letter. (IOS-15)
+    private let pathMonitor = NWPathMonitor()
+    private let monitorQueue = DispatchQueue(label: "com.datalyr.network-monitor")
 
     // Thread-safe queue management - all mutable state protected by queueLock
     private let queueLock = NSLock()
@@ -149,12 +158,13 @@ internal class DatalyrEventQueue {
     /// Destroy the queue (cleanup)
     func destroy() {
         stopFlushTimer()
-        
+        pathMonitor.cancel()
+
         // Save current queue state
         Task {
             await persistQueue()
         }
-        
+
         debugLog("Event queue destroyed")
     }
     
@@ -171,8 +181,22 @@ internal class DatalyrEventQueue {
         }
 
         startFlushTimer()
+        startNetworkMonitor()
     }
-    
+
+    /// Drive online/offline from real network reachability (IOS-15).
+    private func startNetworkMonitor() {
+        // Don't run a live reachability monitor under XCTest — tests drive online/offline
+        // explicitly via setOnlineStatus(), and a monitor flipping the flag back to online
+        // would non-deterministically trigger real network sends mid-test.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
+
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            self?.setOnlineStatus(path.status == .satisfied)
+        }
+        pathMonitor.start(queue: monitorQueue)
+    }
+
     /// Process the queue and send events
     private func processQueue() async {
         // Atomic check-and-set to prevent concurrent processing
@@ -186,7 +210,19 @@ internal class DatalyrEventQueue {
 
         debugLog("Processing queue with \(queueLock.withLock { queue.count }) events")
 
-        await processQueueInternal()
+        // Drain in batches until the queue is empty or a batch makes no forward progress.
+        // processQueueInternal sends only one batchSize-sized batch; without this loop a
+        // manual flush() of a 100-event backlog would send just the first 10 (IOS-13).
+        // Progress check (count must strictly drop) prevents a busy-loop when events are
+        // failing-and-requeued (transient outage) — successes and dead-letters both reduce
+        // the count, retried-but-not-dropped events don't, so we stop and let the timer retry.
+        while true {
+            let before = queueLock.withLock { _isOnline && !queue.isEmpty ? queue.count : 0 }
+            guard before > 0 else { break }
+            await processQueueInternal()
+            let after = queueLock.withLock { queue.count }
+            if after >= before { break }
+        }
 
         queueLock.withLock { _isProcessing = false }
     }
@@ -256,11 +292,15 @@ internal class DatalyrEventQueue {
         await storage.setCodableArray(StorageKeys.deadLetterQueue, value: dl)
     }
     
-    /// Start the periodic flush timer
+    /// Start the periodic flush timer (dispatch-source based so it fires without a RunLoop).
     private func startFlushTimer() {
         stopFlushTimer() // Stop any existing timer
 
-        flushTimer = Timer.scheduledTimer(withTimeInterval: config.flushInterval, repeats: true) { [weak self] _ in
+        let timer = DispatchSource.makeTimerSource(queue: processingQueue)
+        timer.schedule(deadline: .now() + config.flushInterval,
+                       repeating: config.flushInterval,
+                       leeway: .seconds(1))
+        timer.setEventHandler { [weak self] in
             guard let self = self else { return }
 
             // Thread-safe check of state
@@ -274,13 +314,15 @@ internal class DatalyrEventQueue {
                 }
             }
         }
+        timer.resume()
+        flushTimer = timer
 
         debugLog("Flush timer started with interval: \(config.flushInterval)s")
     }
-    
+
     /// Stop the flush timer
     private func stopFlushTimer() {
-        flushTimer?.invalidate()
+        flushTimer?.cancel()
         flushTimer = nil
         debugLog("Flush timer stopped")
     }

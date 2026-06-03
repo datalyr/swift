@@ -608,8 +608,15 @@ public class DatalyrSDK {
         
         debugLog("Creating alias: \(newUserId) for \(previousUserId)")
         
-        // Track alias event with anonymous_id for identity resolution
-        await track("alias", eventData: [
+        // Track $alias for identity resolution. The ingest link builder
+        // (buildIdentifyAliasLinks) matches ONLY the event name `$alias` and reads
+        // camelCase `previousId`/`userId` from event_data — iOS was sending the name
+        // `alias` (no `$`) with snake_case keys, so NO visitor_user_link was ever
+        // written for an alias (alias-based identity merges were silently dropped).
+        // Emit the canonical name + both casings + anonymous_id. (Matches Node/RN.)
+        await track("$alias", eventData: [
+            "userId": newUserId,
+            "previousId": previousUserId,
             "user_id": newUserId,
             "previous_id": previousUserId,
             "anonymous_id": anonymousId
@@ -636,6 +643,7 @@ public class DatalyrSDK {
         // Generate new visitor and session IDs
         visitorId = generateUUID()
         sessionId = await refreshSessionId()
+        autoEventsManager?.updateSessionId(sessionId)  // keep auto-events session in lockstep (IOS-14)
         
         // Clear stored user data
         await DatalyrStorage.shared.removeValue(StorageKeys.userId)
@@ -1334,7 +1342,7 @@ public class DatalyrSDK {
         // Add standard properties
         enrichedEventData["platform"] = "ios"
         enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
-        enrichedEventData["sdk_version"] = "2.1.5"
+        enrichedEventData["sdk_version"] = "2.1.6"
 
         // App info from Bundle
         let bundle = Bundle.main
@@ -1456,7 +1464,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "2.1.5",
+                "sdk_version": "2.1.6",
                 "install_time": installTime
             ]
             
@@ -1504,10 +1512,13 @@ public class DatalyrSDK {
         backgroundTaskId = UIApplication.shared.beginBackgroundTask { [weak self] in
             self?.endBackgroundTask()
         }
-        
-        // Flush events before going to background
+
+        // Flush events before going to background, then release the background-task
+        // assertion immediately (it used to leak until foreground or the ~30s OS
+        // expiration, wasting the background budget even though flush finishes in <1s).
         Task {
             await flush()
+            endBackgroundTask()
         }
     }
     
@@ -1522,9 +1533,15 @@ public class DatalyrSDK {
     }
     
     @objc private func appWillTerminate() {
-        // Final flush before termination
+        // Final flush before termination, inside a background-task scope so the flush gets
+        // the OS time budget instead of being killed with the process mid-send. (Events are
+        // already persisted on enqueue, so anything not delivered here survives to next launch.)
+        let taskId = UIApplication.shared.beginBackgroundTask(withName: "datalyr.terminate.flush")
         Task {
             await flush()
+            if taskId != .invalid {
+                UIApplication.shared.endBackgroundTask(taskId)
+            }
         }
     }
     
@@ -1544,6 +1561,7 @@ public class DatalyrSDK {
         if let lastTimestamp = await DatalyrStorage.shared.getDouble(StorageKeys.sessionTimestamp) {
             if now - lastTimestamp > sessionTimeout {
                 sessionId = await refreshSessionId()
+                autoEventsManager?.updateSessionId(sessionId)  // keep auto-events session in lockstep (IOS-14)
                 debugLog("Session refreshed due to timeout")
             }
         }

@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.6] - 2026-06-03
+
+End-to-end review pass. Unblocks the build on current Xcode, restores a green test
+suite (69 tests), and fixes verified attribution-loss and event-delivery bugs.
+
+### Fixed
+- **Build no longer fails to compile on Xcode 26 / Swift 6.2.** A long mixed-type `??`
+  chain in `getAttributionSummary()` tripped the type-checker ("unable to type-check in
+  reasonable time"). Rewritten as an explicit, identical-precedence `if`/`else` ladder.
+- **Google iOS click-ids (`gbraid`/`wbraid`) were dropped from every deep link.** They
+  were parsed into `ATTRIBUTION_PARAMS` and read by `getRevenueCatAttributes()` but never
+  assigned in `processAttributionParameters` — so Google App-campaign attribution (gclid is
+  frequently absent in-app under ATT/ITP) was lost. Now captured.
+- **`alias()` wrote no identity links.** It emitted event name `alias` (not `$alias`) with
+  snake_case `previous_id`/`user_id`, but the ingest link builder matches only `$alias` and
+  reads camelCase `previousId`/`userId` — so every alias-based identity merge was silently
+  dropped (no `visitor_user_links` row). Now emits `$alias` with both casings (matches the
+  Node/RN SDKs). `identify()` was unaffected and already linked correctly.
+- **Periodic flush + session-timeout timers never fired.** They were `Timer.scheduledTimer`
+  registered on a cooperative-pool thread with no run loop. The flush safety-net is now a
+  `DispatchSourceTimer` (fires without a run loop).
+- **`flush()` drained only one batch.** A backlog larger than `batchSize` (10) left the rest
+  queued. `flush()`/processing now loops until the queue is empty or a batch makes no forward
+  progress (so a transient outage doesn't busy-loop).
+- **Offline detection was dead.** `setOnlineStatus` had no caller, so the queue never knew it
+  was offline and burned the retry budget toward dead-letter during outages. Now driven by
+  `NWPathMonitor`.
+- **`session_id` divergence.** After a `reset()` or a 30-minute foreground timeout, event
+  payloads carried the new session id while `session_start`/`session_end` and the pageview
+  `session_id` enrichment kept emitting the stale init-time id. The auto-events session id is
+  now synced to the SDK's on both paths.
+- **Background-task lifecycle.** The resign-active flush leaked its `beginBackgroundTask`
+  assertion until foreground/expiration; it now ends immediately after the flush. The
+  terminate flush now runs inside a background-task scope so it gets the OS time budget.
+
+### Notes
+- The default **SKAdNetwork conversion-value templates allocate bits 6 and 7, which overflow
+  the 6-bit (0–63) fine value and clamp to 63** — so low-value events (e.g. `signup`, `lead`,
+  `view_item`) report a *higher* fine value than a `purchase` (which tops out at 15). This is a
+  pre-existing schema-design issue that must be coordinated with the advertiser's SKAN dashboard
+  configuration; it is flagged for a deliberate redesign and intentionally not changed here.
+
 ## [2.1.5] - 2026-05-31
 
 ### Changed

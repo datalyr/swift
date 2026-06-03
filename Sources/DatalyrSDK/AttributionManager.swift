@@ -188,6 +188,11 @@ internal class AttributionManager {
         attributionData.fbclid = parameters["fbclid"] ?? attributionData.fbclid
         attributionData.ttclid = parameters["ttclid"] ?? parameters["tt_click_id"] ?? parameters["tiktok_click_id"] ?? attributionData.ttclid
         attributionData.gclid = parameters["gclid"] ?? attributionData.gclid
+        // gbraid/wbraid are Google's iOS click-ids (sent in place of gclid under ATT/ITP);
+        // they're parsed into ATTRIBUTION_PARAMS and read by getRevenueCatAttributes(), but
+        // were never assigned here — so Google App-campaign attribution was dropped on iOS.
+        attributionData.gbraid = parameters["gbraid"] ?? attributionData.gbraid
+        attributionData.wbraid = parameters["wbraid"] ?? attributionData.wbraid
         attributionData.oppref = parameters["oppref"] ?? attributionData.oppref
         attributionData.twclid = parameters["twclid"] ?? attributionData.twclid
         attributionData.liClickId = parameters["li_click_id"] ?? attributionData.liClickId
@@ -328,13 +333,25 @@ internal class AttributionManager {
                            attributionData.gclid != nil ||
                            attributionData.lyr != nil
         
-        let source = attributionData.utmSource ??
-                    attributionData.campaignSource ??
-                    (attributionData.fbclid != nil ? "facebook" : nil) ??
-                    (attributionData.gclid != nil ? "google" : nil) ??
-                    (attributionData.ttclid != nil ? "tiktok" : nil) ??
-                    (attributionData.oppref != nil ? "openai" : nil) ??
-                    "organic"
+        // Resolved as an explicit ladder rather than a long mixed-type `??` chain:
+        // the ternaries each yield String?, and chaining them with `??` makes the Swift
+        // type-checker time out ("unable to type-check in reasonable time"). Same precedence.
+        let source: String
+        if let utmSource = attributionData.utmSource {
+            source = utmSource
+        } else if let campaignSource = attributionData.campaignSource {
+            source = campaignSource
+        } else if attributionData.fbclid != nil {
+            source = "facebook"
+        } else if attributionData.gclid != nil {
+            source = "google"
+        } else if attributionData.ttclid != nil {
+            source = "tiktok"
+        } else if attributionData.oppref != nil {
+            source = "openai"
+        } else {
+            source = "organic"
+        }
         
         let campaign = attributionData.utmCampaign ?? 
                       attributionData.campaignName ?? 
