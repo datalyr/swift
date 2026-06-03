@@ -20,6 +20,22 @@ suite (69 tests), and fixes verified attribution-loss and event-delivery bugs.
   reads camelCase `previousId`/`userId` — so every alias-based identity merge was silently
   dropped (no `visitor_user_links` row). Now emits `$alias` with both casings (matches the
   Node/RN SDKs). `identify()` was unaffected and already linked correctly.
+- **Server-track wire-contract fixes** (the default `useServerTracking=true` path sends a
+  Segment-shaped body via `transformForServerAPI`):
+  - **`session_id` now travels in `context`**, where the ingest server-track handler reads
+    it. It was sent in `properties`, so ingest discarded the SDK's 30-min session and
+    synthesized its own hour-bucketed session id for every iOS event.
+  - **Web→app bridge now emits `_fbp`/`_fbc`** (the Meta cookie names the attribution
+    materialized view + postback actually extract) alongside the bare `fbp`/`fbc`. Only the
+    bare keys were sent, which no reader extracts — so recovered web touches contributed no
+    fbp/fbc to Meta CAPI, lowering match quality.
+  - Fixed the hardcoded stale library `version` in the server payload context (`2.1.1` →
+    `2.1.6`) and the `User-Agent` header (`@datalyr/swift/2.0.2` → `2.1.6`); `sdk_version`
+    in event_data was already correct.
+  - **`att_status` now serializes as a number, not a string.** It's a `UInt`, which Swift's
+    `as? Int` cast does not match, so the JSON sanitizer fell through to a string conversion
+    and shipped `"0"`/`"3"`. Confirmed against production. (Verified end-to-end with a
+    real prod iOS event.)
 - **Periodic flush + session-timeout timers never fired.** They were `Timer.scheduledTimer`
   registered on a cooperative-pool thread with no run loop. The flush safety-net is now a
   `DispatchSourceTimer` (fires without a run loop).

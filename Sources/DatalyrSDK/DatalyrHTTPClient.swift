@@ -170,7 +170,7 @@ internal class DatalyrHTTPClient {
         
         // Set headers
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("@datalyr/swift/2.0.2", forHTTPHeaderField: "User-Agent")
+        request.setValue("@datalyr/swift/2.1.6", forHTTPHeaderField: "User-Agent")
         
         // Server-side tracking uses X-API-Key header
         if config.useServerTracking {
@@ -267,7 +267,8 @@ internal class DatalyrHTTPClient {
     }
     
     /// Transform payload for server-side API format
-    private func transformForServerAPI(_ payload: EventPayload) -> [String: Any] {
+    /// (internal, not private, so the wire-contract test can assert the exact shape.)
+    func transformForServerAPI(_ payload: EventPayload) -> [String: Any] {
         var result: [String: Any] = [
             "event": payload.eventName,
             "eventId": payload.eventId,
@@ -293,11 +294,16 @@ internal class DatalyrHTTPClient {
         }
         result["properties"] = properties
 
-        // Add context with explicit source
+        // Add context with explicit source. session_id MUST live in context — the
+        // ingest server-track handler reads the session id from `context.session_id`
+        // (cloudflare/ingest/index.js handleServerTrack), NOT from properties; without
+        // it here, ingest discards the SDK's 30-min session and synthesizes its own
+        // hour-bucketed session id for every iOS event.
         var context: [String: Any] = [
             "library": "@datalyr/swift",
-            "version": "2.1.1",
-            "source": "mobile_app"
+            "version": "2.1.6",
+            "source": "mobile_app",
+            "session_id": payload.sessionId
         ]
         if let userProperties = payload.userProperties {
             context["userProperties"] = sanitizeForJSON(userProperties)
@@ -327,6 +333,10 @@ internal class DatalyrHTTPClient {
         // Primitives
         if let v = value as? String { return v }
         if let v = value as? Int { return v }
+        // UInt is NOT caught by `as? Int` in Swift — without this it falls through to the
+        // "\(value)" last-resort below and ships as a STRING. att_status (ATT status 0-3,
+        // a UInt) was being sent as "0"/"3" instead of a number. Keep it numeric.
+        if let v = value as? UInt { return Int(exactly: v) ?? Int(v & UInt(Int.max)) }
         if let v = value as? Double { return v }
         if let v = value as? Bool { return v }
         if let v = value as? Float { return Double(v) }

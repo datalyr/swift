@@ -26,6 +26,54 @@ final class DatalyrHTTPClientTests: XCTestCase {
         return DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
     }
 
+    // MARK: - Server-track wire-contract (the default useServerTracking=true path)
+
+    func testServerTrackWireShape() {
+        let client = createTestClient()
+        let payload = EventPayload(
+            workspaceId: "ws_1",
+            visitorId: "vis_1",
+            anonymousId: "anon_1",
+            sessionId: "sess_xyz",
+            eventId: "evt_1",
+            eventName: "$web_attribution_matched",
+            eventData: ["fbclid": "fb_abc", "_fbp": "fb.1.2.3", "revenue": 9.99, "att_status": UInt(3)],
+            source: "mobile_app",
+            timestamp: "2026-06-03T10:00:00.000Z",
+            userId: nil
+        )
+
+        let wire = client.transformForServerAPI(payload)
+
+        // Top level
+        XCTAssertEqual(wire["event"] as? String, "$web_attribution_matched")
+        XCTAssertEqual(wire["eventId"] as? String, "evt_1")
+        XCTAssertEqual(wire["timestamp"] as? String, "2026-06-03T10:00:00.000Z")
+        XCTAssertEqual(wire["anonymousId"] as? String, "anon_1")
+
+        // IOS-31: session_id MUST be in `context` (where ingest handleServerTrack reads it),
+        // not only in properties — otherwise ingest synthesizes its own session id.
+        let context = wire["context"] as? [String: Any]
+        XCTAssertEqual(context?["session_id"] as? String, "sess_xyz",
+                       "session_id must travel in context for ingest to use the SDK session")
+        // IOS-33: library version must not be the stale hardcoded 2.1.1.
+        XCTAssertEqual(context?["version"] as? String, "2.1.6")
+        XCTAssertEqual(context?["source"] as? String, "mobile_app")
+
+        // properties carry the eventData + sessionId + source; the click-ids survive
+        // (handleServerTrack spreads ...props into event_data).
+        let props = wire["properties"] as? [String: Any]
+        XCTAssertEqual(props?["fbclid"] as? String, "fb_abc")
+        XCTAssertEqual(props?["_fbp"] as? String, "fb.1.2.3")
+        XCTAssertEqual(props?["source"] as? String, "mobile_app")
+        XCTAssertEqual(props?["sessionId"] as? String, "sess_xyz")
+
+        // att_status (a UInt, e.g. ATT status) must serialize as a NUMBER, not a string.
+        // UInt isn't caught by `as? Int`, so it used to fall through to "\(value)" → "3".
+        XCTAssertEqual(props?["att_status"] as? Int, 3, "att_status (UInt) must stay numeric, not stringify")
+        XCTAssertNil(props?["att_status"] as? String, "att_status must not be a String")
+    }
+
     // MARK: - Configuration Tests
 
     func testClientConfiguration() {

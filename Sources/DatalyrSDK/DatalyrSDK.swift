@@ -458,8 +458,18 @@ public class DatalyrSDK {
             if let ttclid = attribution["ttclid"] { mergedData["ttclid"] = ttclid }
             if let gbraid = attribution["gbraid"] { mergedData["gbraid"] = gbraid }
             if let wbraid = attribution["wbraid"] { mergedData["wbraid"] = wbraid }
-            if let fbp = attribution["fbp"] { mergedData["fbp"] = fbp }
-            if let fbc = attribution["fbc"] { mergedData["fbc"] = fbc }
+            // Emit BOTH `_fbp`/`_fbc` (the Meta cookie names the attribution MV +
+            // postback actually extract — JSONExtractString(event_data,'_fbp')) AND the
+            // bare keys. Previously only `fbp`/`fbc` were sent, which no reader extracts,
+            // so the recovered web touch contributed no fbp/fbc to Meta CAPI (lower EMQ).
+            if let fbp = attribution["_fbp"] ?? attribution["fbp"] {
+                mergedData["_fbp"] = fbp
+                mergedData["fbp"] = fbp
+            }
+            if let fbc = attribution["_fbc"] ?? attribution["fbc"] {
+                mergedData["_fbc"] = fbc
+                mergedData["fbc"] = fbc
+            }
 
             // Add UTM parameters
             if let utmSource = attribution["utm_source"] { mergedData["utm_source"] = utmSource }
@@ -575,8 +585,16 @@ public class DatalyrSDK {
             if let ttclid = attribution["ttclid"] { matchData["ttclid"] = ttclid }
             if let gbraid = attribution["gbraid"] { matchData["gbraid"] = gbraid }
             if let wbraid = attribution["wbraid"] { matchData["wbraid"] = wbraid }
-            if let fbp = attribution["fbp"] { matchData["fbp"] = fbp }
-            if let fbc = attribution["fbc"] { matchData["fbc"] = fbc }
+            // Emit both `_fbp`/`_fbc` (extracted by the attribution MV + postback) and the
+            // bare keys — see the email-path note above.
+            if let fbp = attribution["_fbp"] ?? attribution["fbp"] {
+                matchData["_fbp"] = fbp
+                matchData["fbp"] = fbp
+            }
+            if let fbc = attribution["_fbc"] ?? attribution["fbc"] {
+                matchData["_fbc"] = fbc
+                matchData["fbc"] = fbc
+            }
             if let utmSource = attribution["utm_source"] { matchData["utm_source"] = utmSource }
             if let utmMedium = attribution["utm_medium"] { matchData["utm_medium"] = utmMedium }
             if let utmCampaign = attribution["utm_campaign"] { matchData["utm_campaign"] = utmCampaign }
