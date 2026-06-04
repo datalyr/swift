@@ -46,15 +46,22 @@ public struct ConversionTemplate {
     let events: [String: EventMapping]
 
     struct EventMapping {
-        let bits: [Int]           // Which bits represent this event
-        let revenueBits: [Int]?   // Which bits represent revenue tier
+        // SKAN's fine value is a 6-bit int (0-63) that can ONLY be revised upward, so we
+        // use Apple's recommended "mixed model": the HIGH 3 bits hold a funnel rank (0-7,
+        // down-funnel = higher) and the LOW 3 bits hold a revenue tier (0-7). Higher-value
+        // events therefore get higher fine values, so an early event (e.g. signup) can't
+        // lock the value and block a later, higher-value event (e.g. purchase) from
+        // registering — the bug in the old independent-bit scheme, where bits 6/7 also
+        // overflowed 63.
+        let rank: Int             // 0-7 funnel stage → high 3 bits
+        let hasRevenue: Bool      // when true, revenue tier fills the low 3 bits
         let priority: Int         // Event priority (higher = more important)
         let coarseValue: String   // SKAN 4.0 coarse value: "low", "medium", "high"
         let lockWindow: Bool      // SKAN 4.0: lock the conversion window after this event
 
-        init(bits: [Int], revenueBits: [Int]? = nil, priority: Int, coarseValue: String = "medium", lockWindow: Bool = false) {
-            self.bits = bits
-            self.revenueBits = revenueBits
+        init(rank: Int, hasRevenue: Bool = false, priority: Int, coarseValue: String = "medium", lockWindow: Bool = false) {
+            self.rank = rank
+            self.hasRevenue = hasRevenue
             self.priority = priority
             self.coarseValue = coarseValue
             self.lockWindow = lockWindow
@@ -75,36 +82,30 @@ public class ConversionValueEncoder {
         return encodeWithSKAN4(event: event, properties: properties).fineValue
     }
 
-    /// Encode an event with full SKAN 4.0 support (fine value, coarse value, lock window)
+    /// Encode an event with full SKAN 4.0 support (fine value, coarse value, lock window).
+    ///
+    /// fineValue = (funnelRank << 3) | revenueTier — see EventMapping. The value→meaning
+    /// mapping MUST match the SKAN conversion-value schema configured in the ad-network
+    /// dashboard (App Store Connect / Meta Events Manager / MMP).
     public func encodeWithSKAN4(event: String, properties: [String: Any]?) -> ConversionResult {
         guard let mapping = template.events[event] else {
             return ConversionResult(fineValue: 0, coarseValue: "low", lockWindow: false, priority: 0)
         }
 
-        var conversionValue = 0
+        // High 3 bits = funnel rank.
+        var conversionValue = (mapping.rank & 0x7) << 3
 
-        // Set event bits
-        for bit in mapping.bits {
-            conversionValue |= (1 << bit)
-        }
-
-        // Set revenue bits if revenue is provided
+        // Low 3 bits = revenue tier (only for monetary events).
         var coarseValue = mapping.coarseValue
-        if let revenueBits = mapping.revenueBits,
+        if mapping.hasRevenue,
            let properties = properties,
            let revenue = properties["revenue"] as? Double ?? properties["value"] as? Double {
-            let revenueTier = getRevenueTier(revenue)
-            for (index, bit) in revenueBits.enumerated() {
-                if index < 3 && (revenueTier >> index) & 1 == 1 {
-                    conversionValue |= (1 << bit)
-                }
-            }
-            // Upgrade coarse value based on revenue
+            conversionValue |= getRevenueTier(revenue)
             coarseValue = getCoarseValueForRevenue(revenue)
         }
 
-        // Ensure value is within 0-63 range
-        let fineValue = min(conversionValue, 63)
+        // (rank<<3)|tier is already within 0-63 for rank/tier in 0-7; clamp defensively.
+        let fineValue = min(max(conversionValue, 0), 63)
 
         return ConversionResult(
             fineValue: fineValue,
@@ -139,58 +140,56 @@ public class ConversionValueEncoder {
 }
 
 // MARK: - Industry Templates
+//
+// Mixed-model fine values (funnelRank << 3 | revenueTier), all within 0-63 and ordered so
+// down-funnel/higher-value events get HIGHER values (required: SKAN only revises upward).
+// Ranks are a sensible default — tune the event→rank order to your LTV model, and mirror
+// the final value→meaning mapping into your SKAN dashboard schema.
 extension ConversionTemplate {
-    /// E-commerce template - optimized for online stores
-    /// SKAN 4.0: purchase locks window, high-value events get "high" coarse value
+    /// E-commerce. view_item 8 · signup/registration/lead 16 · add_to_cart 24 ·
+    /// begin_checkout 32 · subscribe 48-55 · purchase 56-63 (+revenue tier in low 3 bits).
     static let ecommerce = ConversionTemplate(
         name: "ecommerce",
         events: [
-            "purchase": EventMapping(bits: [0], revenueBits: [1, 2, 3], priority: 100, coarseValue: "high", lockWindow: true),
-            "add_to_cart": EventMapping(bits: [4], revenueBits: nil, priority: 30, coarseValue: "low"),
-            "begin_checkout": EventMapping(bits: [5], revenueBits: nil, priority: 50, coarseValue: "medium"),
-            "signup": EventMapping(bits: [6], revenueBits: nil, priority: 20, coarseValue: "low"),
-            // Aliases for the public trackInitiateCheckout / trackCompleteRegistration /
-            // trackLead helpers, which fire these names (not the template keys) — without
-            // these, SKAN sent no conversion value (0) for those mid-funnel events. Reuse
-            // existing bits so this is collision-safe (no new bit allocation).
-            "initiate_checkout": EventMapping(bits: [5], revenueBits: nil, priority: 50, coarseValue: "medium"),
-            "complete_registration": EventMapping(bits: [6], revenueBits: nil, priority: 20, coarseValue: "low"),
-            "lead": EventMapping(bits: [6], revenueBits: nil, priority: 20, coarseValue: "low"),
-            "subscribe": EventMapping(bits: [0, 1], revenueBits: [2, 3, 4], priority: 90, coarseValue: "high", lockWindow: true),
-            "view_item": EventMapping(bits: [7], revenueBits: nil, priority: 10, coarseValue: "low")
+            "view_item": EventMapping(rank: 1, priority: 10, coarseValue: "low"),
+            "signup": EventMapping(rank: 2, priority: 20, coarseValue: "low"),
+            "complete_registration": EventMapping(rank: 2, priority: 20, coarseValue: "low"),
+            "lead": EventMapping(rank: 2, priority: 20, coarseValue: "low"),
+            "add_to_cart": EventMapping(rank: 3, priority: 30, coarseValue: "low"),
+            "begin_checkout": EventMapping(rank: 4, priority: 50, coarseValue: "medium"),
+            "initiate_checkout": EventMapping(rank: 4, priority: 50, coarseValue: "medium"),
+            "subscribe": EventMapping(rank: 6, hasRevenue: true, priority: 90, coarseValue: "high", lockWindow: true),
+            "purchase": EventMapping(rank: 7, hasRevenue: true, priority: 100, coarseValue: "high", lockWindow: true)
         ]
     )
 
-    /// Gaming template - optimized for mobile games
-    /// SKAN 4.0: purchase locks window, tutorial completion is medium value
+    /// Gaming. session_start 8 · ad_watched 16 · level_complete 24 · tutorial_complete 32 ·
+    /// achievement_unlocked 40 · purchase 56-63 (+revenue tier).
     static let gaming = ConversionTemplate(
         name: "gaming",
         events: [
-            "level_complete": EventMapping(bits: [0], revenueBits: nil, priority: 40, coarseValue: "medium"),
-            "tutorial_complete": EventMapping(bits: [1], revenueBits: nil, priority: 60, coarseValue: "medium"),
-            "purchase": EventMapping(bits: [2], revenueBits: [3, 4, 5], priority: 100, coarseValue: "high", lockWindow: true),
-            "achievement_unlocked": EventMapping(bits: [6], revenueBits: nil, priority: 30, coarseValue: "low"),
-            "session_start": EventMapping(bits: [7], revenueBits: nil, priority: 10, coarseValue: "low"),
-            "ad_watched": EventMapping(bits: [0, 6], revenueBits: nil, priority: 20, coarseValue: "low")
+            "session_start": EventMapping(rank: 1, priority: 10, coarseValue: "low"),
+            "ad_watched": EventMapping(rank: 2, priority: 20, coarseValue: "low"),
+            "level_complete": EventMapping(rank: 3, priority: 40, coarseValue: "medium"),
+            "tutorial_complete": EventMapping(rank: 4, priority: 60, coarseValue: "medium"),
+            "achievement_unlocked": EventMapping(rank: 5, priority: 30, coarseValue: "low"),
+            "purchase": EventMapping(rank: 7, hasRevenue: true, priority: 100, coarseValue: "high", lockWindow: true)
         ]
     )
 
-    /// Subscription template - optimized for subscription apps
-    /// SKAN 4.0: subscribe/upgrade lock window, trial is medium value
+    /// Subscription. cancel 8 · signup/registration/lead 16 · payment_method_added 24 ·
+    /// trial_start 32 · upgrade 48-55 · subscribe 56-63 (+revenue tier).
     static let subscription = ConversionTemplate(
         name: "subscription",
         events: [
-            "trial_start": EventMapping(bits: [0], revenueBits: nil, priority: 70, coarseValue: "medium"),
-            "subscribe": EventMapping(bits: [1], revenueBits: [2, 3, 4], priority: 100, coarseValue: "high", lockWindow: true),
-            "upgrade": EventMapping(bits: [1, 5], revenueBits: [2, 3, 4], priority: 90, coarseValue: "high", lockWindow: true),
-            "cancel": EventMapping(bits: [6], revenueBits: nil, priority: 20, coarseValue: "low"),
-            "signup": EventMapping(bits: [7], revenueBits: nil, priority: 30, coarseValue: "low"),
-            // Aliases so subscription-template apps also get a SKAN value from the
-            // trackCompleteRegistration / trackLead helpers (reuse signup's bit).
-            // initiate_checkout is omitted — no checkout step in a subscription funnel.
-            "complete_registration": EventMapping(bits: [7], revenueBits: nil, priority: 30, coarseValue: "low"),
-            "lead": EventMapping(bits: [7], revenueBits: nil, priority: 30, coarseValue: "low"),
-            "payment_method_added": EventMapping(bits: [0, 7], revenueBits: nil, priority: 50, coarseValue: "medium")
+            "cancel": EventMapping(rank: 1, priority: 20, coarseValue: "low"),
+            "signup": EventMapping(rank: 2, priority: 30, coarseValue: "low"),
+            "complete_registration": EventMapping(rank: 2, priority: 30, coarseValue: "low"),
+            "lead": EventMapping(rank: 2, priority: 30, coarseValue: "low"),
+            "payment_method_added": EventMapping(rank: 3, priority: 50, coarseValue: "medium"),
+            "trial_start": EventMapping(rank: 4, priority: 70, coarseValue: "medium"),
+            "upgrade": EventMapping(rank: 6, hasRevenue: true, priority: 90, coarseValue: "high", lockWindow: true),
+            "subscribe": EventMapping(rank: 7, hasRevenue: true, priority: 100, coarseValue: "high", lockWindow: true)
         ]
     )
-} 
+}

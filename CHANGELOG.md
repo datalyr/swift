@@ -53,12 +53,15 @@ suite (69 tests), and fixes verified attribution-loss and event-delivery bugs.
   assertion until foreground/expiration; it now ends immediately after the flush. The
   terminate flush now runs inside a background-task scope so it gets the OS time budget.
 
-### Notes
-- The default **SKAdNetwork conversion-value templates allocate bits 6 and 7, which overflow
-  the 6-bit (0–63) fine value and clamp to 63** — so low-value events (e.g. `signup`, `lead`,
-  `view_item`) report a *higher* fine value than a `purchase` (which tops out at 15). This is a
-  pre-existing schema-design issue that must be coordinated with the advertiser's SKAN dashboard
-  configuration; it is flagged for a deliberate redesign and intentionally not changed here.
+- **SKAdNetwork conversion-value schema rebuilt (was silently dropping purchases).** The old
+  templates assigned bits 6 & 7, which overflow the 6-bit (0–63) fine value and clamp to 63 — so
+  low-value events (`signup`/`view_item`) reported a *higher* value than `purchase` (max 15). Since
+  SKAN only revises the value **upward**, a signup-then-purchase user locked at 63 and the purchase
+  + revenue were never recorded. Rewritten to Apple's recommended **mixed model**:
+  `fineValue = (funnelRank << 3) | revenueTier` (3 bits funnel rank, down-funnel = higher; 3 bits
+  revenue tier), so values fit 0–63 and `purchase` always outranks `signup`. **Coordinated release:**
+  your SKAN dashboard schema must be updated to the new value→meaning mapping — see
+  `docs-v2/SKAN_CONVERSION_VALUE_SCHEMA_2026-06-03.md`. Confirm the event→rank order matches your LTV model.
 
 ## [2.1.5] - 2026-05-31
 
