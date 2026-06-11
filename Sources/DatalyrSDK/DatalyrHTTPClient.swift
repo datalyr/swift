@@ -88,8 +88,13 @@ internal class DatalyrHTTPClient {
     
     /// Send a single event with retry logic
     func sendEvent(_ payload: EventPayload) async -> HTTPResponse {
-        return await sendWithRetry(payload, retryCount: 0)
+        return await sendWithRetry(payload, retryCount: 0, throttleCount: 0)
     }
+
+    /// Max consecutive 429/408 backpressure waits before giving up within a single send.
+    /// These do NOT count against the normal retryCount (a 429 is backpressure, not failure —
+    /// FSR-31), so this separate cap prevents an unbounded loop under sustained throttling.
+    private static let maxThrottleWaits = 5
     
     /// Send multiple events in a batch
     func sendBatch(_ payloads: [EventPayload]) async -> [HTTPResponse] {
@@ -112,24 +117,27 @@ internal class DatalyrHTTPClient {
     
     // MARK: - Private Methods
     
-    /// Send request with exponential backoff retry
-    private func sendWithRetry(_ payload: EventPayload, retryCount: Int) async -> HTTPResponse {
+    /// Send request with exponential backoff retry.
+    /// `retryCount` counts genuine failures (5xx, network) against config.maxRetries.
+    /// `throttleCount` counts 429/408 backpressure waits separately (FSR-31) so sustained
+    /// throttling honors Retry-After without burning the failure budget toward dead-letter.
+    private func sendWithRetry(_ payload: EventPayload, retryCount: Int, throttleCount: Int) async -> HTTPResponse {
         do {
             // Check rate limit
             try await checkRateLimit()
-            
+
             debugLog("Sending event: \(payload.eventName) (attempt \(retryCount + 1))")
-            
+
             // Create request
             let request = try createRequest(for: payload)
-            
+
             // Send request
             let (data, response) = try await session.data(for: request)
-            
+
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw HTTPError.invalidResponse
             }
-            
+
             // Check response status
             if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
                 debugLog("Event sent successfully: \(payload.eventName)")
@@ -138,24 +146,47 @@ internal class DatalyrHTTPClient {
                 let errorMessage = "HTTP 401: Authentication failed. Check your API key and workspace ID."
                 errorLog(errorMessage)
                 return HTTPResponse(success: false, statusCode: httpResponse.statusCode, error: HTTPError.authenticationFailed)
+            } else if httpResponse.statusCode == 429 || httpResponse.statusCode == 408 {
+                // FSR-31: 429 (ingest sends Retry-After:1) / 408 are TRANSIENT backpressure, not
+                // permanent client errors. Honor Retry-After and retry WITHOUT counting it as a
+                // failure, so a workspace-wide throttle burst doesn't dead-letter events.
+                guard throttleCount < DatalyrHTTPClient.maxThrottleWaits else {
+                    debugLog("Throttle persisted past \(DatalyrHTTPClient.maxThrottleWaits) waits; surfacing \(httpResponse.statusCode)")
+                    return HTTPResponse(success: false, statusCode: httpResponse.statusCode,
+                                        error: HTTPError.httpError(httpResponse.statusCode, "rate limited"))
+                }
+                let retryAfter = retryAfterSeconds(from: httpResponse) ?? calculateRetryDelay(throttleCount)
+                debugLog("HTTP \(httpResponse.statusCode) throttled; honoring Retry-After \(retryAfter)s (wait \(throttleCount + 1))")
+                try? await Task.sleep(nanoseconds: UInt64(retryAfter * 1_000_000_000))
+                return await sendWithRetry(payload, retryCount: retryCount, throttleCount: throttleCount + 1)
             } else {
                 throw HTTPError.httpError(httpResponse.statusCode, String(data: data, encoding: .utf8))
             }
-            
+
         } catch {
             errorLog("Event send failed (attempt \(retryCount + 1)): \(error.localizedDescription)")
-            
+
             // Check if we should retry
             if retryCount < config.maxRetries && shouldRetry(error) {
                 let delay = calculateRetryDelay(retryCount)
                 debugLog("Retrying in \(delay)s...")
-                
+
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                return await sendWithRetry(payload, retryCount: retryCount + 1)
+                return await sendWithRetry(payload, retryCount: retryCount + 1, throttleCount: throttleCount)
             }
-            
+
             return HTTPResponse(success: false, statusCode: 0, error: error)
         }
+    }
+
+    /// Parse a `Retry-After` header (delta-seconds form; ingest sends "1"). Clamped to a sane
+    /// ceiling so a hostile/garbage header can't park an event for minutes. Returns nil if absent.
+    private func retryAfterSeconds(from response: HTTPURLResponse) -> TimeInterval? {
+        guard let raw = response.value(forHTTPHeaderField: "Retry-After")?
+            .trimmingCharacters(in: .whitespaces), let seconds = Double(raw) else {
+            return nil
+        }
+        return min(max(seconds, 0), 30)
     }
     
     /// Create HTTP request for event payload
@@ -170,7 +201,7 @@ internal class DatalyrHTTPClient {
         
         // Set headers
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("@datalyr/swift/2.1.6", forHTTPHeaderField: "User-Agent")
+        request.setValue("@datalyr/swift/2.1.7", forHTTPHeaderField: "User-Agent")
         
         // Server-side tracking uses X-API-Key header
         if config.useServerTracking {
@@ -209,6 +240,12 @@ internal class DatalyrHTTPClient {
         try await rateLimiter.checkLimit()
     }
     
+    /// Test-only: expose the HTTP-status retry classification (FSR-31) so the suite can assert
+    /// 429/408 are retryable without reaching the network. Mirrors the .httpError branch below.
+    func isRetryableStatusForTest(_ code: Int) -> Bool {
+        return shouldRetry(HTTPError.httpError(code, nil))
+    }
+
     /// Determine if an error should trigger a retry
     private func shouldRetry(_ error: Error) -> Bool {
         if let httpError = error as? HTTPError {
@@ -216,8 +253,9 @@ internal class DatalyrHTTPClient {
             case .authenticationFailed, .rateLimitExceeded:
                 return false
             case .httpError(let code, _):
-                // Don't retry client errors (4xx), retry server errors (5xx)
-                return code >= 500
+                // Retry server errors (5xx) and transient throttling/timeout (429, 408).
+                // Other 4xx are permanent client errors and won't improve on retry (FSR-31).
+                return code >= 500 || code == 429 || code == 408
             default:
                 return true
             }
@@ -301,7 +339,7 @@ internal class DatalyrHTTPClient {
         // hour-bucketed session id for every iOS event.
         var context: [String: Any] = [
             "library": "@datalyr/swift",
-            "version": "2.1.6",
+            "version": "2.1.7",
             "source": "mobile_app",
             "session_id": payload.sessionId
         ]

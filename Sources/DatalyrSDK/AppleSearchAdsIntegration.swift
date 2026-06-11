@@ -81,7 +81,14 @@ public class AppleSearchAdsIntegration {
         #if canImport(AdServices)
         if #available(iOS 14.3, *) {
             self.available = true
-            await fetchAttribution()
+            // FSR-29: do NOT await the fetch here. It used to block SDK init (and thus push
+            // track() calls into the 50-cap preInitQueue) until Apple's AdServices API
+            // responded — which can be slow, and per Apple's docs returns a transient 404 in
+            // the first seconds after token generation (exactly first launch). Run it detached
+            // with its own bounded retries/timeout; per-event merge picks up asa_* once it lands.
+            Task { [weak self] in
+                await self?.fetchAttribution()
+            }
         } else {
             log("Apple Search Ads requires iOS 14.3+")
             self.available = false
@@ -125,11 +132,36 @@ public class AppleSearchAdsIntegration {
                 request.httpMethod = "POST"
                 request.setValue("text/plain", forHTTPHeaderField: "Content-Type")
                 request.httpBody = token.data(using: .utf8)
+                // FSR-29: bound each call at 10s instead of URLSession's 60s default.
+                request.timeoutInterval = 10
 
-                let (data, response) = try await URLSession.shared.data(for: request)
+                // FSR-29: Apple's AdServices endpoint returns a transient 404 for the first few
+                // seconds after token generation and documents up to 3 retries at ~5s. Without
+                // this, a first-launch 404 permanently strips asa_* from the install event
+                // (fetched=true on first non-200). Retry 404 specifically; other non-200s are final.
+                var data = Data()
+                var statusCode = 0
+                let maxAttempts = 3
+                for attempt in 1...maxAttempts {
+                    let (respData, response) = try await URLSession.shared.data(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        fetched = true
+                        return nil
+                    }
+                    statusCode = httpResponse.statusCode
+                    data = respData
+                    if statusCode == 200 { break }
+                    if statusCode == 404 && attempt < maxAttempts {
+                        log("Apple Search Ads token not ready (404), retrying \(attempt)/\(maxAttempts - 1) in 5s")
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        continue
+                    }
+                    // Any other non-200, or 404 after the last attempt → give up.
+                    fetched = true
+                    return nil
+                }
 
-                guard let httpResponse = response as? HTTPURLResponse,
-                      httpResponse.statusCode == 200 else {
+                guard statusCode == 200 else {
                     fetched = true
                     return nil
                 }

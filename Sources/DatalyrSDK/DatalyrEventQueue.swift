@@ -28,7 +28,9 @@ internal struct QueueConfig {
 /// Event queue for offline storage and batching
 internal class DatalyrEventQueue {
     private let httpClient: DatalyrHTTPClient
-    private let config: QueueConfig
+    // var (was let): updateConfig() now actually applies the new config (FSR-89). Mutated only
+    // under queueLock so concurrent reads on the processing path see a consistent value.
+    private var config: QueueConfig
     private let storage = DatalyrStorage.shared
     private var queue: [QueuedEvent] = []
     // DispatchSourceTimer (not Timer): the queue initializes on a cooperative-pool Task with
@@ -146,12 +148,15 @@ internal class DatalyrEventQueue {
     
     /// Update queue configuration
     func updateConfig(_ newConfig: QueueConfig) {
-        // Stop current timer
+        // FSR-89: actually APPLY newConfig — the old body ignored its argument and just
+        // restarted the timer with the SAME (old) interval, so flush interval / batch size /
+        // retry budget never changed. Assign under the lock so the processing path sees it
+        // consistently, then restart the timer to pick up the new flush interval.
+        queueLock.withLock { config = newConfig }
+
         stopFlushTimer()
-        
-        // Start new timer with updated interval
         startFlushTimer()
-        
+
         debugLog("Queue configuration updated")
     }
     
@@ -174,10 +179,28 @@ internal class DatalyrEventQueue {
     private func initializeQueue() async {
         if let persistedQueue = await storage.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) {
             let count = queueLock.withLock {
-                queue = persistedQueue
+                // FSR-84: PREPEND the persisted backlog instead of overwriting `queue`. The
+                // queue's init Task races SDK.initialize, which can enqueue events (pre-init
+                // backlog, app_install, session_start) before this load runs; a wholesale
+                // `queue = persistedQueue` would silently drop those — and the next persistQueue()
+                // would make the loss permanent. Merge preserves both, persisted-first (oldest).
+                queue = persistedQueue + queue
                 return queue.count
             }
             debugLog("Loaded \(count) events from storage")
+        }
+
+        // FSR-88: replay the dead-letter store ONCE per launch. deadLetter() previously only
+        // wrote to StorageKeys.deadLetterQueue and nothing ever read it ("recoverable for
+        // replay" was false) — so an event that exhausted 3 retries (transient outage / temporary
+        // 401) was permanently lost. Re-enqueue with retryCount reset and clear the store, giving
+        // failed revenue/conversion events one fresh delivery attempt on the next app start.
+        if let dead = await storage.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self), !dead.isEmpty {
+            let replays = dead.map { QueuedEvent(payload: $0.payload, timestamp: $0.timestamp, retryCount: 0) }
+            queueLock.withLock { queue = replays + queue }
+            await storage.removeValue(StorageKeys.deadLetterQueue)
+            await persistQueue()
+            debugLog("Replayed \(replays.count) dead-letter event(s) for one more delivery attempt")
         }
 
         startFlushTimer()
@@ -283,8 +306,10 @@ internal class DatalyrEventQueue {
         await storage.setCodableArray(StorageKeys.eventQueue, value: currentQueue)
     }
 
-    /// Park a permanently-failed event in a capped dead-letter store instead of
-    /// silently dropping it — visible (errorLog above) + recoverable for replay.
+    /// Park a retry-exhausted event in a capped dead-letter store instead of silently
+    /// dropping it — visible (errorLog above) and replayed once on the next launch by
+    /// initializeQueue() (FSR-88), so a transient outage that beats the retry budget gets
+    /// another delivery attempt rather than being lost.
     private func deadLetter(_ event: QueuedEvent) async {
         var dl = (await storage.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self)) ?? []
         dl.append(event)
