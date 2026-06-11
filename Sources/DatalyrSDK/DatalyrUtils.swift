@@ -54,10 +54,29 @@ internal func validateEventName(_ eventName: String) -> Bool {
 /// Validate event data
 internal func validateEventData(_ eventData: EventData?) -> Bool {
     guard let eventData = eventData else { return true }
-    
+
+    // FSR-1: JSONSerialization.data(withJSONObject:) raises an *Objective-C*
+    // NSInvalidArgumentException — NOT a Swift error — for non-JSON values like
+    // Date/URL/UUID. A do/catch cannot catch that, so calling it on the raw caller
+    // dict crashes the HOST APP (e.g. track("x", eventData: ["d": Date()])).
+    // Guard with isValidJSONObject first; if the raw dict isn't JSON-safe, the SDK
+    // still SUPPORTS these types (AnyCodable encodes Date→ISO8601 / URL→absoluteString /
+    // NSNumber), so sanitize to a JSON-safe shape and size-check THAT rather than
+    // rejecting valid input or letting the exception escape.
+    let jsonSafe: [String: Any] = JSONSerialization.isValidJSONObject(eventData)
+        ? eventData
+        : sanitizeForJSONObject(eventData)
+
+    // If sanitization still couldn't produce a serializable object (extremely
+    // unusual), skip the size check instead of crashing — never throw to the caller.
+    guard JSONSerialization.isValidJSONObject(jsonSafe) else {
+        debugLog("Event data not JSON-serializable after sanitization; skipping size check")
+        return true
+    }
+
     // Check data size (approximate)
     do {
-        let jsonData = try JSONSerialization.data(withJSONObject: eventData)
+        let jsonData = try JSONSerialization.data(withJSONObject: jsonSafe)
         // Limit to 32KB per event
         guard jsonData.count <= 32 * 1024 else {
             errorLog("Event data too large: \(jsonData.count) bytes (max 32KB)")
@@ -67,8 +86,54 @@ internal func validateEventData(_ eventData: EventData?) -> Bool {
         errorLog("Invalid event data JSON", error: error)
         return false
     }
-    
+
     return true
+}
+
+/// Convert a `[String: Any]` containing SDK-supported-but-not-JSON-native types
+/// (Date, URL, UUID, NSNumber, nested collections) into a JSON-serializable
+/// dictionary. Mirrors AnyCodable's encoding (Date→ISO8601, URL→absoluteString) so
+/// the value-shape matches what actually ships on the wire. Used to keep
+/// JSONSerialization.data(withJSONObject:) from raising an uncatchable NSException
+/// (FSR-1). Values that can't be represented are dropped rather than crashing.
+internal func sanitizeForJSONObject(_ dict: [String: Any]) -> [String: Any] {
+    var result: [String: Any] = [:]
+    for (key, value) in dict {
+        if let sanitized = sanitizeJSONValue(value) {
+            result[key] = sanitized
+        }
+    }
+    return result
+}
+
+private func sanitizeJSONValue(_ value: Any) -> Any? {
+    // Unwrap AnyCodable
+    if let anyCodable = value as? AnyCodable {
+        return sanitizeJSONValue(anyCodable.value)
+    }
+    // JSON-native primitives pass through unchanged.
+    if value is String || value is Bool { return value }
+    if let v = value as? Int { return v }
+    if let v = value as? Double { return v }
+    if let v = value as? Float { return Double(v) }
+    if let v = value as? UInt { return Int(exactly: v) ?? Int(v & UInt(Int.max)) }
+    // NSNumber (covers JSON-decoded numbers and bridged Int/Double) — keep numeric.
+    if let v = value as? NSNumber { return v }
+    // SDK-supported non-JSON types → their wire representation.
+    if let date = value as? Date { return DateFormatter.iso8601.string(from: date) }
+    if let url = value as? URL { return url.absoluteString }
+    if let uuid = value as? UUID { return uuid.uuidString }
+    // Collections — recurse.
+    if let nested = value as? [String: Any] { return sanitizeForJSONObject(nested) }
+    if let arr = value as? [Any] { return arr.compactMap { sanitizeJSONValue($0) } }
+    // Null / optional-nil → drop.
+    if value is NSNull { return nil }
+    let mirror = Mirror(reflecting: value)
+    if mirror.displayStyle == .optional && mirror.children.isEmpty { return nil }
+    // Last resort — string-ify so the size check still sees something representative.
+    let str = "\(value)"
+    if str == "nil" || str == "Optional(nil)" { return nil }
+    return str
 }
 
 // MARK: - Device Information
