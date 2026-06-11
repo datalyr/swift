@@ -11,6 +11,11 @@ import UIKit
 /// (session_start, session_end, screen_end, app lifecycle, etc.).
 internal protocol AutoEventsTrackingDelegate: AnyObject {
     func trackEvent(_ eventName: String, properties: EventData?)
+    /// Called when AutoEventsManager mints a NEW session id (e.g. after an inactivity
+    /// timeout fires session_end and the app foregrounds). The SDK stamps every event
+    /// payload + context.session_id with ITS sessionId, so without this reverse-sync the
+    /// SDK would keep emitting the old id while session_start carried the new one (FSR-36).
+    func autoEventsDidRotateSession(to sessionId: String)
 }
 
 // MARK: - Auto Events Manager
@@ -23,7 +28,13 @@ internal class AutoEventsManager {
     
     // Session tracking
     private var currentSession: SessionData?
-    private var sessionTimer: Timer?
+    // DispatchSourceTimer (not Timer): initializeSessionTracking / updateSessionActivity run
+    // on Swift-concurrency cooperative-pool threads with no running RunLoop, so a
+    // Timer.scheduledTimer registered there would NEVER fire (the same class of bug fixed in
+    // DatalyrEventQueue for IOS-6). A dispatch-source timer on a dedicated serial queue fires
+    // regardless of any run loop, and can be (re)scheduled/cancelled from any thread. (FSR-4)
+    private var sessionTimer: DispatchSourceTimer?
+    private let sessionTimerQueue = DispatchQueue(label: "com.datalyr.session-timer")
     private var lastActivityTime = Date()
     private var isInitialized = false
     
@@ -84,6 +95,11 @@ internal class AutoEventsManager {
             osVersion: osVersion
         )
         
+        // FSR-36: getOrCreateSessionId() may have minted a brand-new session id (prior one
+        // timed out). Push it back to the SDK so its event payloads / context.session_id
+        // use the SAME id this session_start carries, instead of diverging.
+        trackingDelegate?.autoEventsDidRotateSession(to: sessionId)
+
         // Track session start
         trackingDelegate?.trackEvent("session_start", properties: [
             "session_id": sessionId,
@@ -91,20 +107,26 @@ internal class AutoEventsManager {
             "os_version": osVersion,
             "platform": "ios"
         ])
-        
+
         // Start session timeout timer
         startSessionTimer()
-        
+
         debugLog("Session tracking initialized", data: ["sessionId": sessionId])
     }
     
-    /// Start session timeout timer
+    /// Start (or restart) the session timeout timer. Dispatch-source based so it fires
+    /// without a RunLoop, and safe to schedule/cancel across threads (FSR-4).
     private func startSessionTimer() {
-        sessionTimer?.invalidate()
-        
-        sessionTimer = Timer.scheduledTimer(withTimeInterval: config.sessionTimeoutMs / 1000, repeats: false) { [weak self] _ in
+        sessionTimer?.cancel()
+
+        let timeout = config.sessionTimeoutMs / 1000
+        let timer = DispatchSource.makeTimerSource(queue: sessionTimerQueue)
+        timer.schedule(deadline: .now() + timeout, repeating: .never, leeway: .seconds(1))
+        timer.setEventHandler { [weak self] in
             self?.handleSessionTimeout()
         }
+        timer.resume()
+        sessionTimer = timer
     }
     
     /// Handle session timeout
@@ -296,7 +318,7 @@ internal class AutoEventsManager {
     
     /// Clean up resources
     func destroy() {
-        sessionTimer?.invalidate()
+        sessionTimer?.cancel()
         sessionTimer = nil
         
         NotificationCenter.default.removeObserver(self)

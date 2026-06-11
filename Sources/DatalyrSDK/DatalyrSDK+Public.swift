@@ -404,10 +404,12 @@ public extension DatalyrSDK {
     /// Call this method from your AppDelegate or SceneDelegate when the app is opened via URL
     /// - Parameter url: The deep link URL
     func handleDeepLink(_ url: URL) async {
-        // Parse the deep link's query/fragment (lyr / fbclid / gclid / ttclid / utm_*)
-        // and persist it. Previously this ignored `url` entirely — a no-op get/set
-        // round-trip — so ALL deep-link attribution was silently dropped.
-        await attributionManager?.handleDeepLink(url)
+        // Parse the deep link's query/fragment (lyr / fbclid / gclid / ttclid / utm_*) and
+        // persist it. routeDeepLink buffers the URL if initialize() hasn't created the
+        // attributionManager yet (FSR-5) — the cold-start/install case where the optional
+        // chain used to no-op and silently drop the install-moment deep link — then replays
+        // it at the end of init before checkAndTrackInstall().
+        await routeDeepLink(url)
     }
 }
 

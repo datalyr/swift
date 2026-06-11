@@ -28,8 +28,20 @@ public class DatalyrSDK {
     private var initialized = false
     /// Events that arrived before initialize() completed. Flushed once init finishes.
     private var preInitQueue: [(eventName: String, eventData: EventData?)] = []
+    /// identify()/alias() calls that arrived before init (FSR-33). Replayed after init,
+    /// before regular pre-init events, so the identity is set first.
+    private var preInitIdentityQueue: [PreInitIdentityCall] = []
+    /// Deep-link URLs that arrived before init (FSR-5). Replayed before checkAndTrackInstall()
+    /// so the install event can carry the launch deep link's params.
+    private var preInitDeepLinkQueue: [URL] = []
     private let preInitLock = NSLock()
     private static let preInitQueueMax = 50
+
+    /// A pre-init identify/alias call, buffered until initialize() completes (FSR-33).
+    enum PreInitIdentityCall {
+        case identify(userId: String, properties: UserProperties?)
+        case alias(newUserId: String, previousId: String?)
+    }
     internal var config: DatalyrConfig?
     private var httpClient: DatalyrHTTPClient?
     private var eventQueue: DatalyrEventQueue?
@@ -131,18 +143,30 @@ public class DatalyrSDK {
         // Initialize journey tracking (for first-touch, last-touch, touchpoints)
         await JourneyManager.shared.initialize()
 
-        // Record initial attribution to journey if this is a new session with attribution
+        // Record initial attribution to journey — but ONLY when it is genuinely NEW (FSR-34).
+        // AttributionManager persists attribution forever (no TTL), so recording it
+        // unconditionally on every cold launch appended a duplicate touchpoint with the same
+        // old campaign and rolled the 90-day last-touch expiry forward each launch, making a
+        // 2-year-old install campaign perpetually look like a fresh last-touch. Gate on the
+        // attribution's capture-time vs the last recorded touch's capturedAt, and carry the
+        // REAL capture timestamp into the touch instead of 0.
         if let attribution = attributionManager?.getAttributionData() {
             let hasAttribution = attribution.utmSource != nil ||
                                 attribution.fbclid != nil ||
                                 attribution.gclid != nil ||
                                 attribution.lyr != nil
 
-            if hasAttribution {
+            let capturedAt = attribution.attributionCapturedAt ?? 0
+            let lastTouchCapturedAt = JourneyManager.shared.getLastTouch()?.capturedAt ?? 0
+            // Fresh iff we have a capture-time and it is newer than the last recorded touch.
+            // (capturedAt == 0 means legacy/unknown — treat as NOT new so we don't re-roll.)
+            let isNewAttribution = capturedAt > 0 && capturedAt > lastTouchCapturedAt
+
+            if hasAttribution && isNewAttribution {
                 var touchAttribution = TouchAttribution(
-                    timestamp: 0,
+                    timestamp: capturedAt,
                     expiresAt: 0,
-                    capturedAt: 0
+                    capturedAt: capturedAt
                 )
                 touchAttribution.source = attribution.utmSource ?? attribution.campaignSource
                 touchAttribution.medium = attribution.utmMedium ?? attribution.campaignMedium
@@ -208,15 +232,45 @@ public class DatalyrSDK {
         // Cache advertiser data (IDFA, ATT status) once at init — refreshed on ATT change
         cachedAdvertiserData = platformIntegrationManager?.getAdvertiserData()
 
-        // Mark as initialized
-        self.initialized = true
-
-        // Flush any events that were queued before init completed (e.g. screen tracking)
-        let queued: [(eventName: String, eventData: EventData?)] = preInitLock.withLock {
-            let items = preInitQueue
+        // Mark as initialized AND snapshot+clear the pre-init buffers in the SAME critical
+        // section track()/identify()/alias() use (FSR-90). Otherwise a concurrent call that
+        // read initialized==false could append AFTER the drain and be lost forever. Setting
+        // the flag and clearing the queue atomically closes that window.
+        let queued: [(eventName: String, eventData: EventData?)]
+        let queuedIdentity: [PreInitIdentityCall]
+        let queuedDeepLinks: [URL]
+        (queued, queuedIdentity, queuedDeepLinks) = preInitLock.withLock {
+            self.initialized = true
+            let events = preInitQueue
+            let identity = preInitIdentityQueue
+            let urls = preInitDeepLinkQueue
             preInitQueue = []
-            return items
+            preInitIdentityQueue = []
+            preInitDeepLinkQueue = []
+            return (events, identity, urls)
         }
+
+        // Replay pre-init deep links FIRST so app_install (below) can carry their params (FSR-5).
+        if !queuedDeepLinks.isEmpty {
+            debugLog("Replaying \(queuedDeepLinks.count) pre-init deep link(s)")
+            for url in queuedDeepLinks {
+                await attributionManager?.handleDeepLink(url)
+            }
+        }
+
+        // Replay pre-init identify/alias (FSR-33) before regular events so identity is set.
+        if !queuedIdentity.isEmpty {
+            debugLog("Replaying \(queuedIdentity.count) pre-init identity call(s)")
+            for call in queuedIdentity {
+                switch call {
+                case .identify(let userId, let properties):
+                    await identify(userId, properties: properties)
+                case .alias(let newUserId, let previousId):
+                    await alias(newUserId, previousId: previousId)
+                }
+            }
+        }
+
         if !queued.isEmpty {
             debugLog("Flushing \(queued.count) pre-init event(s)")
             for item in queued {
@@ -299,7 +353,13 @@ public class DatalyrSDK {
         }
         
         debugLog("Tracking event: \(eventName)", data: eventData)
-        
+
+        // FSR-36: last-activity is the session-timeout anchor. Bump the stored session
+        // timestamp on every tracked event so refreshSessionIfNeeded measures time since the
+        // last activity, not since session CREATION — otherwise a continuously-active user
+        // gets their session rotated mid-engagement the moment they cross 30 min of age.
+        await DatalyrStorage.shared.setDouble(StorageKeys.sessionTimestamp, value: Date().timeIntervalSince1970)
+
         let payload = await createEventPayload(eventName: eventName, eventData: eventData)
         await eventQueue?.enqueue(payload)
     }
@@ -333,10 +393,23 @@ public class DatalyrSDK {
     ///   - userId: User identifier
     ///   - properties: Optional user properties
     public func identify(_ userId: String, properties: UserProperties? = nil) async {
-        guard initialized else {
-            errorLog("SDK not initialized. Call initialize() first.")
-            return
+        // FSR-33: buffer pre-init identify (like track() does) instead of dropping it.
+        // Apps commonly call identify(userId) at launch concurrently with initialize();
+        // a hard return there lost the identity entirely (no $identify, no visitor_user_links,
+        // no web-attribution lookup) and every following event went out anonymous.
+        let shouldBuffer: Bool = preInitLock.withLock {
+            if !initialized {
+                if preInitIdentityQueue.count < DatalyrSDK.preInitQueueMax {
+                    debugLog("Queuing pre-init identify: \(userId)")
+                    preInitIdentityQueue.append(.identify(userId: userId, properties: properties))
+                } else {
+                    errorLog("Pre-init identity queue full, dropping identify: \(userId)")
+                }
+                return true
+            }
+            return false
         }
+        if shouldBuffer { return }
 
         debugLog("Identifying user: \(userId)", data: properties)
 
@@ -409,6 +482,10 @@ public class DatalyrSDK {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue(apiKey, forHTTPHeaderField: "X-Datalyr-API-Key")
+            // FSR-92: bound the awaited lookup at 10s (matching the deferred path) instead of
+            // inheriting URLSession.shared's 60s default — identify() awaits this inline, so a
+            // degraded lookup could stall onboarding up to a minute.
+            request.timeoutInterval = 10
 
             let body = ["email": email]
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -617,12 +694,28 @@ public class DatalyrSDK {
     ///   - newUserId: New user identifier
     ///   - previousId: Previous user identifier (optional)
     public func alias(_ newUserId: String, previousId: String? = nil) async {
-        guard initialized else {
-            errorLog("SDK not initialized. Call initialize() first.")
-            return
+        // FSR-33: buffer pre-init alias (like track()/identify()) instead of dropping it.
+        let shouldBuffer: Bool = preInitLock.withLock {
+            if !initialized {
+                if preInitIdentityQueue.count < DatalyrSDK.preInitQueueMax {
+                    debugLog("Queuing pre-init alias: \(newUserId)")
+                    preInitIdentityQueue.append(.alias(newUserId: newUserId, previousId: previousId))
+                } else {
+                    errorLog("Pre-init identity queue full, dropping alias: \(newUserId)")
+                }
+                return true
+            }
+            return false
         }
-        
-        let previousUserId = previousId ?? currentUserId ?? visitorId
+        if shouldBuffer { return }
+
+        // FSR-32: default previousId to the id the SERVER actually keys anonymous events on.
+        // Anonymous iOS events are written with visitor_id/anonymous_id = anonymousId (ingest
+        // index.js:2318-2320); the alias link builder keys the visitor_user_links row on
+        // anonymous_id = previousId (user-properties-updater.js:434-440). visitorId never lands
+        // in those columns, so the old `?? visitorId` default produced a link matching ZERO
+        // pre-alias anonymous events. Use anonymousId so an alias-first integration resolves.
+        let previousUserId = previousId ?? currentUserId ?? anonymousId
         
         debugLog("Creating alias: \(newUserId) for \(previousUserId)")
         
@@ -645,6 +738,29 @@ public class DatalyrSDK {
         await persistUserData()
     }
     
+    /// Route a deep link to the attribution parser, buffering it if init hasn't finished.
+    /// FSR-5: on a cold start from an ad click — the highest-value deep link of the install
+    /// lifecycle — onOpenURL / SceneDelegate commonly fires while initialize() is still
+    /// awaiting storage/network, when attributionManager is nil. The old optional-chain
+    /// no-op silently dropped that URL. Buffer it and replay before checkAndTrackInstall().
+    internal func routeDeepLink(_ url: URL) async {
+        let buffered: Bool = preInitLock.withLock {
+            if !initialized || attributionManager == nil {
+                if preInitDeepLinkQueue.count < DatalyrSDK.preInitQueueMax {
+                    debugLog("Buffering pre-init deep link: \(url.absoluteString)")
+                    preInitDeepLinkQueue.append(url)
+                } else {
+                    errorLog("Pre-init deep-link queue full, dropping: \(url.absoluteString)")
+                }
+                return true
+            }
+            return false
+        }
+        if buffered { return }
+
+        await attributionManager?.handleDeepLink(url)
+    }
+
     /// Reset the current user session
     public func reset() async {
         guard initialized else {
@@ -662,14 +778,32 @@ public class DatalyrSDK {
         visitorId = generateUUID()
         sessionId = await refreshSessionId()
         autoEventsManager?.updateSessionId(sessionId)  // keep auto-events session in lockstep (IOS-14)
-        
+
+        // FSR-6: regenerate the anonymousId too. It — not visitorId — is the SERVER's visitor
+        // key: ingest writes visitor_id = anonymousId||distinctId (index.js:2320) and $identify
+        // links anonymous_id = anonymousId (index.js:2534). Leaving it intact across
+        // logout→reset→login-as-B re-linked B's $identify to the SAME anon id already linked to
+        // A, merging two users' identities/attribution server-side. Rotating visitorId alone was
+        // cosmetic. (Mirrors Segment/Mixpanel reset + the Node SDK NODE-6 fix.)
+        anonymousId = "anon_\(generateUUID())"
+
         // Clear stored user data
         await DatalyrStorage.shared.removeValue(StorageKeys.userId)
         await DatalyrStorage.shared.removeValue(StorageKeys.userProperties)
         await DatalyrStorage.shared.setString(StorageKeys.visitorId, value: visitorId)
-        
+        await DatalyrStorage.shared.setString(StorageKeys.anonymousId, value: anonymousId)
+
+        // FSR-93: drop the web-attribution-checked marker set. It dedupes the once-per-email
+        // lookup against attribution we're about to wipe; leaving it would permanently block
+        // re-recovery if the same user re-identifies on this install (logout/login, QA flows).
+        await DatalyrStorage.shared.removeValue(Self.webAttributionCheckedKey)
+
         // Clear attribution data
         await attributionManager?.clearAttributionData()
+
+        // FSR-7: a new user identity should start a fresh SKAN conversion-value window,
+        // so reset the persisted high-water (NOT the per-install registration flag).
+        UnifiedAttributionTracker.shared.resetConversionState()
 
         debugLog("User session reset complete")
     }
@@ -1062,36 +1196,23 @@ public class DatalyrSDK {
 
         if result.fineValue > 0 {
             #if os(iOS)
-            // SKAN 4.0 (iOS 16.1+): Use new API with coarse value and lock window
-            if #available(iOS 16.1, *) {
-                let coarseValue: SKAdNetwork.CoarseConversionValue
-                switch result.coarseValue {
-                case "high": coarseValue = .high
-                case "medium": coarseValue = .medium
-                default: coarseValue = .low
+            // FSR-7: route through the single guarded updater (UnifiedAttributionTracker)
+            // instead of calling SKAdNetwork.updatePostbackConversionValue directly. That
+            // updater persists a cross-launch high-water (fine + coarse + locked) and only
+            // sends strict increases, so a later low-funnel event (view_item fine 8) can't
+            // downgrade an earlier higher value (begin_checkout fine 32) — SKAN 4 permits
+            // decreasing values but the SDK must not. (Encoder bit schema unchanged — IOS-24.)
+            let applied = await UnifiedAttributionTracker.shared.updateConversionValue(
+                fineValue: result.fineValue,
+                coarseValue: result.coarseValue,
+                lockWindow: result.lockWindow
+            )
+            if config?.debug == true {
+                if applied {
+                    debugLog("SKAdNetwork conversion value updated - fine: \(result.fineValue), coarse: \(result.coarseValue), lock: \(result.lockWindow) for event: \(event)", data: eventData)
+                } else {
+                    debugLog("SKAdNetwork conversion value not applied (not higher than persisted high-water, or window locked) for event: \(event)")
                 }
-
-                SKAdNetwork.updatePostbackConversionValue(result.fineValue, coarseValue: coarseValue, lockWindow: result.lockWindow) { error in
-                    if let error = error {
-                        print("[DatalyrSDK] SKAdNetwork 4.0 update error: \(error.localizedDescription)")
-                    } else if self.config?.debug == true {
-                        print("[DatalyrSDK] SKAdNetwork 4.0 updated - fine: \(result.fineValue), coarse: \(result.coarseValue), lock: \(result.lockWindow) for event: \(event)")
-                    }
-                }
-
-                if config?.debug == true {
-                    debugLog("SKAdNetwork 4.0 conversion value updated - fine: \(result.fineValue), coarse: \(result.coarseValue), lock: \(result.lockWindow) for event: \(event)", data: eventData)
-                }
-            }
-            // SKAN 3.0 (iOS 14.0-16.0): Use deprecated API
-            else if #available(iOS 14.0, *) {
-                SKAdNetwork.updateConversionValue(result.fineValue)
-
-                if config?.debug == true {
-                    debugLog("SKAdNetwork 3.0 conversion value updated: \(result.fineValue) for event: \(event)", data: eventData)
-                }
-            } else if config?.debug == true {
-                debugLog("SKAdNetwork requires iOS 14.0+")
             }
             #else
             if config?.debug == true {
@@ -1360,7 +1481,7 @@ public class DatalyrSDK {
         // Add standard properties
         enrichedEventData["platform"] = "ios"
         enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
-        enrichedEventData["sdk_version"] = "2.1.6"
+        enrichedEventData["sdk_version"] = "2.1.7"
 
         // App info from Bundle
         let bundle = Bundle.main
@@ -1463,8 +1584,19 @@ public class DatalyrSDK {
         }
         
         if !userProperties.isEmpty {
+            // FSR-1: JSONSerialization raises an uncatchable NSException for non-JSON
+            // values (Date/URL/UUID), which identify(userId, properties: ["d": Date()])
+            // routinely passes — that would crash the HOST APP. Sanitize to a JSON-safe
+            // shape first (matching the wire representation), never call the raw dict.
+            let jsonSafe = JSONSerialization.isValidJSONObject(userProperties)
+                ? userProperties
+                : sanitizeForJSONObject(userProperties)
+            guard JSONSerialization.isValidJSONObject(jsonSafe) else {
+                errorLog("User properties not JSON-serializable after sanitization; skipping persist")
+                return
+            }
             do {
-                let data = try JSONSerialization.data(withJSONObject: userProperties)
+                let data = try JSONSerialization.data(withJSONObject: jsonSafe)
                 await DatalyrStorage.shared.setData(StorageKeys.userProperties, value: data)
             } catch {
                 errorLog("Failed to persist user properties", error: error)
@@ -1482,7 +1614,7 @@ public class DatalyrSDK {
             
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "2.1.6",
+                "sdk_version": "2.1.7",
                 "install_time": installTime
             ]
             
@@ -1526,17 +1658,20 @@ public class DatalyrSDK {
     
     #if canImport(UIKit)
     @objc private func appWillResignActive() {
-        // Start background task
-        backgroundTaskId = UIApplication.shared.beginBackgroundTask { [weak self] in
-            self?.endBackgroundTask()
-        }
+        // FSR-91: capture THIS resign's task id locally and end exactly it — don't route
+        // through the shared backgroundTaskId field. Otherwise a slow flush #1 (per-event
+        // HTTP retries can take tens of seconds) could end task B begun by a later resign #2,
+        // suspending the app mid-send. (Mirrors the appWillTerminate path's local-taskId pattern.)
+        let taskId = UIApplication.shared.beginBackgroundTask(withName: "datalyr.resign.flush")
+        backgroundTaskId = taskId  // kept so didBecomeActive's endBackgroundTask() can release it on quick foreground
 
-        // Flush events before going to background, then release the background-task
-        // assertion immediately (it used to leak until foreground or the ~30s OS
-        // expiration, wasting the background budget even though flush finishes in <1s).
         Task {
             await flush()
-            endBackgroundTask()
+            if taskId != .invalid {
+                UIApplication.shared.endBackgroundTask(taskId)
+                // If the field still points at this task, clear it so endBackgroundTask() is a no-op.
+                if backgroundTaskId == taskId { backgroundTaskId = .invalid }
+            }
         }
     }
     
@@ -1665,6 +1800,15 @@ extension DatalyrSDK: AutoEventsTrackingDelegate {
         Task {
             await track(eventName, eventData: properties)
         }
+    }
+
+    /// FSR-36: AutoEventsManager minted a new session id (post-timeout foreground). Adopt
+    /// it as the SDK's own session id so event payloads + context.session_id stay in lockstep
+    /// with session_start/session_end, instead of the event stream running under a stale id.
+    func autoEventsDidRotateSession(to newSessionId: String) {
+        guard sessionId != newSessionId else { return }
+        sessionId = newSessionId
+        debugLog("SDK session id adopted from auto-events rotation", data: ["sessionId": newSessionId])
     }
 }
 
