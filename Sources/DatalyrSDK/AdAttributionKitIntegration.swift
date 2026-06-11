@@ -239,25 +239,92 @@ internal class AdAttributionKitIntegration {
 
 // MARK: - Backward Compatibility Wrapper
 
-/// Unified attribution tracking that uses AdAttributionKit on iOS 17.4+ and SKAdNetwork on earlier versions
+/// Unified attribution tracking that uses AdAttributionKit on iOS 17.4+ and SKAdNetwork on earlier versions.
+///
+/// Owns the cross-launch high-water guard (FSR-3 / FSR-7): SKAN 4 *permits* decreasing
+/// the conversion value, but the SDK must not — an early/low-funnel event (view_item)
+/// after a high one (begin_checkout/purchase) would clobber it. The OS keeps no state
+/// across cold launches and the in-memory guards in AdAttributionKitIntegration reset
+/// every launch, so the high-water value is persisted in UserDefaults here and only
+/// strictly-greater fine values (or equal fine + higher coarse) are ever sent.
 internal class UnifiedAttributionTracker {
     static let shared = UnifiedAttributionTracker()
 
+    private let storage = UserDefaults.standard
+    // Namespaced so they can't collide with the host app's keys.
+    private let registeredKey = "datalyr_skan_registered"
+    private let fineKey = "datalyr_skan_high_fine"
+    private let coarseKey = "datalyr_skan_high_coarse" // 0=low 1=medium 2=high
+    private let lockedKey = "datalyr_skan_window_locked"
+
+    private let stateLock = NSLock()
+
     private init() {}
 
-    /// Register for attribution tracking
+    private func coarseRank(_ coarse: String) -> Int {
+        switch coarse.lowercased() {
+        case "high": return 2
+        case "medium": return 1
+        default: return 0
+        }
+    }
+
+    /// Persisted high-water state, read/written under stateLock.
+    private func currentState() -> (fine: Int, coarseRank: Int, locked: Bool) {
+        stateLock.withLock {
+            (storage.integer(forKey: fineKey), storage.integer(forKey: coarseKey), storage.bool(forKey: lockedKey))
+        }
+    }
+
+    /// Decide whether a candidate value should be sent and, if so, commit it as the new
+    /// high-water. Returns nil to skip (locked window, or not an increase). Atomic.
+    private func commitIfHigher(fine: Int, coarseRank newCoarse: Int, lock: Bool) -> Bool {
+        stateLock.withLock {
+            if storage.bool(forKey: lockedKey) { return false }
+            let curFine = storage.integer(forKey: fineKey)
+            let curCoarse = storage.integer(forKey: coarseKey)
+            let isHigher = fine > curFine || (fine == curFine && newCoarse > curCoarse)
+            guard isHigher else { return false }
+            storage.set(fine, forKey: fineKey)
+            storage.set(newCoarse, forKey: coarseKey)
+            if lock { storage.set(true, forKey: lockedKey) }
+            return true
+        }
+    }
+
+    /// Register for attribution tracking.
+    /// FSR-3: the iOS 17.4+ AdAttributionKit registration sends a 0/low conversion value.
+    /// Sending it on EVERY cold launch resets any in-window high-water value to 0/low.
+    /// Persist a one-time `skan_registered` flag so the 0-value registration fires only
+    /// once per install; later launches skip it (the legacy registerApp… API is idempotent
+    /// and unaffected).
     func register() async {
         if #available(iOS 17.4, *) {
+            let alreadyRegistered = stateLock.withLock { storage.bool(forKey: registeredKey) }
+            guard !alreadyRegistered else {
+                debugLog("AdAttributionKit: already registered this install; skipping 0-value re-registration")
+                return
+            }
             await AdAttributionKitIntegration.shared.registerAppForAttribution()
+            stateLock.withLock { storage.set(true, forKey: registeredKey) }
         } else if #available(iOS 14.0, *) {
-            // Legacy SKAdNetwork registration
+            // Legacy SKAdNetwork registration (idempotent; no value sent).
             SKAdNetwork.registerAppForAdNetworkAttribution()
             debugLog("SKAdNetwork: Registered for attribution (legacy)")
         }
     }
 
-    /// Update conversion value (automatically uses correct API based on iOS version)
+    /// Update conversion value through the cross-launch high-water guard (FSR-7).
+    /// Only strictly-higher values are sent; the window-lock is honored across launches.
     func updateConversionValue(fineValue: Int, coarseValue: String, lockWindow: Bool) async -> Bool {
+        let newCoarseRank = coarseRank(coarseValue)
+
+        // Persisted monotonic guard — applies on EVERY iOS version, surviving cold launches.
+        guard commitIfHigher(fine: fineValue, coarseRank: newCoarseRank, lock: lockWindow) else {
+            debugLog("SKAN: skipping update (not higher than persisted high-water, or window locked) fine=\(fineValue) coarse=\(coarseValue)")
+            return false
+        }
+
         if #available(iOS 17.4, *) {
             return await AdAttributionKitIntegration.shared.updateConversionValue(
                 fineValue: fineValue,
@@ -292,6 +359,29 @@ internal class UnifiedAttributionTracker {
         }
 
         return false
+    }
+
+    /// Reset the persisted high-water state. Called from SDK.reset() so a logout/login
+    /// (new install identity) starts a fresh conversion-value window. Does NOT touch the
+    /// one-time registration flag (registration is per physical install, not per user).
+    func resetConversionState() {
+        stateLock.withLock {
+            storage.removeObject(forKey: fineKey)
+            storage.removeObject(forKey: coarseKey)
+            storage.removeObject(forKey: lockedKey)
+        }
+    }
+
+    /// Test-only: exercise just the persisted monotonic guard (FSR-7) without the OS
+    /// SKAdNetwork round-trip, which fails in the simulator/test environment. Returns whether
+    /// the value WOULD be sent (and commits the high-water exactly as the real path does).
+    func applyHighWaterForTest(fineValue: Int, coarseValue: String, lockWindow: Bool) -> Bool {
+        return commitIfHigher(fine: fineValue, coarseRank: coarseRank(coarseValue), lock: lockWindow)
+    }
+
+    /// Reset the one-time registration flag too (test-only). Production never clears it.
+    func resetRegistrationForTest() {
+        stateLock.withLock { storage.removeObject(forKey: registeredKey) }
     }
 
     /// Get attribution framework info
