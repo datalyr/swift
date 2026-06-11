@@ -2,6 +2,84 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.7] - 2026-06-10
+
+Full-stack review (FULL_STACK_REVIEW_2026-06-10) fix pass. Fixes a host-app crash,
+several SKAN under-reporting bugs, dead session/flush timers, pre-init drop paths, and
+cross-user identity contamination. 14 new XCTests (85 total, green).
+
+### Fixed
+- **FSR-1 (crash): `track()`/`identify()` could crash the host app on `Date`/`URL`/`UUID`
+  property values.** `validateEventData` and `persistUserData` called
+  `JSONSerialization.data(withJSONObject:)` on the raw caller dict, which raises an
+  *uncatchable* Objective-C `NSInvalidArgumentException` for non-JSON types (the `do/catch`
+  never fires). Now guarded with `isValidJSONObject` and sanitized to the wire shape
+  (`Date`→ISO8601, `URL`→absoluteString) — these are SDK-supported inputs, so they're kept,
+  not rejected, and never crash.
+- **FSR-3 (SKAN): conversion value reset to 0/low on every cold launch (iOS 17.4+).** The
+  per-launch AdAttributionKit registration sent `updatePostbackConversionValue(0, .low, …)`
+  each time, clobbering any in-window value. The 0-value registration now fires **once per
+  install** (persisted flag).
+- **FSR-7 (SKAN): the main `trackWithSKAdNetwork` path bypassed the monotonic/lock guard.**
+  It called the OS update APIs directly, so a later low-funnel event (e.g. `view_item`)
+  downgraded an earlier higher value. It now routes through a single guarded updater that
+  **persists the high-water fine+coarse+locked across launches** and only sends increases.
+  (Encoder bit schema unchanged — IOS-24.)
+- **FSR-87 (SKAN): integer `revenue`/`value` silently lost its tier.** `as? Double` returns
+  nil for a native `Int`; now read via `NSNumber` so `["revenue": 50]` encodes the tier.
+- **FSR-4 (sessions): the inactivity-timeout `session_end` timer never fired.**
+  `AutoEventsManager` still used `Timer.scheduledTimer` from runloop-less cooperative
+  threads; replaced with a `DispatchSourceTimer` (mirrors the IOS-6 queue fix).
+- **FSR-36 (sessions): timeout measured session AGE, not inactivity, and AutoEvents
+  rotation never synced back to the SDK.** Last-activity now anchors the timeout (the stored
+  session timestamp is bumped on each tracked event), and AutoEvents pushes a freshly-minted
+  session id back to the SDK so payloads/`context.session_id` stay in lockstep.
+- **FSR-5 (deep links): install-moment deep links were dropped if `handleDeepLink` ran
+  before `initialize()` finished.** URLs are now buffered and replayed before
+  `checkAndTrackInstall()`, so `app_install` carries the launch deep link's params.
+- **FSR-33 (identity): pre-init `identify()`/`alias()` were silently dropped** (unlike
+  `track()`). They're now buffered and replayed after init.
+- **FSR-90 (identity): pre-init drain TOCTOU.** `initialized = true` and the buffer
+  snapshot+clear now happen in the same lock critical section, so a racing call can't append
+  after the drain and be lost.
+- **FSR-6 (identity): `reset()` never rotated `anonymousId`** — the server's visitor key — so
+  logout→login on a shared device merged two users server-side. `reset()` now regenerates
+  `anon_<uuid>` (mirrors the Node SDK NODE-6 fix), clears the SKAN window, and drops the
+  web-attribution-checked marker (FSR-93).
+- **FSR-32 (identity): no-arg `alias()` defaulted `previousId` to `visitorId`**, which the
+  server never keys anonymous events on. Defaults to `currentUserId ?? anonymousId` so the
+  link resolves real pre-alias events.
+- **FSR-30 (attribution): web→app merge dropped `gbraid`/`wbraid`/`lyr`.** Added gap-fill
+  branches (precedence unchanged).
+- **FSR-34 (attribution): journey last-touch/touchpoints were re-recorded from stale,
+  never-expiring attribution every cold launch**, rolling the 90-day expiry forward and
+  inflating `touchpoint_count`. The init-time touch is recorded only when the attribution is
+  genuinely new (capture-time gate), carrying the real timestamp.
+- **FSR-35 (attribution): `oppref` was missing from `AttributionData.CodingKeys`** — captured
+  then lost on relaunch. Added (plus a new `dclid` field — FSR-86).
+- **FSR-86 (attribution): `dclid` and other params were whitelisted but never assigned.**
+  `dclid` is now captured (ingest supports it); the truly-unused whitelist entries
+  (`irclickid`, `fb_click_id`, `fb_action_ids`, `fb_action_types`, `click_id`) were removed.
+- **FSR-29 (network): Apple Search Ads fetch had no retry/timeout and blocked init.** Now
+  bounded at 10s, retries Apple's documented transient 404 up to 3×, and runs detached so it
+  no longer gates `initialized` (which was pushing events past the 50-cap pre-init queue).
+- **FSR-31 (network): `429`/`408` were treated as permanent.** They're now retried honoring
+  `Retry-After` without counting against the failure/dead-letter budget.
+- **FSR-92 (network): the `identify()` web-attribution lookup had no request timeout**
+  (inherited 60s). Set to 10s (matching the deferred path).
+- **FSR-88 (queue): the dead-letter store was write-only.** Retry-exhausted events are now
+  replayed once on the next launch.
+- **FSR-84 (queue): queue init overwrote concurrently-enqueued events with the persisted
+  snapshot.** Now merges (persisted-first) instead of assigning.
+- **FSR-89 (queue): `updateConfig` ignored its argument.** It now applies the new config.
+- **FSR-91 (lifecycle): `appWillResignActive` could end the NEXT background task mid-flush.**
+  The task id is captured locally and exactly that id is ended (matches the terminate path).
+
+### Notes
+- **FSR-25 (unchanged by design):** anonymous events still send `userId = visitorId`
+  (`DatalyrHTTPClient.transformForServerAPI`) — a shared server-side contract the web→app
+  lyr bridge may depend on. Left as-is.
+
 ## [2.1.6] - 2026-06-03
 
 End-to-end review pass. Unblocks the build on current Xcode, restores a green test
