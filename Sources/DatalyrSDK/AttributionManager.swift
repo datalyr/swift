@@ -11,11 +11,11 @@ internal let ATTRIBUTION_PARAMS = [
     "lyr", "datalyr", "dl_tag", "dl_campaign",
     
     // Facebook/Meta
-    "fbclid", "fb_click_id", "fb_action_ids", "fb_action_types",
-    
+    "fbclid",
+
     // TikTok
     "ttclid", "tt_click_id", "tiktok_click_id",
-    
+
     // Google Ads
     "gclid", "wbraid", "gbraid", "dclid",
 
@@ -25,15 +25,19 @@ internal let ATTRIBUTION_PARAMS = [
     // UTM Parameters (Standard)
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "utm_id", "utm_source_platform", "utm_creative_format", "utm_marketing_tactic",
-    
+
     // Partner tracking parameters
     "partner_id", "affiliate_id", "referrer_id", "source_id",
-    
+
     // Other platforms
-    "twclid", "li_click_id", "msclkid", "irclickid",
-    
+    "twclid", "li_click_id", "msclkid",
+
     // Custom attribution parameters
-    "click_id", "campaign_id", "ad_id", "adset_id", "creative_id",
+    // FSR-86: removed irclickid / fb_click_id / fb_action_ids / fb_action_types / click_id —
+    // they were whitelisted (so extractURLParameters collected them) but never assigned to
+    // AttributionData and have no field, so they were parsed and dropped. The whitelist now
+    // reflects exactly what is captured. (dclid is captured below — ingest supports it.)
+    "campaign_id", "ad_id", "adset_id", "creative_id",
     "placement_id", "keyword", "matchtype", "network", "device"
 ]
 
@@ -124,7 +128,10 @@ internal class AttributionManager {
             await processAttributionParameters(parameters)
             attributionData.deepLinkUrl = url.absoluteString
             attributionData.attributionTimestamp = DateFormatter.iso8601.string(from: Date())
-            
+            // FSR-34: stamp a numeric capture-time so the journey recorder can detect that
+            // THIS is a fresh touch (vs a relaunch over stale persisted attribution).
+            attributionData.attributionCapturedAt = Date().timeIntervalSince1970 * 1000
+
             await saveAttributionData()
             debugLog("Deep link processed with \(parameters.count) parameters")
         }
@@ -193,6 +200,8 @@ internal class AttributionManager {
         // were never assigned here — so Google App-campaign attribution was dropped on iOS.
         attributionData.gbraid = parameters["gbraid"] ?? attributionData.gbraid
         attributionData.wbraid = parameters["wbraid"] ?? attributionData.wbraid
+        // FSR-86: dclid was whitelisted but never assigned; ingest's clickIdMapping supports it.
+        attributionData.dclid = parameters["dclid"] ?? attributionData.dclid
         attributionData.oppref = parameters["oppref"] ?? attributionData.oppref
         attributionData.twclid = parameters["twclid"] ?? attributionData.twclid
         attributionData.liClickId = parameters["li_click_id"] ?? attributionData.liClickId
@@ -290,6 +299,21 @@ internal class AttributionManager {
         if attributionData.oppref == nil, let oppref = webAttribution["oppref"] as? String {
             attributionData.oppref = oppref
         }
+        // FSR-30: gbraid/wbraid/lyr were forwarded by BOTH web→app recovery paths
+        // (DatalyrSDK.swift:459-460/586-587) and carried in the lookup response, but never
+        // merged into the persisted struct. Under ATT, Google App campaigns produce
+        // gbraid/wbraid (not gclid), so the recovered Google-iOS click-id never reached
+        // client-side attribution / getRevenueCatAttributes() (which DOES emit these keys).
+        // Same gap-fill precedence as the others (only fill when absent).
+        if attributionData.gbraid == nil, let gbraid = webAttribution["gbraid"] as? String {
+            attributionData.gbraid = gbraid
+        }
+        if attributionData.wbraid == nil, let wbraid = webAttribution["wbraid"] as? String {
+            attributionData.wbraid = wbraid
+        }
+        if attributionData.lyr == nil, let lyr = webAttribution["lyr"] as? String {
+            attributionData.lyr = lyr
+        }
 
         // Merge UTM parameters
         if attributionData.utmSource == nil, let utmSource = webAttribution["utm_source"] as? String {
@@ -312,6 +336,10 @@ internal class AttributionManager {
             attributionData.utmTerm = utmTerm
             attributionData.campaignTerm = utmTerm
         }
+
+        // FSR-34: a web→app merge is a fresh attribution event — stamp the capture-time so the
+        // journey recorder treats it as new rather than relaunch-over-stale.
+        attributionData.attributionCapturedAt = Date().timeIntervalSince1970 * 1000
 
         // Save merged attribution data
         await saveAttributionData()
