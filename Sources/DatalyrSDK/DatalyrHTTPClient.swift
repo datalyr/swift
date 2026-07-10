@@ -33,27 +33,49 @@ internal struct HTTPClientConfig {
 
 // MARK: - Rate Limiter (Thread-Safe)
 
-/// Actor-based rate limiter for thread-safe rate limiting
-private actor RateLimiter {
-    private var lastRequestTime: TimeInterval = 0
-    private var requestCount: Int = 0
-    private let maxRequestsPerMinute: Int
+/// Actor-based sliding-window rate limiter with BACKPRESSURE, not drop (9.B.1).
+/// The old fixed-window version THREW `rateLimitExceeded` past 100 requests/min; since
+/// shouldRetry() classified that as non-retryable, every rate-limited send failed on its
+/// first attempt, the queue burned one of its 3 retries per pass, and a >100-event backlog
+/// draining in one burst (e.g. after airplane mode) silently dead-lettered revenue events.
+/// Now callers WAIT until the window has room, so a burst is paced out instead of lost —
+/// mirrors the React Native SDK's enforceRateLimit() fix.
+/// (internal, not private, so tests can exercise the pacing with a tiny window.)
+internal actor RateLimiter {
+    /// Timestamps of recent sends, oldest first (appends are in time order).
+    private var requestTimestamps: [TimeInterval] = []
+    private let maxRequestsPerWindow: Int
+    private let window: TimeInterval
 
-    init(maxRequestsPerMinute: Int = 100) {
-        self.maxRequestsPerMinute = maxRequestsPerMinute
+    init(maxRequestsPerWindow: Int = 100, window: TimeInterval = 60) {
+        self.maxRequestsPerWindow = maxRequestsPerWindow
+        self.window = window
     }
 
-    func checkLimit() throws {
-        let now = Date().timeIntervalSince1970
+    /// Wait (bounded) until the sliding window has room, then claim a slot. Never throws.
+    func waitForSlot() async {
+        // Bound the total wait so a send can never hang forever: past the deadline we
+        // proceed anyway and let the server arbitrate — its 429 is handled as transient
+        // backpressure (FSR-31), which retries without burning the failure budget.
+        let deadline = Date().timeIntervalSince1970 + window * 2
 
-        if now - lastRequestTime < 60 {
-            requestCount += 1
-            if requestCount > maxRequestsPerMinute {
-                throw HTTPError.rateLimitExceeded
+        while true {
+            let now = Date().timeIntervalSince1970
+            requestTimestamps.removeAll { now - $0 >= window }
+
+            if requestTimestamps.count < maxRequestsPerWindow || now >= deadline {
+                requestTimestamps.append(now)
+                return
             }
-        } else {
-            requestCount = 1
-            lastRequestTime = now
+
+            // The oldest survived the prune, so (window - (now - oldest)) is in (0, window].
+            // +0.05 margin guarantees it exits the window on the next pass; the floor keeps
+            // the loop from busy-spinning, and the cap defends against a corrupted future
+            // timestamp WITHOUT clipping the margin. Task.sleep suspends the actor (it does
+            // not block it), so concurrent waiters interleave and re-check on wake.
+            let oldest = requestTimestamps[0]
+            let wait = min(max(window - (now - oldest) + 0.05, 0.05), window + 0.1)
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
         }
     }
 }
@@ -123,8 +145,9 @@ internal class DatalyrHTTPClient {
     /// throttling honors Retry-After without burning the failure budget toward dead-letter.
     private func sendWithRetry(_ payload: EventPayload, retryCount: Int, throttleCount: Int) async -> HTTPResponse {
         do {
-            // Check rate limit
-            try await checkRateLimit()
+            // Pace, don't drop: wait for a rate-limit slot (backpressure) instead of
+            // throwing, so a backlog burst is slowed down rather than dead-lettered (9.B.1).
+            await waitForRateLimitSlot()
 
             debugLog("Sending event: \(payload.eventName) (attempt \(retryCount + 1))")
 
@@ -235,9 +258,9 @@ internal class DatalyrHTTPClient {
         return request
     }
     
-    /// Check rate limit using thread-safe actor
-    private func checkRateLimit() async throws {
-        try await rateLimiter.checkLimit()
+    /// Wait for a rate-limit slot using the thread-safe actor (bounded; never throws)
+    private func waitForRateLimitSlot() async {
+        await rateLimiter.waitForSlot()
     }
     
     /// Test-only: expose the HTTP-status retry classification (FSR-31) so the suite can assert
@@ -251,6 +274,10 @@ internal class DatalyrHTTPClient {
         if let httpError = error as? HTTPError {
             switch httpError {
             case .authenticationFailed, .rateLimitExceeded:
+                // .rateLimitExceeded is no longer thrown anywhere — the client-side limiter
+                // now waits for a slot instead of throwing (9.B.1). The case is kept in the
+                // enum for exhaustiveness/compatibility; classified non-retryable if it ever
+                // resurfaces so it can't loop.
                 return false
             case .httpError(let code, _):
                 // Retry server errors (5xx) and transient throttling/timeout (429, 408).

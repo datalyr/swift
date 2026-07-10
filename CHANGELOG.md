@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **9.B.1 (data loss): the client-side rate limiter dropped burst/backlog events —
+  including purchases — instead of pacing them.** The fixed-window `RateLimiter` THREW
+  `rateLimitExceeded` past 100 events/min, `shouldRetry` classified that as non-retryable
+  (the send failed on its first attempt), and the queue burned one of its 3 retries per
+  drain pass — so an offline (airplane-mode) backlog of >100 events draining in one burst
+  dead-lettered the overflow. The limiter is now a sliding 60s window that WAITS
+  (backpressure) until a slot frees — bounded, so a send can never hang; past the bound it
+  proceeds and defers to the server's 429, which is already handled as retry-free
+  backpressure (FSR-31). A backlog now delivers ALL events with zero dead-letters, just
+  slower. Mirrors the React Native SDK's `enforceRateLimit()` fix.
+
 ## [2.1.7] - 2026-06-10
 
 Full-stack review (FULL_STACK_REVIEW_2026-06-10) fix pass. Fixes a host-app crash,

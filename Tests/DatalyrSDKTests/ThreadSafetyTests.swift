@@ -35,6 +35,43 @@ final class ThreadSafetyTests: XCTestCase {
         XCTAssertTrue(true, "Concurrent rate limiter access did not crash")
     }
 
+    // 9.B.1: past window capacity the limiter must WAIT (backpressure), never throw — the
+    // old fixed-window checkLimit() threw rateLimitExceeded, which shouldRetry() classified
+    // as non-retryable, so the queue burned a retry per drain pass and dead-lettered backlog
+    // events (including purchases). Tiny window so the test runs in ~1s.
+    func testRateLimiterWaitsInsteadOfThrowing() async {
+        let limiter = RateLimiter(maxRequestsPerWindow: 5, window: 0.5)
+
+        let start = Date()
+        for _ in 0..<12 {
+            await limiter.waitForSlot() // must never throw or drop
+        }
+        let elapsed = Date().timeIntervalSince(start)
+
+        // 12 sequential slots at 5-per-0.5s need two window rolls (~1.1s): proof the burst
+        // was PACED rather than failed. The upper bound catches a hang/runaway wait.
+        XCTAssertGreaterThan(elapsed, 0.9, "Limiter should wait for window capacity, not pass a burst through")
+        XCTAssertLessThan(elapsed, 5.0, "Limiter waits must be bounded")
+    }
+
+    // 9.B.1 invariant: a burst of 3x window capacity must eventually get a slot for EVERY
+    // event — zero dropped — just slower. Concurrent waiters model the queue draining an
+    // offline (airplane-mode) backlog in one burst.
+    func testRateLimiterBurstDeliversAllSlots() async {
+        let limiter = RateLimiter(maxRequestsPerWindow: 10, window: 0.3)
+
+        let completed = await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<30 {
+                group.addTask { await limiter.waitForSlot() }
+            }
+            var count = 0
+            for await _ in group { count += 1 }
+            return count
+        }
+
+        XCTAssertEqual(completed, 30, "Every burst event must eventually get a slot")
+    }
+
     // MARK: - Event Queue Thread Safety Tests
 
     func testEventQueueConcurrentEnqueueAndStatusChange() async throws {
