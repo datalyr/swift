@@ -1524,6 +1524,7 @@ public class DatalyrSDK {
         enrichedEventData["platform"] = "ios"
         enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
         enrichedEventData["sdk_version"] = "2.1.7"
+        enrichedEventData["schema_version"] = 1  // A3-25: versioned-envelope stamp (see web SDK)
 
         // App info from Bundle
         let bundle = Bundle.main

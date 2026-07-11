@@ -16,6 +16,9 @@ All notable changes to this project will be documented in this file.
   reflects behavior that was already occurring.
 
 ### Added
+- **A3-25: `schema_version` envelope stamp.** Every event now carries `schema_version = 1`,
+  the first canonical envelope version shared across the whole SDK fleet (web/node/RN/iOS), so
+  the ingest contract layer can key on one version marker.
 - **TR-18: caller-supplied `event_id` for idempotent delivery.** If `eventData["event_id"]` is a
   non-empty string it becomes the wire `eventId` (and is stripped from properties), mirroring the
   Node SDK — so a client that double-tracks a purchase alongside a Stripe/RevenueCat webhook has a
