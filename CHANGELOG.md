@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **TR-26: `PrivacyInfo.xcprivacy` now accurately declares tracking.** The manifest said
+  `NSPrivacyTracking=false` with empty domains and every data type `Linked/Tracking=false`,
+  while the SDK reads the IDFA when ATT-authorized, attaches it to events, and forwards
+  click-ids / hashed email+phone / purchases to third-party ad CAPI. It now declares
+  `NSPrivacyTracking=true`, the `ingest.datalyr.com`/`api.datalyr.com` tracking domains, and
+  DeviceID / EmailAddress / PhoneNumber / PurchaseHistory / CoarseLocation / ProductInteraction
+  as Linked+Tracking (Analytics + ThirdPartyAdvertising). **App Store implication:** apps
+  embedding this SDK must reflect this tracking in their App Privacy "nutrition label"; this
+  reflects behavior that was already occurring.
+
 ### Added
 - **TR-18: caller-supplied `event_id` for idempotent delivery.** If `eventData["event_id"]` is a
   non-empty string it becomes the wire `eventId` (and is stripped from properties), mirroring the
