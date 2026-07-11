@@ -254,7 +254,11 @@ public class DatalyrSDK {
         if !queuedDeepLinks.isEmpty {
             debugLog("Replaying \(queuedDeepLinks.count) pre-init deep link(s)")
             for url in queuedDeepLinks {
-                await attributionManager?.handleDeepLink(url)
+                // TR-17: also emit $deep_link for a buffered link — a re-engagement deep link that
+                // arrived before init on an already-installed app gets NO app_install, so without
+                // this its click-ids would only be persisted, never sent.
+                let params = await attributionManager?.handleDeepLink(url) ?? [:]
+                await fireDeepLinkEvent(params)
             }
         }
 
@@ -767,7 +771,20 @@ public class DatalyrSDK {
         }
         if buffered { return }
 
-        await attributionManager?.handleDeepLink(url)
+        let params = await attributionManager?.handleDeepLink(url) ?? [:]
+        await fireDeepLinkEvent(params)
+    }
+
+    /// TR-17: emit a `$deep_link` event carrying the deep link's click-ids + lyr so a
+    /// post-install re-engagement ad-click reaches Datalyr ingest (server attribution / CAPI),
+    /// not just the local attribution store + Superwall/RevenueCat client attributes. No-op
+    /// when the URL carried nothing attributable.
+    private func fireDeepLinkEvent(_ params: [String: String]) async {
+        guard !params.isEmpty else { return }
+        var eventData: EventData = [:]
+        for (key, value) in params { eventData[key] = value }
+        eventData["source"] = "deep_link"
+        await track("$deep_link", eventData: eventData)
     }
 
     /// Reset the current user session

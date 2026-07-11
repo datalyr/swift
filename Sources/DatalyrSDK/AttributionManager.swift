@@ -118,12 +118,18 @@ internal class AttributionManager {
     }
     
     /// Process a deep link URL for attribution parameters
-    func handleDeepLink(_ url: URL) async {
+    /// Parse a deep link, persist its attribution params, and RETURN the extracted params
+    /// (click-ids + lyr, lowercased keys) so the caller can emit a `$deep_link` event — TR-17:
+    /// the params were only persisted locally + surfaced to Superwall/RevenueCat client
+    /// attributes, never sent to Datalyr ingest, so server attribution / CAPI couldn't see a
+    /// post-install re-engagement ad-click. Empty return = nothing attributable in the URL.
+    @discardableResult
+    func handleDeepLink(_ url: URL) async -> [String: String] {
         debugLog("Processing deep link: \(url.absoluteString)")
-        
+
         // Extract URL parameters
         let parameters = extractURLParameters(from: url)
-        
+
         if !parameters.isEmpty {
             await processAttributionParameters(parameters)
             attributionData.deepLinkUrl = url.absoluteString
@@ -135,6 +141,7 @@ internal class AttributionManager {
             await saveAttributionData()
             debugLog("Deep link processed with \(parameters.count) parameters")
         }
+        return parameters
     }
     
     /// Extract parameters from URL

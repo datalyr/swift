@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **TR-17: re-engagement deep links now emit a `$deep_link` event.** `handleDeepLink` persisted
+  the extracted `fbclid`/`gclid`/`ttclid`/`lyr` locally (and surfaced them to Superwall/RevenueCat
+  client attributes) but fired **no event**, and `createEventPayload` merges attribution only
+  into `app_install` — so a day-5 post-install ad-click deep link never reached Datalyr ingest,
+  and server attribution / CAPI couldn't see the re-engagement touch. `handleDeepLink` now
+  returns the extracted params and the SDK emits a `$deep_link` event (`source: "deep_link"` +
+  the click-ids + lyr) from both the live and the buffered/replayed paths.
+
 ### Fixed
 - **TR-16 (data loss): a launch-time `track()` could be lost to an init race.** `track()`
   read `initialized` in a `guard` *outside* `preInitLock`, then appended to `preInitQueue`

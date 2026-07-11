@@ -288,4 +288,22 @@ final class AttributionTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - TR-17: handleDeepLink returns the extracted params (so a $deep_link event fires)
+
+    func testTR17_handleDeepLinkReturnsExtractedClickIdsAndLyr() async {
+        let mgr = AttributionManager()
+        let url = URL(string: "https://app.datalyr.com/promo?fbclid=FB_123&gclid=G_456&lyr=L_789&noise=x")!
+        let params = await mgr.handleDeepLink(url)
+        XCTAssertEqual(params["fbclid"], "FB_123")
+        XCTAssertEqual(params["gclid"], "G_456")
+        XCTAssertEqual(params["lyr"], "L_789")
+        XCTAssertNil(params["noise"], "non-attribution params are filtered out")
+    }
+
+    func testTR17_handleDeepLinkReturnsEmptyWhenNoAttributionParams() async {
+        let mgr = AttributionManager()
+        let params = await mgr.handleDeepLink(URL(string: "https://app.datalyr.com/home")!)
+        XCTAssertTrue(params.isEmpty, "no attributable params → empty return → no $deep_link event")
+    }
 }
