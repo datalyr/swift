@@ -132,6 +132,45 @@ final class DatalyrEventQueueTests: XCTestCase {
         XCTAssertLessThanOrEqual(stats.queueSize, 5, "Queue should respect max size limit")
     }
 
+    // TR-05: overflow evictions are routed to the dead-letter store (replayed next launch),
+    // not silently dropped.
+    func testOverflowEvictionGoesToDeadLetter() async throws {
+        let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
+        let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(maxQueueSize: 3, flushInterval: 60.0))
+        queue.setOnlineStatus(false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // 5 non-critical events into a cap-3 queue → 2 evictions.
+        for i in 0..<5 {
+            await queue.enqueue(createTestPayload(eventName: "pageview_\(i)"))
+        }
+
+        XCTAssertLessThanOrEqual(queue.getStats().queueSize, 3)
+        let dead = await DatalyrStorage.shared.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self) ?? []
+        XCTAssertEqual(dead.count, 2, "the 2 evicted overflow events should be dead-lettered, not lost")
+    }
+
+    // TR-05: a purchase (critical) is retained across overflow — cheaper analytics events are
+    // evicted first, so the purchase never becomes the dead-lettered/dropped one.
+    func testOverflowKeepsPurchaseEvictsAnalytics() async throws {
+        let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
+        let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(maxQueueSize: 3, flushInterval: 60.0))
+        queue.setOnlineStatus(false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        await queue.enqueue(createTestPayload(eventName: "purchase")) // critical, enqueued oldest
+        for i in 0..<5 {
+            await queue.enqueue(createTestPayload(eventName: "pageview_\(i)")) // force overflow
+        }
+
+        let dead = await DatalyrStorage.shared.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self) ?? []
+        XCTAssertFalse(dead.contains { $0.payload.eventName == "purchase" },
+                       "the purchase must be retained (analytics evicted first), never dead-lettered")
+        XCTAssertGreaterThan(dead.count, 0, "analytics events were evicted to make room")
+    }
+
     // MARK: - Clear Queue Tests
 
     func testClearQueue() async throws {

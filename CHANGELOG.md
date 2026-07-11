@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **TR-05 (data loss): a full event queue silently dropped the oldest event with no
+  dead-letter.** `enqueue()` did a bare `queue.removeFirst()` (+ debug log) once
+  `maxQueueSize` (default **100**) was reached — oldest-first is the offline backlog, so any
+  offline period producing >100 events lost everything beyond the newest 100, purchases
+  included. Now: the default cap is **1000**; an overflow evicts the oldest **non-critical**
+  event first (purchases / value-bearing conversions are retained) and routes the evicted
+  event through `deadLetter()` (capped, replayed on the next launch) instead of dropping it.
 - **9.B.1 (data loss): the client-side rate limiter dropped burst/backlog events —
   including purchases — instead of pacing them.** The fixed-window `RateLimiter` THREW
   `rateLimitExceeded` past 100 events/min, `shouldRetry` classified that as non-retryable

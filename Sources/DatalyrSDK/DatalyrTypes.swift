@@ -32,7 +32,7 @@ public struct DatalyrConfig {
         timeout: TimeInterval = 15.0,
         batchSize: Int = 10,
         flushInterval: TimeInterval = 10.0,
-        maxQueueSize: Int = 100,
+        maxQueueSize: Int = 1000, // TR-05: was 100 (silently dropped an offline backlog >100)
         respectDoNotTrack: Bool = true,
         enableAutoEvents: Bool = true,
         enableAttribution: Bool = true,

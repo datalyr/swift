@@ -11,7 +11,7 @@ internal struct QueueConfig {
     let maxRetryCount: Int
     
     init(
-        maxQueueSize: Int = 100,
+        maxQueueSize: Int = 1000, // TR-05: was 100 — an offline period producing >100 events lost everything beyond the newest 100
         batchSize: Int = 10,
         flushInterval: TimeInterval = 30.0,
         maxRetryCount: Int = 3
@@ -74,13 +74,21 @@ internal class DatalyrEventQueue {
     /// Add an event to the queue
     func enqueue(_ payload: EventPayload) async {
         let queuedEvent = QueuedEvent(payload: payload)
+        var evicted: QueuedEvent? = nil
 
         // Add to queue under lock
         let shouldFlush: Bool = queueLock.withLock {
             // Check queue size limit
             if queue.count >= config.maxQueueSize {
-                debugLog("Queue is full, removing oldest event")
-                queue.removeFirst()
+                // TR-05: an overflow used to removeFirst() (the OLDEST event — i.e. the head of
+                // the offline backlog, often a purchase) and silently drop it. Evict the oldest
+                // NON-critical event instead (keep revenue/conversion events), and dead-letter
+                // the evicted one so it's replayed on the next launch rather than lost forever.
+                // All-critical → evict the oldest (still dead-lettered, capped at 100).
+                let idx = queue.firstIndex(where: { !Self.isCriticalEvent($0) }) ?? 0
+                let removed = queue.remove(at: idx)
+                evicted = removed
+                debugLog("Queue full (\(config.maxQueueSize)); evicting \(removed.payload.eventName) → dead-letter")
             }
 
             queue.append(queuedEvent)
@@ -90,6 +98,11 @@ internal class DatalyrEventQueue {
             return _isOnline && !_isProcessing
         }
 
+        // Dead-letter the evicted event (outside the lock — deadLetter is async).
+        if let evicted = evicted {
+            await deadLetter(evicted)
+        }
+
         // Persist to storage (outside lock)
         await persistQueue()
 
@@ -97,6 +110,22 @@ internal class DatalyrEventQueue {
         if shouldFlush {
             await processQueue()
         }
+    }
+
+    /// TR-05: revenue/conversion events protected from queue-overflow eviction — the offline
+    /// queue exists precisely to hold these, so evict cheaper analytics events first. Matches
+    /// on the canonical revenue event names or any value/revenue-bearing eventData.
+    private static func isCriticalEvent(_ event: QueuedEvent) -> Bool {
+        let name = event.payload.eventName.lowercased()
+        if name.contains("purchase") || name.contains("subscribe") || name.contains("checkout") {
+            return true
+        }
+        if let data = event.payload.eventData {
+            for key in ["value", "revenue", "amount", "price"] where data[key] != nil {
+                return true
+            }
+        }
+        return false
     }
     
     /// Manually flush the queue
