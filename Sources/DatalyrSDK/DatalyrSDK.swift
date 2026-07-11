@@ -330,18 +330,27 @@ public class DatalyrSDK {
     ///   - eventName: Name of the event
     ///   - eventData: Optional event properties
     public func track(_ eventName: String, eventData: EventData? = nil) async {
-        guard initialized else {
-            preInitLock.withLock {
+        // TR-16: re-check `initialized` INSIDE preInitLock (mirror identify()). The old
+        // `guard initialized` read the flag OUTSIDE the lock, racing initialize()'s atomic
+        // drain: track() could see !initialized, then the drain empties preInitQueue + sets
+        // initialized=true (both under this lock), then track() acquires the lock and appends
+        // to the ALREADY-DRAINED buffer → the event is never sent. track() is the highest-volume
+        // path and fires exactly at launch, so this raced most. identify/alias/routeDeepLink
+        // already do this; track() was the one that didn't.
+        let shouldBuffer: Bool = preInitLock.withLock {
+            if !initialized {
                 if preInitQueue.count < DatalyrSDK.preInitQueueMax {
                     debugLog("Queuing pre-init event: \(eventName)")
                     preInitQueue.append((eventName: eventName, eventData: eventData))
                 } else {
                     errorLog("Pre-init event queue full, dropping event: \(eventName)")
                 }
+                return true
             }
-            return
+            return false
         }
-        
+        if shouldBuffer { return }
+
         guard validateEventName(eventName) else {
             errorLog("Invalid event name: \(eventName)")
             return

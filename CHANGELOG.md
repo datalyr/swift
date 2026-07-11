@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **TR-16 (data loss): a launch-time `track()` could be lost to an init race.** `track()`
+  read `initialized` in a `guard` *outside* `preInitLock`, then appended to `preInitQueue`
+  *inside* the lock without re-checking — so `initialize()`'s atomic drain (which empties the
+  buffer and sets `initialized=true` under the same lock) could interleave, and the event
+  landed in the already-drained buffer and was never sent. `track()` is the highest-volume
+  path and fires exactly at launch. It now re-checks `initialized` inside the lock (mirroring
+  `identify()`/`alias()`/`routeDeepLink()`): if init won the race, it falls through to normal
+  processing instead of buffering into the void.
 - **TR-05 (data loss): a full event queue silently dropped the oldest event with no
   dead-letter.** `enqueue()` did a bare `queue.removeFirst()` (+ debug log) once
   `maxQueueSize` (default **100**) was reached — oldest-first is the offline backlog, so any
