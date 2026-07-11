@@ -827,6 +827,11 @@ public class DatalyrSDK {
         // Clear attribution data
         await attributionManager?.clearAttributionData()
 
+        // TR-28: also clear the multi-touch journey. reset() wipes the current attribution but
+        // left the persisted journey (touchpoints/first-last touch) intact, so a logout→login-as-B
+        // carried user A's journey into B's identity. Mirrors clearAttributionData above.
+        await JourneyManager.shared.clearJourney()
+
         // FSR-7: a new user identity should start a fresh SKAN conversion-value window,
         // so reset the persisted high-water (NOT the per-install registration flag).
         UnifiedAttributionTracker.shared.resetConversionState()
@@ -1498,11 +1503,22 @@ public class DatalyrSDK {
     
     /// Create event payload from event data
     private func createEventPayload(eventName: String, eventData: EventData?) async -> EventPayload {
-        let eventId = generateUUID()
+        // TR-18: honor a caller-supplied idempotency key. A non-empty String eventData["event_id"]
+        // becomes the WIRE eventId (the source's dedup key — e.g. a Stripe/RevenueCat webhook
+        // event id, so a client that double-tracks a purchase alongside a server webhook has a
+        // deterministic dedup key), mirroring the Node SDK's resolveEventId. It's stripped from
+        // properties so it isn't duplicated. Anything else → a fresh UUID (unchanged).
+        let callerEventId: String? = {
+            if let raw = eventData?["event_id"] as? String,
+               !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return raw }
+            return nil
+        }()
+        let eventId = callerEventId ?? generateUUID()
         let timestamp = DateFormatter.iso8601.string(from: Date())
         let deviceContext = await createDeviceContext()
 
         var enrichedEventData = eventData ?? [:]
+        if callerEventId != nil { enrichedEventData.removeValue(forKey: "event_id") }
 
         // Add standard properties
         enrichedEventData["platform"] = "ios"
@@ -1636,20 +1652,26 @@ public class DatalyrSDK {
         
         if isFirstLaunch {
             let installTime = DateFormatter.iso8601.string(from: Date())
-            await DatalyrStorage.shared.setString("datalyr_app_install_tracked", value: installTime)
-            
+
             var installData: EventData = [
                 "platform": "ios",
                 "sdk_version": "2.1.7",
                 "install_time": installTime
             ]
-            
+
             // Add attribution data if available
             if let attribution = attributionManager?.trackInstall() {
                 installData.merge(attribution.toDictionary()) { (_, new) in new }
             }
-            
+
             await track("app_install", eventData: installData)
+
+            // TR-21: mark install-tracked only AFTER app_install is durably enqueued. Writing
+            // the flag first meant a crash/kill between the flag write and the enqueue lost
+            // app_install permanently (install attribution — the single most valuable mobile
+            // event). track() returns once the event is in the persisted/retried queue, so
+            // ordering the flag after it makes a crash re-fire app_install next launch instead.
+            await DatalyrStorage.shared.setString("datalyr_app_install_tracked", value: installTime)
         }
     }
     

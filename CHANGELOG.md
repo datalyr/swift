@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **TR-18: caller-supplied `event_id` for idempotent delivery.** If `eventData["event_id"]` is a
+  non-empty string it becomes the wire `eventId` (and is stripped from properties), mirroring the
+  Node SDK — so a client that double-tracks a purchase alongside a Stripe/RevenueCat webhook has a
+  deterministic server-side dedup key. Omitted/empty → a fresh UUID (unchanged).
 - **TR-17: re-engagement deep links now emit a `$deep_link` event.** `handleDeepLink` persisted
   the extracted `fbclid`/`gclid`/`ttclid`/`lyr` locally (and surfaced them to Superwall/RevenueCat
   client attributes) but fired **no event**, and `createEventPayload` merges attribution only
@@ -14,6 +18,14 @@ All notable changes to this project will be documented in this file.
   the click-ids + lyr) from both the live and the buffered/replayed paths.
 
 ### Fixed
+- **TR-21 (data loss): the install flag was written BEFORE `app_install` was enqueued.** A
+  crash/kill between the flag write and the enqueue lost `app_install` — install attribution, the
+  single most valuable mobile event — permanently. The flag is now set AFTER `track()` returns
+  (event durably queued), so an interrupted first launch re-fires `app_install` next launch.
+- **TR-28 (identity bleed): `reset()` didn't clear the multi-touch journey.** It wiped current
+  attribution but left the persisted journey (touchpoints / first-last touch), so a
+  logout→login-as-B carried user A's journey into B. `reset()` now also calls
+  `JourneyManager.clearJourney()`.
 - **TR-16 (data loss): a launch-time `track()` could be lost to an init race.** `track()`
   read `initialized` in a `guard` *outside* `preInitLock`, then appended to `preInitQueue`
   *inside* the lock without re-checking — so `initialize()`'s atomic drain (which empties the
