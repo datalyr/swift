@@ -35,6 +35,22 @@ internal func errorLog(_ message: String, error: Error? = nil) {
 
 // MARK: - Validation Utilities
 
+/// Normalize an event name for cross-SDK parity (mirrors the RN/web fleet's `normalizeEventName`,
+/// TR-20a): trim, then collapse any run of whitespace to a single underscore, so
+/// `track("Order Completed")` records as `Order_Completed` on iOS too instead of being silently
+/// dropped by `validateEventName`. `$`-prefixed system names and dot/hyphen names are untouched.
+internal func normalizeEventName(_ eventName: String) -> String {
+    let trimmed = eventName.trimmingCharacters(in: .whitespacesAndNewlines)
+    // Collapse runs of whitespace → single underscore (matches RN's /\s+/g → '_').
+    let collapsed = trimmed
+        .split(whereSeparator: { $0.isWhitespace })
+        .joined(separator: "_")
+    if collapsed != eventName {
+        debugLog("Event name \"\(eventName)\" normalized to \"\(collapsed)\" (spaces → underscores)")
+    }
+    return collapsed
+}
+
 /// Validate event name
 internal func validateEventName(_ eventName: String) -> Bool {
     // Event name must not be empty and should be reasonable length

@@ -26,6 +26,10 @@ public class DatalyrSDK {
     // MARK: - Private Properties
 
     private var initialized = false
+    /// Claimed (under preInitLock) at the very start of initialize() so a concurrent/re-entrant
+    /// initialize() returns early instead of running the whole async setup twice. `initialized`
+    /// itself isn't set until the end of init, so it can't be the double-entry gate.
+    private var initializing = false
     /// Events that arrived before initialize() completed. Flushed once init finishes.
     private var preInitQueue: [(eventName: String, eventData: EventData?)] = []
     /// identify()/alias() calls that arrived before init (FSR-33). Replayed after init,
@@ -85,11 +89,28 @@ public class DatalyrSDK {
     /// - Parameter config: SDK configuration
     /// - Throws: Initialization errors
     public func initialize(config: DatalyrConfig) async throws {
-        guard !initialized else {
-            debugLog("SDK already initialized")
+        // Atomically claim initialization under preInitLock — guards against double-entry:
+        // two concurrent initialize() calls both passing an unlocked `guard !initialized`
+        // (which stays false until the very end of init) would run the whole async setup
+        // twice → duplicate timers / AppState listeners / app_install. The `initializing`
+        // latch is released by the defer below on any early throw/return so a failed init
+        // (e.g. empty apiKey) can be legitimately retried.
+        let alreadyClaimed: Bool = preInitLock.withLock {
+            if initialized || initializing { return true }
+            initializing = true
+            return false
+        }
+        guard !alreadyClaimed else {
+            debugLog("SDK already initialized (or initializing)")
             return
         }
-        
+        var initCompleted = false
+        defer {
+            if !initCompleted {
+                preInitLock.withLock { self.initializing = false }
+            }
+        }
+
         debugLog("Initializing Datalyr SDK...", data: ["workspaceId": config.workspaceId])
         
         // Validate configuration
@@ -241,6 +262,7 @@ public class DatalyrSDK {
         let queuedDeepLinks: [URL]
         (queued, queuedIdentity, queuedDeepLinks) = preInitLock.withLock {
             self.initialized = true
+            self.initializing = false  // init completed; `initialized` is now the gate
             let events = preInitQueue
             let identity = preInitIdentityQueue
             let urls = preInitDeepLinkQueue
@@ -249,6 +271,7 @@ public class DatalyrSDK {
             preInitDeepLinkQueue = []
             return (events, identity, urls)
         }
+        initCompleted = true  // suppress the defer's latch-release (init succeeded)
 
         // Replay pre-init deep links FIRST so app_install (below) can carry their params (FSR-5).
         if !queuedDeepLinks.isEmpty {
@@ -334,6 +357,11 @@ public class DatalyrSDK {
     ///   - eventName: Name of the event
     ///   - eventData: Optional event properties
     public func track(_ eventName: String, eventData: EventData? = nil) async {
+        // TR-20a parity: normalize once at entry (trim + spaces→underscores) so
+        // track("Order Completed") records as "Order_Completed" instead of being dropped by
+        // validateEventName — matching the RN/web fleet. Shadows the param so the pre-init
+        // buffer stores (and later re-tracks) the normalized name; re-normalizing is idempotent.
+        let eventName = normalizeEventName(eventName)
         // TR-16: re-check `initialized` INSIDE preInitLock (mirror identify()). The old
         // `guard initialized` read the flag OUTSIDE the lock, racing initialize()'s atomic
         // drain: track() could see !initialized, then the drain empties preInitQueue + sets

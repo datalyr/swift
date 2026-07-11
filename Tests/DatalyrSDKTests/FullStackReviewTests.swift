@@ -232,4 +232,21 @@ final class FullStackReviewTests: XCTestCase {
         queue.updateConfig(QueueConfig(maxQueueSize: 7, batchSize: 2, flushInterval: 5, maxRetryCount: 1))
         XCTAssertTrue(true)
     }
+
+    // MARK: - TR-20a parity: iOS normalizes event names (spaces → underscores) like RN/web
+
+    func testTR20a_normalizeEventNameSpacesToUnderscores() {
+        // Was: iOS validateEventName REJECTED any name with a space, so track("Order Completed")
+        // was silently dropped while the RN bare build recorded it. Now normalized, then valid.
+        XCTAssertEqual(normalizeEventName("Order Completed"), "Order_Completed")
+        XCTAssertTrue(validateEventName(normalizeEventName("Order Completed")))
+        // Runs of whitespace collapse to a single underscore (matches RN's /\s+/g → '_').
+        XCTAssertEqual(normalizeEventName("  a   b\tc  "), "a_b_c")
+        // System/dotted/hyphenated names are untouched and remain valid.
+        XCTAssertEqual(normalizeEventName("$identify"), "$identify")
+        XCTAssertEqual(normalizeEventName("screen.view-1"), "screen.view-1")
+        // All-whitespace normalizes to empty → rejected (not sent).
+        XCTAssertEqual(normalizeEventName("   "), "")
+        XCTAssertFalse(validateEventName(normalizeEventName("   ")))
+    }
 }

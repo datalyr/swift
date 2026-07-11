@@ -32,6 +32,19 @@ All notable changes to this project will be documented in this file.
   the click-ids + lyr) from both the live and the buffered/replayed paths.
 
 ### Fixed
+- **TR-20a parity: event names with spaces are normalized, not dropped.** `validateEventName`
+  rejected any name containing a space, so `track("Order Completed")` was silently discarded on
+  iOS while the RN bare build recorded it. `track()` now normalizes at entry (trim + collapse
+  whitespace runs → a single underscore, mirroring the RN/web `normalizeEventName`), so
+  `"Order Completed"` records as `"Order_Completed"`. `$`-system / dotted / hyphenated names are
+  untouched; an all-whitespace name still normalizes to empty and is rejected. The pre-init buffer
+  stores the normalized name (re-normalizing on drain is idempotent).
+- **`initialize()` double-entry guard.** `guard !initialized` read a flag that isn't set until
+  the *end* of init, so two concurrent `initialize()` calls could both pass it and run the whole
+  async setup twice (duplicate timers / AppState listeners / `app_install`). Initialization is now
+  atomically claimed under `preInitLock` via a dedicated `initializing` latch; a re-entrant call
+  returns early, and the latch is released on any early throw/return (e.g. empty `apiKey`) so a
+  failed init can still be retried.
 - **TR-21 (data loss): the install flag was written BEFORE `app_install` was enqueued.** A
   crash/kill between the flag write and the enqueue lost `app_install` — install attribution, the
   single most valuable mobile event — permanently. The flag is now set AFTER `track()` returns
