@@ -117,7 +117,11 @@ internal class DatalyrEventQueue {
     /// on the canonical revenue event names or any value/revenue-bearing eventData.
     private static func isCriticalEvent(_ event: QueuedEvent) -> Bool {
         let name = event.payload.eventName.lowercased()
-        if name.contains("purchase") || name.contains("subscribe") || name.contains("checkout") {
+        // Track-3 review P2: `app_install` carries no value/revenue key, so it was classified
+        // NON-critical and could be evicted from a large first-launch offline backlog (then
+        // pushed out of deadLetter's suffix(100)) — permanently losing install attribution, the
+        // exact loss TR-05/TR-21 target. Protect the install family alongside revenue events.
+        if name.contains("purchase") || name.contains("subscribe") || name.contains("checkout") || name.contains("install") {
             return true
         }
         if let data = event.payload.eventData {

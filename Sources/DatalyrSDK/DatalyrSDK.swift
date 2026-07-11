@@ -466,7 +466,10 @@ public class DatalyrSDK {
 
         // Extract identity fields for advanced matching
         let email = properties?["email"] as? String
-        let phone = properties?["phone"] as? String
+        // Accept camelCase `phoneNumber` too (mirror firstName/lastName below, and the RN
+        // SDK which hoists phoneNumber→phone). Without this the phone advanced-matching
+        // signal was lost on iOS whenever a caller passed the camelCase key.
+        let phone = properties?["phone"] as? String ?? properties?["phoneNumber"] as? String
         let firstName = properties?["first_name"] as? String ?? properties?["firstName"] as? String
         let lastName = properties?["last_name"] as? String ?? properties?["lastName"] as? String
 

@@ -32,6 +32,15 @@ All notable changes to this project will be documented in this file.
   the click-ids + lyr) from both the live and the buffered/replayed paths.
 
 ### Fixed
+- **Track-3 review P2: `identify()` now accepts camelCase `phoneNumber`.** It read only
+  `properties["phone"]` (unlike `firstName`/`lastName`, which already fell back to camelCase), so a
+  caller passing `phoneNumber` lost the phone advanced-matching signal on iOS. Added the
+  `phoneNumber → phone` fallback, matching the RN SDK.
+- **Track-3 review P2: `app_install` is protected from queue-overflow eviction.** `isCriticalEvent`
+  keyed on revenue names / value keys only, so `app_install` (no value key) was non-critical and
+  could be evicted from a large first-launch offline backlog, then dropped by `deadLetter`'s
+  `suffix(100)` — permanently losing install attribution (the exact loss TR-05/TR-21 target). The
+  install family is now treated as critical alongside revenue events.
 - **TR-20a parity: event names with spaces are normalized, not dropped.** `validateEventName`
   rejected any name containing a space, so `track("Order Completed")` was silently discarded on
   iOS while the RN bare build recorded it. `track()` now normalizes at entry (trim + collapse
