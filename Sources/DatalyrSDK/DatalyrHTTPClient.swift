@@ -343,8 +343,6 @@ internal class DatalyrHTTPClient {
         // Add user identifiers
         if let userId = payload.userId {
             result["userId"] = userId
-        } else {
-            result["userId"] = payload.visitorId
         }
         result["anonymousId"] = payload.anonymousId ?? payload.visitorId
 
@@ -476,4 +474,4 @@ extension DispatchQueue {
             }
         }
     }
-} 
+}

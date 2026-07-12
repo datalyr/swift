@@ -454,6 +454,13 @@ public class DatalyrSDK {
 
         debugLog("Identifying user: \(userId)", data: properties)
 
+        // An account switch is a privacy boundary even if the host app forgot
+        // to call reset() during logout. Rotate all device/session identifiers
+        // and clear prior-user attribution before linking the new account.
+        if let existingUserId = currentUserId, existingUserId != userId {
+            await reset()
+        }
+
         // Update current user
         currentUserId = userId
 
@@ -1926,4 +1933,4 @@ public enum DatalyrError: Error, LocalizedError {
             return "Tracking failed: \(message)"
         }
     }
-} 
+}

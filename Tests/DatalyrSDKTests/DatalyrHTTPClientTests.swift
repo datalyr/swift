@@ -50,6 +50,7 @@ final class DatalyrHTTPClientTests: XCTestCase {
         XCTAssertEqual(wire["eventId"] as? String, "evt_1")
         XCTAssertEqual(wire["timestamp"] as? String, "2026-06-03T10:00:00.000Z")
         XCTAssertEqual(wire["anonymousId"] as? String, "anon_1")
+        XCTAssertNil(wire["userId"], "anonymous mobile events must not fabricate an identified user")
 
         // IOS-31: session_id MUST be in `context` (where ingest handleServerTrack reads it),
         // not only in properties — otherwise ingest synthesizes its own session id.
