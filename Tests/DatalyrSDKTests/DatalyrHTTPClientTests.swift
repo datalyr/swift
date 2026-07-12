@@ -58,7 +58,7 @@ final class DatalyrHTTPClientTests: XCTestCase {
         XCTAssertEqual(context?["session_id"] as? String, "sess_xyz",
                        "session_id must travel in context for ingest to use the SDK session")
         // IOS-33: library version must not be the stale hardcoded 2.1.1.
-        XCTAssertEqual(context?["version"] as? String, "2.1.7")
+        XCTAssertEqual(context?["version"] as? String, "2.1.8")
         XCTAssertEqual(context?["source"] as? String, "mobile_app")
 
         // properties carry the eventData + sessionId + source; the click-ids survive

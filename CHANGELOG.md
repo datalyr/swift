@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.1.8] - 2026-07-12
+
 ### Changed
 - **TR-26: `PrivacyInfo.xcprivacy` now accurately declares tracking.** The manifest said
   `NSPrivacyTracking=false` with empty domains and every data type `Linked/Tracking=false`,
