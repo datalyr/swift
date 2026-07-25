@@ -573,6 +573,24 @@ public class DatalyrSDK {
                 "utm_source": attribution["utm_source"] ?? ""
             ])
 
+            // Never record an identity-only result as a web match: a real
+            // browser visitor with NO click found is an identity, not a touch.
+            // The server's public route now returns found:false for these, but
+            // guard here too — recording them minted ~1,700/hr of false
+            // self-referential bridge rows that fed back into the resolver's
+            // own bridge scan. Same reasoning for a result whose visitor_id is
+            // OUR OWN current visitor: that is this SDK's prior events
+            // reflected back, not a web session.
+            if (attribution["identity_only"] as? Bool) == true {
+                debugLog("Web attribution is identity-only — skipping bridge event")
+                return
+            }
+            if let matchedVisitorId = attribution["visitor_id"] as? String,
+               !matchedVisitorId.isEmpty, matchedVisitorId == visitorId {
+                debugLog("Web attribution visitor is our own visitor id — skipping bridge event")
+                return
+            }
+
             // Merge web attribution into current session
             var mergedData: [String: Any] = [
                 "web_visitor_id": attribution["visitor_id"] ?? "",
@@ -698,6 +716,19 @@ public class DatalyrSDK {
                 "has_gclid": attribution["gclid"] != nil ? "YES" : "NO",
                 "utm_source": attribution["utm_source"] ?? "nil"
             ])
+
+            // Same guard as the email path: identity-only results and results
+            // pointing at our own visitor id are not web touches — do not
+            // merge and do not fire the bridge event.
+            if (attribution["identity_only"] as? Bool) == true {
+                debugLog("Deferred web attribution is identity-only — skipping bridge event")
+                return
+            }
+            if let matchedVisitorId = attribution["visitor_id"] as? String,
+               !matchedVisitorId.isEmpty, matchedVisitorId == visitorId {
+                debugLog("Deferred web attribution visitor is our own visitor id — skipping bridge event")
+                return
+            }
 
             // Merge web attribution into current session
             await attributionManager?.mergeWebAttribution(attribution)
@@ -1603,6 +1634,20 @@ public class DatalyrSDK {
             enrichedEventData["country"] = country
         }
 
+        // Persisted attribution (click ids, UTMs, lyr) rides on EVERY event —
+        // FSR-85 parity with RN (datalyr-sdk.ts createEventPayload). Without
+        // this, campaign context existed only on app_install: prod 14d showed
+        // 1,003,466 swift events with 0 utm_source and purchase-class exactly
+        // zero on every click key. Caller-supplied eventData (already in
+        // enrichedEventData) WINS on key collision — attribution must never
+        // clobber an explicit property like track("purchase",
+        // ["utm_source": "push"]).
+        if let attribution = attributionManager?.getAttributionData() {
+            for (key, value) in attribution.toDictionary() where enrichedEventData[key] == nil {
+                enrichedEventData[key] = value
+            }
+        }
+
         // Apple Search Ads attribution if available
         if let asaData = platformIntegrationManager?.getAppleSearchAdsData() {
             enrichedEventData.merge(asaData) { (_, new) in new }
@@ -1903,16 +1948,21 @@ extension DatalyrSDK: AutoEventsTrackingDelegate {
 
 extension AttributionData {
     func toDictionary() -> [String: Any] {
-        var dict: [String: Any] = [:]
-        
-        let mirror = Mirror(reflecting: self)
-        for child in mirror.children {
-            if let label = child.label, let value = child.value as? String, !value.isEmpty {
-                dict[label] = value
-            }
+        // P2-9: Mirror reflection emitted the Swift property names (utmSource,
+        // liClickId, installTime), but the wire contract ingest reads is the
+        // snake_case CodingKeys (utm_source, li_click_id, install_time) — so
+        // every multi-word key landed camelCase and was read by nothing.
+        // Encode through Codable so the dictionary carries exactly the
+        // persisted/JSON key names. Value filter unchanged from the Mirror
+        // version: non-empty strings only (numeric internals like
+        // attribution_captured_at are SDK bookkeeping and stay off the wire).
+        guard let data = try? JSONEncoder().encode(self),
+              let obj = try? JSONSerialization.jsonObject(with: data),
+              let raw = obj as? [String: Any] else { return [:] }
+        return raw.compactMapValues { value -> Any? in
+            if let s = value as? String { return s.isEmpty ? nil : s }
+            return nil
         }
-        
-        return dict
     }
 }
 
