@@ -224,7 +224,7 @@ internal class DatalyrHTTPClient {
         
         // Set headers
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("@datalyr/swift/2.1.10", forHTTPHeaderField: "User-Agent")
+        request.setValue(DatalyrVersion.userAgent, forHTTPHeaderField: "User-Agent")
         
         // Server-side tracking uses X-API-Key header
         if config.useServerTracking {
@@ -363,8 +363,8 @@ internal class DatalyrHTTPClient {
         // it here, ingest discards the SDK's 30-min session and synthesizes its own
         // hour-bucketed session id for every iOS event.
         var context: [String: Any] = [
-            "library": "@datalyr/swift",
-            "version": "2.1.10",
+            "library": DatalyrVersion.libraryName,
+            "version": DatalyrVersion.current,
             "source": "mobile_app",
             "session_id": payload.sessionId
         ]

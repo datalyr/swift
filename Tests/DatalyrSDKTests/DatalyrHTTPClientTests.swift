@@ -57,8 +57,12 @@ final class DatalyrHTTPClientTests: XCTestCase {
         let context = wire["context"] as? [String: Any]
         XCTAssertEqual(context?["session_id"] as? String, "sess_xyz",
                        "session_id must travel in context for ingest to use the SDK session")
-        // IOS-33: library version must not be the stale hardcoded 2.1.1.
-        XCTAssertEqual(context?["version"] as? String, "2.1.10")
+        // IOS-33/IOS-20: library version must not be the stale hardcoded 2.1.1.
+        // Asserted against the shared constant, NOT a literal — a literal here
+        // has to be hand-bumped every release, which is the same failure mode
+        // that let context.version freeze at 2.1.1 for four releases while
+        // sdk_version moved. See DatalyrVersionTests for the cross-field guard.
+        XCTAssertEqual(context?["version"] as? String, DatalyrVersion.current)
         XCTAssertEqual(context?["source"] as? String, "mobile_app")
 
         // properties carry the eventData + sessionId + source; the click-ids survive

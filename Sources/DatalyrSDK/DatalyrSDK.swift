@@ -115,7 +115,7 @@ public class DatalyrSDK {
         
         // Validate configuration
         guard !config.apiKey.isEmpty else {
-            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v2.1.3")
+            throw DatalyrError.invalidConfiguration("apiKey is required for Datalyr SDK v\(DatalyrVersion.current)")
         }
         
         // workspaceId is now optional (for backward compatibility)
@@ -125,6 +125,14 @@ public class DatalyrSDK {
         
         // Store configuration
         self.config = config
+
+        // DEP-01: warn about options that are accepted and then ignored.
+        //
+        // Deprecating the stored properties does NOT warn a caller who passes them
+        // to the initializer — Swift only warns on property *access* — so a
+        // developer setting `respectDoNotTrack: true` would otherwise get silence
+        // and assume it worked. This is the only signal that actually reaches them.
+        Self.warnAboutIgnoredOptions(config)
         
         // Initialize HTTP client with server-side API
         let httpConfig = HTTPClientConfig(
@@ -410,6 +418,18 @@ public class DatalyrSDK {
     ///   - screenName: Name of the screen
     ///   - properties: Optional screen properties
     public func screen(_ screenName: String, properties: EventData? = nil) async {
+        // IOS-21: honour `AutoEventConfig.trackScreenViews`, which is documented as
+        // "When false, all screen events are suppressed" (DatalyrTypes.swift). It was
+        // only ever consulted by AutoEventsManager.recordScreenView, so setting it
+        // false lost the session enrichment while still shipping every pageview —
+        // the opposite of what the flag says. Blast radius of honouring it: zero
+        // today; the iOS SDK emitted 0 `pageview` events in production over 30 days
+        // (measured 2026-07-25).
+        if let autoConfig = config?.autoEventConfig, autoConfig.trackScreenViews == false {
+            debugLog("screen() suppressed — autoEventConfig.trackScreenViews is false")
+            return
+        }
+
         var screenData: EventData = ["screen": screenName]
 
         if let properties = properties {
@@ -512,17 +532,62 @@ public class DatalyrSDK {
 
         if isRedundantIdentify {
             debugLog("Skipping redundant identify (unchanged identity) for \(userId)")
-            return
+        } else {
+            await DatalyrStorage.shared.setString(StorageKeys.lastIdentityFingerprint, value: identityFingerprint)
+            await track("$identify", eventData: identifyData)
         }
-        await DatalyrStorage.shared.setString(StorageKeys.lastIdentityFingerprint, value: identityFingerprint)
 
-        await track("$identify", eventData: identifyData)
-
-        // Fetch and merge web attribution if email is provided
+        // Fetch and merge web attribution if email is provided.
+        //
+        // IOS-19: this runs on EVERY identify — redundant or not — and must stay
+        // OUTSIDE the suppression branch above. 2.1.10 returned early on a
+        // redundant identify, which put this call out of reach and silently
+        // created a permanent-loss bug: fetchAndMergeWebAttribution marks an
+        // email hash "checked" ONLY after a definitive HTTP 200 (see
+        // markWebAttributionChecked), specifically so a transient 5xx/timeout
+        // retries on the next identify. With the early return, that next
+        // identify was suppressed, so one transient failure lost web→app
+        // attribution for the entire LIFETIME of the install.
+        //
+        // Running it unconditionally is cheap and correct: the lookup is
+        // idempotent on its own terms, and after a successful 200 the marker
+        // short-circuits it before any network I/O — one UserDefaults read per
+        // identify, never a request. The waste that 2.1.10 set out to remove
+        // (the request itself) stays removed.
         let emailForAttribution = email ?? (userId.contains("@") ? userId : nil)
         if let emailForLookup = emailForAttribution {
             await fetchAndMergeWebAttribution(email: emailForLookup)
         }
+    }
+
+    /// DEP-01: one-time warning for config options that are stored but never read.
+    ///
+    /// Fires only when the caller set a NON-default value — an app that never
+    /// touched these stays silent. Emitted via `errorLog` (unconditional) rather
+    /// than `debugLog`, because the whole point is that the developer has a wrong
+    /// belief about what the SDK is doing.
+    private static var didWarnAboutIgnoredOptions = false
+    private static func warnAboutIgnoredOptions(_ config: DatalyrConfig) {
+        guard !didWarnAboutIgnoredOptions else { return }
+
+        var ignored: [String] = []
+        // Defaults: respectDoNotTrack = true, trackAppUpdates = true,
+        // trackPerformance = false. Only a deviation is worth a warning.
+        if config.respectDoNotTrack == false {
+            ignored.append("respectDoNotTrack (no consent gate exists — collection is NOT limited)")
+        }
+        if let auto = config.autoEventConfig {
+            if auto.trackAppUpdates == false {
+                ignored.append("trackAppUpdates (app_update is manual-only via trackAppUpdate())")
+            }
+            if auto.trackPerformance == true {
+                ignored.append("trackPerformance (the SDK emits no performance events)")
+            }
+        }
+
+        guard !ignored.isEmpty else { return }
+        didWarnAboutIgnoredOptions = true
+        errorLog("Ignored configuration option(s) — these are accepted but never read: " + ignored.joined(separator: "; "))
     }
 
     /// Fetch web attribution data for user and merge into mobile session
@@ -577,12 +642,27 @@ public class DatalyrSDK {
                 return  // transient/non-200 — do NOT mark checked, so it retries next identify
             }
 
+            // IOS-22: parse the body BEFORE marking checked.
+            //
+            // This used to mark first. A body read/parse failure on an HTTP 200 — a
+            // dropped connection mid-body, a truncated response, an HTML error page
+            // served with a 200 — would then throw into the catch below with the
+            // email already recorded as "checked", permanently suppressing this
+            // once-per-install lookup for the lifetime of the install. That is the
+            // same lifetime-loss class as IOS-19 (which moved this call out of the
+            // identify-suppression branch), reintroduced two lines earlier and left
+            // unfixed. RN closed it deliberately; iOS never got the port.
+            //
+            // Ordering now: non-200 returns without marking (above), a parse failure
+            // throws without marking, and only a definitively parsed 200 marks —
+            // so every failure mode retries on the next identify.
+            let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
             // Definitive 200 answer (found or not). Record it so repeated identify(email)
-            // calls don't re-run this immutable, install-time lookup. Only after a 200 —
-            // network/non-200 errors fall through and retry on the next identify.
+            // calls don't re-run this immutable, install-time lookup.
             await markWebAttributionChecked(emailHash)
 
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            guard let json = parsed,
                   let found = json["found"] as? Bool,
                   found,
                   let attribution = json["attribution"] as? [String: Any] else {
@@ -1628,7 +1708,7 @@ public class DatalyrSDK {
         // Add standard properties
         enrichedEventData["platform"] = "ios"
         enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
-        enrichedEventData["sdk_version"] = "2.1.10"
+        enrichedEventData["sdk_version"] = DatalyrVersion.current
         enrichedEventData["schema_version"] = 1  // A3-25: versioned-envelope stamp (see web SDK)
 
         // App info from Bundle
@@ -1775,7 +1855,7 @@ public class DatalyrSDK {
 
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "2.1.10",
+                "sdk_version": DatalyrVersion.current,
                 "install_time": installTime
             ]
 

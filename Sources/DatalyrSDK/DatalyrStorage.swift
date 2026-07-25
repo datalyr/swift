@@ -19,13 +19,32 @@ internal protocol Storage {
 
 // MARK: - Datalyr Storage
 
-/// Storage manager for Datalyr SDK using UserDefaults and Keychain
+/// Storage manager for Datalyr SDK using UserDefaults.
+///
+/// IOS-23: a Keychain path used to live here and was **unreachable**.
+/// `isSensitiveKey` compared against unprefixed names ("user_id", "visitor_id",
+/// …) while every caller passes a `StorageKeys` constant, which is already
+/// prefixed ("datalyr_user_id" — see DatalyrUtils.swift). The comparison was
+/// therefore always false and nothing ever reached the Keychain, despite the
+/// security code path existing.
+///
+/// It was DELETED rather than repaired, deliberately. Repairing it would move
+/// identifiers into the Keychain, where they **survive app deletion** — so a
+/// reinstall would stop minting a new visitor and would silently merge into the
+/// previous identity. That changes `app_install` counts and attribution for
+/// every install, diverges from the web SDK (localStorage) and React Native
+/// (AsyncStorage) which both reset on uninstall, and would need a read-fallback
+/// migration to avoid orphaning existing values.
+///
+/// **Identifiers reset when the app is deleted.** That is the current, intended
+/// behaviour across all three client SDKs. If cross-reinstall identity is ever
+/// wanted it should be an explicit opt-in with its own migration — not a side
+/// effect of a cleanup.
 internal class DatalyrStorage: Storage {
     static let shared = DatalyrStorage()
     
     private let userDefaults = UserDefaults.standard
     private let keyPrefix = "datalyr_"
-    private let keychainService = "com.datalyr.sdk"
     
     private init() {}
     
@@ -39,24 +58,13 @@ internal class DatalyrStorage: Storage {
             return value
         }
         
-        // If it's a sensitive key, try Keychain
-        if isSensitiveKey(key) {
-            return getKeychainString(key)
-        }
-        
         return nil
     }
     
     func setString(_ key: String, value: String) async {
         let prefixedKey = keyPrefix + key
         
-        if isSensitiveKey(key) {
-            // Store sensitive data in Keychain
-            setKeychainString(key, value: value)
-        } else {
-            // Store regular data in UserDefaults
-            userDefaults.set(value, forKey: prefixedKey)
-        }
+        userDefaults.set(value, forKey: prefixedKey)
     }
     
     // MARK: - Double Storage
@@ -101,10 +109,6 @@ internal class DatalyrStorage: Storage {
     func removeValue(_ key: String) async {
         let prefixedKey = keyPrefix + key
         userDefaults.removeObject(forKey: prefixedKey)
-        
-        if isSensitiveKey(key) {
-            removeKeychainValue(key)
-        }
     }
     
     func clear() async {
@@ -115,87 +119,8 @@ internal class DatalyrStorage: Storage {
                 userDefaults.removeObject(forKey: key)
             }
         }
-        
-        // Clear Keychain items
-        clearKeychain()
     }
     
-    // MARK: - Keychain Operations
-    
-    private func isSensitiveKey(_ key: String) -> Bool {
-        // Keys that should be stored in Keychain for security
-        let sensitiveKeys = [
-            "api_key",
-            "user_id",
-            "device_id",
-            "visitor_id"
-        ]
-        return sensitiveKeys.contains(key)
-    }
-    
-    private func getKeychainString(_ key: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        
-        guard status == errSecSuccess,
-              let data = result as? Data else {
-            return nil
-        }
-        
-        return String(data: data, encoding: .utf8)
-    }
-    
-    private func setKeychainString(_ key: String, value: String) {
-        guard let data = value.data(using: .utf8) else { return }
-        
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: key,
-            kSecValueData as String: data
-        ]
-        
-        // Delete any existing item
-        SecItemDelete(query as CFDictionary)
-        
-        // Add new item
-        let status = SecItemAdd(query as CFDictionary, nil)
-        if status != errSecSuccess {
-            debugLog("Failed to save to Keychain: \(status)")
-        }
-    }
-    
-    private func removeKeychainValue(_ key: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: key
-        ]
-        
-        SecItemDelete(query as CFDictionary)
-    }
-    
-    private func clearKeychain() {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService
-        ]
-        
-        SecItemDelete(query as CFDictionary)
-    }
-}
-
-// MARK: - Convenience Extensions
-
-extension DatalyrStorage {
     /// Get Codable object from storage
     func getCodable<T: Codable>(_ key: String, type: T.Type) async -> T? {
         guard let data = await getData(key) else { return nil }

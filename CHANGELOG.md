@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.1.11] - 2026-07-25
+
+### Fixed
+- **A failed web attribution lookup can retry again.** 2.1.10's redundant-identify early return
+  sat immediately before the only call site of `fetchAndMergeWebAttribution`, which marks an
+  email "checked" only after an HTTP 200 precisely so a transient failure retries on the next
+  `identify()`. That retry became unreachable, so a single 5xx or timeout lost web→app
+  attribution for the entire lifetime of the install. The lookup now runs on every `identify()`;
+  after a 200 its own marker short-circuits it before any network I/O, so the request volume
+  2.1.10 removed stays removed.
+
+### Changed
+- **The SDK version is written in exactly one place** (`DatalyrVersion.current`). It was four
+  independent literals — the envelope's `context.version`, `properties.sdk_version`, an
+  `app_install`-only second stamp, and the `User-Agent` — plus a fifth stale one in a thrown
+  error message. They drifted: a single production request measured on 2026-07-25 carried
+  envelope `2.1.1`, payload `2.1.3` and User-Agent `@datalyr/swift/2.0.2` at once, because
+  `context.version` sat frozen across v2.1.2–v2.1.5. `scripts/validate.sh` now fails the build
+  if the Swift constant and the podspec disagree, or if any version literal reappears in
+  `Sources/`.
+
 ## [2.1.10] - 2026-07-25
 
 ### Fixed

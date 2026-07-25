@@ -15,6 +15,16 @@ public struct DatalyrConfig {
     public let batchSize: Int
     public let flushInterval: TimeInterval
     public let maxQueueSize: Int
+    /// - Warning: **Not implemented.** This value is stored and never read — there
+    ///   is no Do-Not-Track or consent gate anywhere in the iOS SDK, and setting it
+    ///   to `true` does not stop or limit collection. The only way to stop
+    ///   collection today is to not call `initialize()`.
+    ///
+    ///   It is kept (rather than removed) because removing a public property is a
+    ///   source-breaking change. Honouring it properly means building a consent
+    ///   apparatus the mobile SDKs do not have — the web SDK's `shouldTrack()` is
+    ///   the reference implementation. Tracked as DEP-01.
+    @available(*, deprecated, message: "Not implemented — stored but never read. Setting this does NOT limit collection.")
     public let respectDoNotTrack: Bool
     public let enableAutoEvents: Bool
     public let enableAttribution: Bool
@@ -66,7 +76,13 @@ public struct AutoEventConfig {
     /// Enable screen view event tracking via `screen()` calls (manual or automatic).
     /// When false, all screen events are suppressed. Default: true
     public let trackScreenViews: Bool
+    /// - Warning: **Not implemented.** Never read. `app_update` is manual-only —
+    ///   call `trackAppUpdate(previousVersion:currentVersion:)` yourself. (DEP-01)
+    @available(*, deprecated, message: "Not implemented — app_update is manual-only via trackAppUpdate().")
     public let trackAppUpdates: Bool
+    /// - Warning: **Not implemented.** Never read. The iOS SDK emits no
+    ///   performance events at all. (DEP-01)
+    @available(*, deprecated, message: "Not implemented — the SDK emits no performance events.")
     public let trackPerformance: Bool
     public let sessionTimeoutMs: TimeInterval
     /// Automatically swizzle UIViewController.viewDidAppear to detect screen changes.
