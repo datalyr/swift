@@ -1,9 +1,14 @@
-# @datalyr/swift
+# DatalyrSDK
 
-Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, SKAdNetwork conversion management, and third-party integrations.
+Server-side attribution, event tracking, SKAdNetwork conversion values, and Apple Search Ads attribution for iOS.
+
+Current release: **2.1.10**. Every event posts to `https://ingest.datalyr.com/track`.
+
+Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sdk-reference/ios).
 
 ## Table of Contents
 
+- [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
@@ -13,48 +18,55 @@ Official Datalyr SDK for iOS. Server-side attribution tracking, analytics, SKAdN
 - [SKAdNetwork](#skadnetwork)
 - [Apple Search Ads](#apple-search-ads)
 - [App Tracking Transparency](#app-tracking-transparency)
-- [Third-Party Integrations](#third-party-integrations)
+- [Superwall and RevenueCat](#superwall-and-revenuecat)
 - [Web-to-App Attribution](#web-to-app-attribution)
-- [SwiftUI Integration](#swiftui-integration)
-- [UIKit Integration](#uikit-integration)
+- [SwiftUI](#swiftui)
+- [UIKit](#uikit)
 - [Global Convenience Functions](#global-convenience-functions)
-- [Deep Link Handling](#deep-link-handling)
+- [Deep Links](#deep-links)
 - [Delegate Protocol](#delegate-protocol)
-- [Auto Events](#auto-events)
-- [Offline Support](#offline-support)
+- [Queue and Limits](#queue-and-limits)
 - [Exported Types](#exported-types)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
 ---
 
+## Requirements
+
+| Item | Value |
+|---|---|
+| Minimum iOS | 13.0 |
+| Swift tools version | 5.7 |
+| Current release | 2.1.10 |
+| Frameworks linked | `Foundation`, `UIKit`, `StoreKit`, `AdServices` (weak) |
+
+---
+
 ## Installation
 
-### Swift Package Manager (Recommended)
+### Swift Package Manager
 
-1. In Xcode, select File > Add Package Dependencies
-2. Enter the repository URL:
-   ```
-   https://github.com/datalyr/swift
-   ```
-3. Select version 2.1.2 or later
-4. Add DatalyrSDK to your target
+1. In Xcode, open **File > Add Package Dependencies**.
+2. Enter `https://github.com/datalyr/swift`.
+3. Select version 2.1.10.
+4. Add the `DatalyrSDK` product to your app target.
+
+In `Package.swift`:
+
+```swift
+.package(url: "https://github.com/datalyr/swift", from: "2.1.10")
+```
 
 ### CocoaPods
 
-Add to your Podfile:
+> **The CocoaPods podspec does not ship `PrivacyInfo.xcprivacy`.** App Store review requires a privacy manifest. Add your own manifest, or install with Swift Package Manager, which does ship one.
 
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.2'
+pod 'DatalyrSDK', '~> 2.1.10'
 ```
 
-Then run:
-
-```bash
-pod install
-```
-
-**Platform support:** iOS 13.0+, macOS 10.15+, tvOS 13.0+, watchOS 6.0+. Swift 5.7+.
+Run `pod install`. Open the generated `.xcworkspace`.
 
 ---
 
@@ -63,95 +75,40 @@ pod install
 ```swift
 import DatalyrSDK
 
-// Initialize with basic config
+// Minimal
 try await DatalyrSDK.configure(apiKey: "dk_your_api_key")
 
-// Or initialize with full config
+// Or with a full config object
 let config = DatalyrConfig(
     apiKey: "dk_your_api_key",
-    enableAttribution: true,
-    enableAutoEvents: true
+    enableAutoEvents: true,
+    enableAttribution: true
 )
 try await DatalyrSDK.shared.initialize(config: config)
 
-// Track events
-await DatalyrSDK.shared.track("button_clicked", eventData: [
-    "button": "signup"
+await DatalyrSDK.shared.track("signup_completed", eventData: [
+    "plan": "pro",
+    "seats": 5
 ])
 
-// Identify users
 await DatalyrSDK.shared.identify("user_123", properties: [
-    "email": "user@example.com"
+    "email": "person@example.com"
 ])
 
-// Track purchases
-await DatalyrSDK.shared.trackPurchase(value: 99.99, currency: "USD", productId: "product_123")
-```
-
----
-
-## Configuration
-
-### DatalyrConfig
-
-All configuration properties with their defaults:
-
-```swift
-let config = DatalyrConfig(
-    // Required
-    apiKey: "dk_your_api_key",
-
-    // Optional — backward compatibility
-    workspaceId: "",
-
-    // Server tracking
-    useServerTracking: true,               // Use server-side API
-
-    // Debug
-    debug: false,                          // Console logging
-
-    // API
-    endpoint: "https://ingest.datalyr.com/track",   // API endpoint
-    maxRetries: 3,                         // Max retry attempts
-    retryDelay: 1.0,                       // Retry delay (seconds)
-    timeout: 15.0,                         // Request timeout (seconds)
-
-    // Event Queue
-    batchSize: 10,                         // Events per batch
-    flushInterval: 10.0,                   // Auto-flush interval (seconds)
-    maxQueueSize: 100,                     // Max queued events
-
-    // Privacy
-    respectDoNotTrack: true,               // Honor Do Not Track
-
-    // Features
-    enableAutoEvents: true,                // Automatic lifecycle tracking
-    enableAttribution: true,               // Attribution capture
-
-    // Auto Events
-    autoEventConfig: AutoEventConfig(
-        trackSessions: true,               // Session start/end
-        trackScreenViews: true,            // Enable screen view events via screen()
-        trackAppUpdates: true,             // App version changes
-        trackPerformance: false,           // Performance metrics
-        sessionTimeoutMs: 1_800_000,       // 30 minutes
-        autoTrackScreenViews: false        // Auto-swizzle UIViewController (UIKit only)
-    ),
-
-    // SKAdNetwork
-    skadTemplate: "ecommerce"              // Conversion template
+await DatalyrSDK.shared.trackPurchase(
+    value: 99.99,
+    currency: "USD",
+    productId: "pro_yearly"
 )
 ```
 
-### Static Configure Methods
+`initialize(config:)` throws `DatalyrError.invalidApiKey` on an empty key. The SDK buffers 50 events, 50 identity calls, and 50 deep links sent before initialization finishes.
 
-Convenience methods for common configurations:
+### Static configure methods
 
 ```swift
-// Basic
 try await DatalyrSDK.configure(apiKey: "dk_your_api_key")
 
-// With options
 try await DatalyrSDK.configure(
     apiKey: "dk_your_api_key",
     workspaceId: "ws_123",
@@ -160,9 +117,9 @@ try await DatalyrSDK.configure(
     enableAttribution: true
 )
 
-// With SKAdNetwork
 try await DatalyrSDK.configureWithSKAdNetwork(
     apiKey: "dk_your_api_key",
+    workspaceId: "",
     template: "ecommerce",
     debug: false,
     enableAutoEvents: true,
@@ -172,15 +129,130 @@ try await DatalyrSDK.configureWithSKAdNetwork(
 
 ---
 
-## Event Tracking
+## Configuration
 
-### Custom Events
+> **`retryDelay`, `timeout`, and `flushInterval` are seconds on iOS.** The React Native SDK uses milliseconds for the same three names. Copying `timeout: 15000` from a React Native configuration produces a 15,000-second timeout.
 
 ```swift
-// Simple event
+let config = DatalyrConfig(
+    apiKey: "dk_your_api_key",
+    debug: false,
+    timeout: 15.0,
+    batchSize: 10,
+    flushInterval: 10.0,
+    maxQueueSize: 1000
+)
+try await DatalyrSDK.shared.initialize(config: config)
+```
+
+### DatalyrConfig
+
+| Option | Type | Default | Unit |
+|---|---|---|---|
+| `apiKey` | `String` | Required. Throws when empty. | — |
+| `workspaceId` | `String` | `""` | — |
+| `useServerTracking` | `Bool` | `true` | — |
+| `debug` | `Bool` | `false` | — |
+| `endpoint` | `String` | `"https://ingest.datalyr.com/track"` | URL |
+| `maxRetries` | `Int` | `3` | attempts |
+| `retryDelay` | `TimeInterval` | `1.0` | **seconds** |
+| `timeout` | `TimeInterval` | `15.0` | **seconds** |
+| `batchSize` | `Int` | `10` | events per queue drain |
+| `flushInterval` | `TimeInterval` | `10.0` | **seconds** |
+| `maxQueueSize` | `Int` | `1000` | events |
+| `enableAutoEvents` | `Bool` | `true` | — |
+| `enableAttribution` | `Bool` | `true` | — |
+| `autoEventConfig` | `AutoEventConfig?` | `nil` | — |
+| `skadTemplate` | `String?` | `nil` | `gaming`, `subscription`, or ecommerce |
+
+`skadTemplate` accepts any string. Anything other than `gaming` or `subscription` becomes the ecommerce template, with no warning.
+
+### AutoEventConfig
+
+> **`sessionTimeoutMs` is milliseconds, while the three interval options above are seconds.** `sessionTimeoutMs` changes only when `session_end` fires. The `session_id` on the wire rotates on a hardcoded 30 minutes that no option changes.
+
+| Option | Type | Default | Unit |
+|---|---|---|---|
+| `trackSessions` | `Bool` | `true` | — |
+| `trackScreenViews` | `Bool` | `true` | — |
+| `autoTrackScreenViews` | `Bool` | `false` | — |
+| `sessionTimeoutMs` | `TimeInterval` | `1800000` | **milliseconds** — 30 minutes |
+
+```swift
+let config = DatalyrConfig(
+    apiKey: "dk_your_api_key",
+    autoEventConfig: AutoEventConfig(
+        trackSessions: true,
+        trackScreenViews: true,
+        sessionTimeoutMs: 1_800_000,
+        autoTrackScreenViews: true
+    )
+)
+```
+
+`trackScreenViews: false` suppresses every `pageview` event that `screen()` sends.
+
+### Options that do nothing
+
+These properties exist on the types and are read nowhere in the SDK. Setting them has no effect.
+
+| Option | Behavior the name suggests | Actual behavior |
+|---|---|---|
+| `DatalyrConfig.respectDoNotTrack` | Honors Do Not Track | No Do Not Track logic exists |
+| `AutoEventConfig.trackAppUpdates` | Sends `app_update` automatically | Nothing auto-sends `app_update`. Call `trackAppUpdate(previousVersion:currentVersion:)`. |
+| `AutoEventConfig.trackPerformance` | Records performance metrics | No performance code exists |
+
+### Methods that always return nil
+
+| Method | Use instead |
+|---|---|
+| `getDeferredAttributionData()` | `getAppleSearchAdsAttribution()` |
+| `getLastError()` | `getStatus()` |
+
+---
+
+## Event Tracking
+
+### Events the SDK sends without your code
+
+| Wire event name | Trigger |
+|---|---|
+| `app_install` | First `initialize()` on a device |
+| `session_start` | `initialize()`, and foreground after the session ended |
+| `session_end` | Inactivity timer, `willTerminateNotification`, or SDK teardown |
+| `$att_status` | Every `updateTrackingAuthorization()` call |
+| `$web_attribution_matched` | An email or IP lookup matched an earlier web visit |
+
+The SDK never prompts for App Tracking Transparency on its own. It never captures the launch URL on its own — call `handleDeepLink(_:)` yourself.
+
+### Events the SDK sends for you
+
+These names are reserved. Never send one through `track()`.
+
+| Method you call | Wire event name |
+|---|---|
+| `screen()`, `.datalyrScreen()` | `pageview` |
+| `identify()` | `$identify` |
+| `alias()` | `$alias` |
+| `handleDeepLink()` | `$deep_link` |
+| `trackAppUpdate()` | `app_update` |
+| `trackPurchase()` | `purchase` |
+| `trackSubscription()` | `subscribe` |
+| `trackAddToCart()` | `add_to_cart` |
+| `trackViewContent()` | `view_content` |
+| `trackInitiateCheckout()` | `initiate_checkout` |
+| `trackCompleteRegistration()` | `complete_registration` |
+| `trackSearch()` | `search` |
+| `trackLead()` | `lead` |
+| `trackAddPaymentInfo()` | `add_payment_info` |
+
+Event names accept `[A-Za-z0-9_-.$]` up to 100 characters. Whitespace runs collapse to `_`, so `track("Order Completed")` arrives as `Order_Completed`.
+
+### Custom events
+
+```swift
 await DatalyrSDK.shared.track("signup_started")
 
-// Event with properties
 await DatalyrSDK.shared.track("product_viewed", eventData: [
     "product_id": "SKU123",
     "product_name": "Blue Shirt",
@@ -189,7 +261,9 @@ await DatalyrSDK.shared.track("product_viewed", eventData: [
 ])
 ```
 
-### Screen Views
+### Screen views
+
+`screen()` sends an event named `pageview`, not `screen`. Filter on `pageview` in **Events**.
 
 ```swift
 await DatalyrSDK.shared.screen("Home")
@@ -199,12 +273,11 @@ await DatalyrSDK.shared.screen("Product Details", properties: [
 ])
 ```
 
-Each `screen()` call fires a single `pageview` event with the `screen` property set. Session data (`session_id`, `pageviews_in_session`, `previous_screen`) is automatically attached when auto-events are enabled.
+Each call attaches `screen`, `session_id`, `pageviews_in_session`, and `previous_screen`. Properties you pass win on a name collision.
 
-### E-Commerce Events
+### E-commerce events
 
 ```swift
-// View product
 await DatalyrSDK.shared.trackViewContent(
     contentId: "SKU123",
     contentName: "Blue Shirt",
@@ -213,7 +286,6 @@ await DatalyrSDK.shared.trackViewContent(
     currency: "USD"
 )
 
-// Add to cart
 await DatalyrSDK.shared.trackAddToCart(
     value: 29.99,
     currency: "USD",
@@ -221,7 +293,6 @@ await DatalyrSDK.shared.trackAddToCart(
     productName: "Blue Shirt"
 )
 
-// Start checkout
 await DatalyrSDK.shared.trackInitiateCheckout(
     value: 59.98,
     currency: "USD",
@@ -229,38 +300,29 @@ await DatalyrSDK.shared.trackInitiateCheckout(
     productIds: ["SKU123", "SKU456"]
 )
 
-// Complete purchase
 await DatalyrSDK.shared.trackPurchase(
     value: 59.98,
     currency: "USD",
     productId: "order_123"
 )
 
-// Subscription
 await DatalyrSDK.shared.trackSubscription(
     value: 9.99,
     currency: "USD",
     plan: "monthly_pro"
 )
 
-// Registration
 await DatalyrSDK.shared.trackCompleteRegistration(method: "email")
-
-// Search
 await DatalyrSDK.shared.trackSearch(query: "blue shoes", resultIds: ["SKU1", "SKU2"])
-
-// Lead
 await DatalyrSDK.shared.trackLead(value: 100.0, currency: "USD")
-
-// Payment info
 await DatalyrSDK.shared.trackAddPaymentInfo(success: true)
 ```
 
-### Revenue Tracking
+`trackPurchase`, `trackSubscription`, `trackAddToCart`, `trackInitiateCheckout`, `trackCompleteRegistration`, and `trackLead` update the SKAdNetwork conversion value when `skadTemplate` is set. `trackViewContent`, `trackSearch`, and `trackAddPaymentInfo` do not.
 
-> **Important:** If you use **Superwall** or **RevenueCat**, do not use `trackPurchase()`, `trackSubscription()`, or `trackRevenue()` for revenue attribution. These fire client-side before payment is confirmed, so trials and failed payments get counted as revenue. Use the [Superwall](https://docs.datalyr.com/integrations/superwall) or [RevenueCat](https://docs.datalyr.com/integrations/revenuecat) webhook integration for revenue events instead — they only fire when real money changes hands. Use the SDK for behavioral events only (`track("paywall_view")`, `track("trial_start")`, `screen()`, `identify()`, etc.).
+### Revenue
 
-Generic revenue event with a custom name:
+> **Do not use `trackPurchase()`, `trackSubscription()`, or `trackRevenue()` for subscription revenue when you use Superwall or RevenueCat.** These fire client-side before payment is confirmed, so trials and failed payments count as revenue. Use the [Superwall](https://docs.datalyr.com/revenue/superwall) or [RevenueCat](https://docs.datalyr.com/revenue/revenuecat) webhook integration, which fires only on a confirmed charge. Use the SDK for behavioral events: `track("paywall_view")`, `screen()`, `identify()`.
 
 ```swift
 await DatalyrSDK.shared.trackRevenue("custom_revenue_event", properties: [
@@ -270,12 +332,14 @@ await DatalyrSDK.shared.trackRevenue("custom_revenue_event", properties: [
 ])
 ```
 
-### App Update Tracking
+### App updates
+
+Nothing auto-sends `app_update`. Call it yourself.
 
 ```swift
 await DatalyrSDK.shared.trackAppUpdate(
     previousVersion: "2.0.1",
-    currentVersion: "2.1.2"
+    currentVersion: "2.1.0"
 )
 ```
 
@@ -283,224 +347,204 @@ await DatalyrSDK.shared.trackAppUpdate(
 
 ## User Identity
 
-### Anonymous ID
-
-Every device gets a persistent anonymous ID on first launch:
-
-```swift
-let anonymousId = DatalyrSDK.shared.getAnonymousId()
-// "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-```
-
-This ID persists across app sessions and links events before and after user identification.
-
-### Identifying Users
-
-Link the anonymous ID to a known user:
+> **Calling `identify()` with a different user ID runs `reset()` first.** That rotates the anonymous ID and the visitor ID, and erases attribution, the journey, and the SKAdNetwork high-water value. Call `identify()` once per signed-in person, not on every screen.
 
 ```swift
 await DatalyrSDK.shared.identify("user_123", properties: [
-    "email": "user@example.com",
+    "email": "person@example.com",
     "name": "John Doe",
     "phone": "+1234567890"
 ])
 ```
 
-After `identify()`:
-- All future events include `user_id`
-- Historical anonymous events can be linked server-side
-- If `email` is in properties (or the userId is an email), web attribution is automatically fetched and merged
+A repeat call with an unchanged ID and unchanged traits sends no `$identify` event. When `properties` carries an `email`, or the user ID is an email address, the SDK fetches and merges web attribution for that address.
+
+### Identity on the wire
+
+| Wire field | Value |
+|---|---|
+| `anonymousId` | Top-level. Format `anon_<UUID>`. |
+| `properties.anonymous_id` | The same value, repeated. |
+| `userId` | Your ID from `identify()`. The key is absent until then. |
+| `properties.sessionId` | A bare UUID. No prefix. |
+| `context.session_id` | The same session UUID. This is the field Datalyr reads. |
+| `properties.fingerprint.deviceId` | A bare UUID for the install. |
+
+This SDK sends no `distinct_id` and no top-level `visitor_id`. Only the Web SDK sends `distinct_id`. To pass identity to RevenueCat or Superwall, use `getRevenueCatAttributes()` or `getSuperwallAttributes()`.
+
+### Anonymous ID
+
+```swift
+let anonymousId = DatalyrSDK.shared.getAnonymousId()
+// "anon_a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+```
 
 ### Alias
-
-Link two user identifiers:
 
 ```swift
 await DatalyrSDK.shared.alias("new_user_id", previousId: "old_user_id")
 
-// Without previousId, uses current userId or visitorId
+// Without previousId, the SDK uses the current user ID, or the visitor ID
 await DatalyrSDK.shared.alias("new_user_id")
 ```
 
-### Reset
+`alias()` links two IDs for one person. It does not run `reset()`.
 
-Clear user data on logout:
+### Reset
 
 ```swift
 await DatalyrSDK.shared.reset()
 ```
 
-Clears `userId`, user properties, visitor ID, session ID, and attribution data. The `anonymousId` persists.
+`reset()` rotates the anonymous ID, the visitor ID, and the session ID. It clears the user ID, user properties, attribution, the journey, and SKAdNetwork state. Call it on logout.
 
 ---
 
 ## Attribution
 
-### Get Attribution Data
+Pass every incoming link to the SDK. The SDK does not read the launch URL for you.
+
+```swift
+.onOpenURL { url in
+    Task { await DatalyrSDK.shared.handleDeepLink(url) }
+}
+```
+
+The SDK reads these 38 parameters from the query string and the URL fragment. Key matching is case-insensitive.
+
+| Group | Parameters |
+|---|---|
+| Datalyr | `lyr`, `datalyr`, `dl_tag`, `dl_campaign` |
+| Click IDs | `fbclid`, `ttclid`, `gclid`, `wbraid`, `gbraid`, `dclid`, `twclid`, `li_click_id`, `msclkid`, `oppref` |
+| Click ID aliases | `tt_click_id` and `tiktok_click_id` both store as `ttclid` |
+| UTM | `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `utm_id`, `utm_source_platform`, `utm_creative_format`, `utm_marketing_tactic` |
+| Partner | `partner_id`, `affiliate_id`, `referrer_id`, `source_id` |
+| Ad structure | `campaign_id`, `ad_id`, `adset_id`, `creative_id`, `placement_id`, `keyword`, `matchtype`, `network`, `device` |
+
+Each `utm_*` value is mirrored to `campaign_source`, `campaign_medium`, `campaign_name`, `campaign_term`, and `campaign_content`. Since 2.1.9 the whole attribution record rides on every event. Properties you pass to `track()` win on a name collision.
+
+### Read attribution
 
 ```swift
 let attribution = DatalyrSDK.shared.getAttributionData()
 ```
 
-Returns an `AttributionData` struct with these fields:
+`AttributionData` properties:
 
-| Category | Fields |
-|----------|--------|
+| Category | Properties |
+|---|---|
 | Install | `installTime`, `firstOpenTime` |
-| Datalyr LYR | `lyr`, `datalyr`, `dlTag`, `dlCampaign` |
+| Datalyr | `lyr`, `datalyr`, `dlTag`, `dlCampaign` |
 | UTM | `utmSource`, `utmMedium`, `utmCampaign`, `utmTerm`, `utmContent`, `utmId`, `utmSourcePlatform`, `utmCreativeFormat`, `utmMarketingTactic` |
-| Click IDs | `fbclid`, `ttclid`, `gclid`, `wbraid`, `gbraid`, `oppref`, `twclid`, `liClickId`, `msclkid` |
+| Click IDs | `fbclid`, `ttclid`, `gclid`, `wbraid`, `gbraid`, `dclid`, `oppref`, `twclid`, `liClickId`, `msclkid` |
 | Partner | `partnerId`, `affiliateId`, `referrerId`, `sourceId` |
-| Campaign | `campaignId`, `adId`, `adsetId`, `creativeId`, `placementId`, `keyword`, `matchtype`, `network`, `device` |
-| Standard | `campaignSource`, `campaignMedium`, `campaignName`, `campaignTerm`, `campaignContent` |
+| Ad structure | `campaignId`, `adId`, `adsetId`, `creativeId`, `placementId`, `keyword`, `matchtype`, `network`, `device` |
+| Mirrored UTM | `campaignSource`, `campaignMedium`, `campaignName`, `campaignTerm`, `campaignContent` |
 | Other | `referrer`, `deepLinkUrl`, `installReferrer`, `attributionTimestamp` |
 
-### Set Attribution Data
-
-Manually set attribution:
+### Set attribution
 
 ```swift
 var data = AttributionData()
-data.utmSource = "custom_source"
-data.utmCampaign = "summer_sale"
+data.utmSource = "newsletter"
+data.utmCampaign = "spring_sale"
 await DatalyrSDK.shared.setAttributionData(data)
 ```
 
-### Journey Tracking
-
-Multi-touch attribution with first-touch, last-touch, and full touchpoint history:
+### Journey
 
 ```swift
-// First-touch/last-touch and touchpoint count as a dictionary
 let journeyData = DatalyrSDK.shared.getJourneyData()
-
-// Structured summary
 let summary = DatalyrSDK.shared.getJourneySummary()
-// summary.hasFirstTouch, summary.hasLastTouch
-// summary.touchpointCount, summary.daysSinceFirstTouch
-// summary.sources  — e.g. ["facebook", "google"]
-
-// Full touchpoint history
 let touchpoints = DatalyrSDK.shared.getJourney()
-for tp in touchpoints {
-    print(tp.source, tp.medium, tp.campaign, tp.sessionId)
+
+for touchpoint in touchpoints {
+    print(touchpoint.source, touchpoint.medium, touchpoint.campaign, touchpoint.sessionId)
 }
 ```
 
-### Deferred Attribution
-
-```swift
-let deferred = DatalyrSDK.shared.getDeferredAttributionData()
-// Returns nil — deferred deep linking is handled via prelanders and IP matching
-```
+The journey holds up to 30 touchpoints over a 90-day window. It is readable in the app only. The SDK attaches no journey field to any event.
 
 ---
 
 ## SKAdNetwork
 
-iOS 14+ conversion tracking with automatic value management. Supports SKAN 3.0 (iOS 14.0+) and SKAN 4.0 (iOS 16.1+).
+> **Set `skadTemplate` at initialization.** Without it, `getConversionValue(for:properties:)` returns `nil` and `trackWithSKAdNetwork()` sends no conversion update.
 
-### Initialize with SKAdNetwork
+`initialize()` registers for attribution. The framework depends on the OS version.
+
+| iOS version | Framework used |
+|---|---|
+| 17.4 and later | AdAttributionKit |
+| 16.1 to 17.3 | SKAdNetwork 4.0 |
+| 14.0 to 16.0 | SKAdNetwork 3.0 |
 
 ```swift
-// Via static method
-try await DatalyrSDK.initializeWithSKAdNetwork(
-    config: DatalyrConfig(apiKey: "dk_your_api_key"),
-    template: "ecommerce"
-)
-
-// Or via convenience method
 try await DatalyrSDK.configureWithSKAdNetwork(
     apiKey: "dk_your_api_key",
     template: "ecommerce"
 )
 
-// Or via DatalyrConfig directly
-let config = DatalyrConfig(
-    apiKey: "dk_your_api_key",
-    skadTemplate: "ecommerce"
-)
+// Or through DatalyrConfig
+let config = DatalyrConfig(apiKey: "dk_your_api_key", skadTemplate: "ecommerce")
 try await DatalyrSDK.shared.initialize(config: config)
-```
 
-### Track with SKAdNetwork
-
-Events tracked via `trackWithSKAdNetwork` automatically update conversion values:
-
-```swift
 await DatalyrSDK.shared.trackWithSKAdNetwork("level_complete", eventData: [
     "level": 5
 ])
-
-// E-commerce methods (trackPurchase, trackSubscription, trackAddToCart,
-// trackInitiateCheckout, trackCompleteRegistration, trackLead) automatically
-// use SKAdNetwork encoding when a template is configured.
-await DatalyrSDK.shared.trackPurchase(value: 99.99, currency: "USD")
 ```
 
-### Conversion Templates
-
 | Template | Events |
-|----------|--------|
+|---|---|
 | `ecommerce` | purchase, add_to_cart, begin_checkout, signup, subscribe, view_item |
 | `gaming` | level_complete, tutorial_complete, purchase, achievement_unlocked |
 | `subscription` | trial_start, subscribe, upgrade, cancel, signup |
 
-### Get Conversion Value
+Conversion values only ever increase. The SDK stores a high-water fine value and sends an update only for a strictly higher fine value, or an equal fine value with a higher coarse value.
 
-Test what conversion value an event would produce:
+Preview a value without sending it to Apple:
 
 ```swift
 let value = DatalyrSDK.shared.getConversionValue(for: "purchase", properties: [
     "revenue": 49.99
 ])
-// Returns 0-63 or nil if encoder not initialized
+// 0 to 63, or nil when skadTemplate is unset
 ```
 
 ---
 
 ## Apple Search Ads
 
-Attribution for users who install from Apple Search Ads (iOS 14.3+). Fetched automatically on initialization via the AdServices framework.
+The SDK reads AdServices on iOS 14.3 and later, and adds these 12 properties to every event: `asa_attribution`, `asa_org_id`, `asa_org_name`, `asa_campaign_id`, `asa_campaign_name`, `asa_adgroup_id`, `asa_adgroup_name`, `asa_conversion_type`, `asa_click_date`, `asa_keyword`, `asa_keyword_id`, `asa_region`.
+
+The fetch does not block `initialize()`, so the first events after install carry no `asa_*` values.
 
 ```swift
-if let asa = DatalyrSDK.shared.getAppleSearchAdsAttribution() {
-    if asa.attribution {
-        print(asa.orgId)            // Organization ID
-        print(asa.orgName)          // Organization name
-        print(asa.campaignId)       // Campaign ID
-        print(asa.campaignName)     // Campaign name
-        print(asa.adGroupId)        // Ad group ID
-        print(asa.adGroupName)      // Ad group name
-        print(asa.keyword)          // Search keyword
-        print(asa.keywordId)        // Keyword ID
-        print(asa.clickDate)        // Click date
-        print(asa.conversionType)   // Conversion type
-        print(asa.region)           // Region
-    }
+if let asa = DatalyrSDK.shared.getAppleSearchAdsAttribution(), asa.attribution {
+    print(asa.orgId as Any, asa.orgName as Any)
+    print(asa.campaignId as Any, asa.campaignName as Any)
+    print(asa.adGroupId as Any, asa.adGroupName as Any)
+    print(asa.keyword as Any, asa.keywordId as Any)
+    print(asa.clickDate as Any, asa.conversionType as Any, asa.region as Any)
 }
 ```
 
-`AppleSearchAdsAttribution` fields:
+| Property | Type |
+|---|---|
+| `attribution` | `Bool` |
+| `orgId` | `Int?` |
+| `orgName` | `String?` |
+| `campaignId` | `Int?` |
+| `campaignName` | `String?` |
+| `adGroupId` | `Int?` |
+| `adGroupName` | `String?` |
+| `conversionType` | `String?` — `"Download"` or `"Redownload"` |
+| `clickDate` | `String?` |
+| `keyword` | `String?` |
+| `keywordId` | `Int?` |
+| `region` | `String?` |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `attribution` | `Bool` | Whether the install is attributed to Search Ads |
-| `orgId` | `Int?` | Organization ID |
-| `orgName` | `String?` | Organization name |
-| `campaignId` | `Int?` | Campaign ID |
-| `campaignName` | `String?` | Campaign name |
-| `adGroupId` | `Int?` | Ad group ID |
-| `adGroupName` | `String?` | Ad group name |
-| `conversionType` | `String?` | Conversion type (e.g., "Download", "Redownload") |
-| `clickDate` | `String?` | Date of the ad click |
-| `keyword` | `String?` | Search keyword that triggered the ad |
-| `keywordId` | `Int?` | Keyword ID |
-| `region` | `String?` | Region/country code |
-
-Attribution data is automatically included in all events with the `asa_` prefix (e.g., `asa_campaign_id`, `asa_org_name`).
-
-### Check Integration Status
+Check availability:
 
 ```swift
 let status = DatalyrSDK.shared.getPlatformIntegrationStatus()
@@ -511,21 +555,19 @@ let status = DatalyrSDK.shared.getPlatformIntegrationStatus()
 
 ## App Tracking Transparency
 
-### Built-in ATT Request
+The SDK caches advertiser data once at initialization. Call `updateTrackingAuthorization` after the prompt resolves, so later events carry the IDFA.
 
 ```swift
 #if os(iOS)
 if #available(iOS 14.5, *) {
     let status = await DatalyrSDK.shared.requestTrackingAuthorization()
-    // 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
-
-    // Also available as a static method
-    let status2 = await DatalyrSDK.requestTrackingAuthorization()
+    // 0 notDetermined, 1 restricted, 2 denied, 3 authorized
+    print(status)
 }
 #endif
 ```
 
-### Manual ATT Handling
+Handle the prompt yourself instead:
 
 ```swift
 import AppTrackingTransparency
@@ -537,135 +579,89 @@ ATTrackingManager.requestTrackingAuthorization { status in
 }
 ```
 
-### Check ATT Status
+`updateTrackingAuthorization(status:)` takes a `UInt?`, not a `Bool`. Each call sends `$att_status` and refreshes `idfa`, `att_status`, and `advertiser_tracking_enabled` on later events.
 
 ```swift
-let isAuthorized = DatalyrSDK.shared.isTrackingAuthorized()
-let status = DatalyrSDK.shared.getTrackingAuthorizationStatus()
-// 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
+let isAuthorized = DatalyrSDK.shared.isTrackingAuthorized()    // Bool
+let status = DatalyrSDK.shared.getTrackingAuthorizationStatus() // UInt
+let idfa = DatalyrSDK.shared.getIDFA()                          // String?, nil unless authorized
+let advertiserData = DatalyrSDK.shared.getAdvertiserData()      // idfa, att_status, tracking_authorized
 ```
 
-### IDFA
-
-```swift
-// Instance method
-let idfa = DatalyrSDK.shared.getIDFA()  // String? — nil if not authorized
-
-// Static method
-let idfa2 = DatalyrSDK.getIDFA()
-```
-
-### Advertiser Data
-
-Returns a dictionary with `idfa` (if authorized), `att_status`, and `tracking_authorized`:
-
-```swift
-let data = DatalyrSDK.shared.getAdvertiserData()
-// or
-let data2 = DatalyrSDK.getAdvertiserData()
-```
+ATT governs the advertising identifier. It is not an analytics consent system. Your app owns consent and the App Store privacy disclosure.
 
 ---
 
-## Third-Party Integrations
+## Superwall and RevenueCat
 
-### Superwall
-
-Pass Datalyr attribution data to Superwall to personalize paywalls by ad source, campaign, and keyword.
+Call both methods after the two SDKs initialize, and again after the ATT prompt resolves.
 
 ```swift
 Superwall.shared.setUserAttributes(DatalyrSDK.shared.getSuperwallAttributes())
-```
-
-Call after `DatalyrSDK.shared.initialize()` completes. If using ATT, call again after the user responds to the ATT prompt to include IDFA.
-
-**Returned keys:**
-
-| Key | Description |
-|-----|-------------|
-| `datalyr_id` | The user's DATALYR visitor ID |
-| `media_source` | Traffic source (e.g., `facebook`, `google`) |
-| `campaign` | Campaign name from the ad |
-| `adgroup` | Ad group or ad set name |
-| `ad` | Individual ad ID |
-| `keyword` | Search keyword that triggered the ad |
-| `network` | Ad network name |
-| `utm_source` | UTM source parameter |
-| `utm_medium` | UTM medium parameter (e.g., `cpc`) |
-| `utm_campaign` | UTM campaign parameter |
-| `utm_term` | UTM term parameter |
-| `utm_content` | UTM content parameter |
-| `lyr` | DATALYR tracking link ID |
-| `fbclid` | Meta click ID from the ad URL |
-| `gclid` | Google click ID from the ad URL |
-| `ttclid` | TikTok click ID from the ad URL |
-| `oppref` | OpenAI Ads click ID from the ad URL |
-| `idfa` | Apple advertising ID (only if ATT authorized) |
-| `att_status` | App Tracking Transparency status (`0`-`3`) |
-
-### RevenueCat
-
-Pass Datalyr attribution data to RevenueCat for revenue attribution and offering targeting.
-
-```swift
 Purchases.shared.attribution.setAttributes(DatalyrSDK.shared.getRevenueCatAttributes())
 ```
 
-Call after configuring the Purchases SDK and before the first purchase. If using ATT, call again after permission is granted.
+Both methods return `[String: String]` and omit every empty value.
 
-**Returned keys:**
+### getSuperwallAttributes
 
-| Key | Description |
-|-----|-------------|
-| `$datalyrId` | The user's DATALYR visitor ID |
-| `$mediaSource` | Traffic source (e.g., `facebook`, `google`) |
-| `$campaign` | Campaign name from the ad |
-| `$adGroup` | Ad group or ad set name |
-| `$ad` | Individual ad ID |
-| `$keyword` | Search keyword that triggered the ad |
-| `$idfa` | Apple advertising ID (only if ATT authorized) |
-| `$attConsentStatus` | ATT consent status (e.g., `authorized`, `denied`) |
-| `utm_source` | UTM source parameter |
-| `utm_medium` | UTM medium parameter (e.g., `cpc`) |
-| `utm_campaign` | UTM campaign parameter |
-| `utm_term` | UTM term parameter |
-| `utm_content` | UTM content parameter |
-| `lyr` | DATALYR tracking link ID |
-| `fbclid` | Meta click ID from the ad URL |
-| `gclid` | Google click ID from the ad URL |
-| `ttclid` | TikTok click ID from the ad URL |
-| `oppref` | OpenAI Ads click ID from the ad URL |
-| `wbraid` | Google web-to-app click ID |
-| `gbraid` | Google app click ID |
-| `network` | Ad network name |
+| Key | Value |
+|---|---|
+| `datalyr_id` | The visitor ID |
+| `media_source` | `utm_source` |
+| `campaign` | `utm_campaign` |
+| `adgroup` | `adset_id`, or `utm_content` when `adset_id` is empty |
+| `ad` | `ad_id` |
+| `keyword` | `keyword` |
+| `network` | `network` |
+| `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content` | UTM parameters |
+| `lyr` | Datalyr tracking link ID |
+| `fbclid`, `gclid`, `ttclid` | Ad click IDs |
+| `idfa` | Apple advertising ID, only when ATT is authorized |
+| `att_status` | `notDetermined`, `restricted`, `denied`, or `authorized` |
+
+### getRevenueCatAttributes
+
+Reserved keys:
+
+| Key | Value |
+|---|---|
+| `$datalyrId` | The visitor ID |
+| `$mediaSource` | `utm_source` |
+| `$campaign` | `utm_campaign` |
+| `$adGroup` | `adset_id` |
+| `$ad` | `ad_id` |
+| `$keyword` | `keyword` |
+| `$idfa` | Apple advertising ID, only when ATT is authorized |
+| `$attConsentStatus` | `notDetermined`, `restricted`, `denied`, or `authorized` |
+
+Custom keys:
+
+| Key | Value |
+|---|---|
+| `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content` | UTM parameters |
+| `lyr` | Datalyr tracking link ID |
+| `fbclid`, `gclid`, `ttclid`, `wbraid`, `gbraid` | Ad click IDs |
+| `network` | Ad network |
 | `creative_id` | Ad creative ID |
+
+Neither method returns `oppref` or `gaid`.
 
 ---
 
 ## Web-to-App Attribution
 
-Automatically recover attribution from a web prelander when users install the app from an ad.
+On first install the SDK asks the Datalyr API to match the device IP against `$app_download_click` web events from the last 24 hours. The Web SDK fires those events through `trackAppDownloadClick()`.
 
-**How it works:**
+The match runs inside `initialize()`, before `app_install` fires. Your app needs no extra code.
 
-On first install, the SDK calls the Datalyr API to match the device's IP against recent `$app_download_click` web events (fired by the web SDK's `trackAppDownloadClick()`) within 24 hours.
+After a match the SDK merges the web click IDs, UTM parameters, and cookies into the mobile session, sends `$web_attribution_matched`, and stamps the merged attribution on every later event.
 
-No additional mobile code is needed. Attribution is recovered automatically during `initialize()` on first install, before the `app_install` event fires.
-
-After a match, the SDK:
-1. Merges web attribution (click IDs, UTMs, cookies) into the mobile session
-2. Tracks a `$web_attribution_matched` event
-3. All subsequent events carry the matched attribution
-
-**Fallback:** If IP matching misses (e.g., VPN toggle during install), email-based attribution is recovered when `identify()` is called with the user's email.
+When IP matching misses — a VPN toggle during install, for example — call `identify()` with the user's email. The SDK then recovers attribution by email.
 
 ---
 
-## SwiftUI Integration
-
-### View Modifiers
-
-Track screen views and events declaratively with SwiftUI view modifiers:
+## SwiftUI
 
 ```swift
 import SwiftUI
@@ -676,25 +672,27 @@ struct ProductView: View {
         VStack {
             Text("Product Details")
         }
-        .datalyrScreen("Product Details", properties: [
-            "product_id": "SKU123"
-        ])
+        .datalyrScreen("Product Details", properties: ["product_id": "SKU123"])
     }
 }
 
 struct CheckoutView: View {
     var body: some View {
-        Button("Place Order") { /* ... */ }
-            .datalyrTrack("checkout_viewed", properties: [
-                "cart_value": 59.98
-            ])
+        Button("Place Order") {
+            Task {
+                await DatalyrSDK.shared.trackPurchase(
+                    value: 59.98,
+                    currency: "USD",
+                    productId: "order_123"
+                )
+            }
+        }
+        .datalyrTrack("checkout_viewed", properties: ["cart_value": 59.98])
     }
 }
 ```
 
-`View.datalyrScreen(_:properties:)` tracks a screen view when the view appears. `View.datalyrTrack(_:properties:)` tracks a custom event when the view appears.
-
-### App Initialization
+`.datalyrScreen(_:properties:)` sends a `pageview` when the view appears. `.datalyrTrack(_:properties:)` sends your event when the view appears.
 
 ```swift
 @main
@@ -706,42 +704,36 @@ struct MyApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
+        WindowGroup { ContentView() }
     }
 }
 ```
 
 ---
 
-## UIKit Integration
-
-### View Controller Extensions
+## UIKit
 
 ```swift
 class ProductViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
 
-        // Track screen view (uses class name as screen name)
         datalyrTrackScreenView()
 
-        // Track custom event
-        datalyrTrack("product_viewed", properties: [
-            "product_id": "SKU123"
-        ])
+        datalyrTrack("product_viewed", properties: ["product_id": "SKU123"])
     }
 }
 ```
 
-`UIViewController.datalyrTrackScreenView()` tracks a `pageview` event using the view controller's class name. Override it to customize screen names. `UIViewController.datalyrTrack(_:properties:)` tracks a custom event.
+`datalyrTrackScreenView()` sends a `pageview` named after the view controller class. Override it to set your own name.
 
-### Automatic Screen Tracking
+### Automatic screen tracking
 
-Enable automatic screen tracking for UIKit apps by swizzling `viewDidAppear` on all view controllers. System view controllers (`UINavigationController`, `UITabBarController`, `UIAlertController`, etc.) are automatically filtered out. Screen names are cleaned up (`MyProfileViewController` → `MyProfile`).
+Swizzling `viewDidAppear` sends a `pageview` for every view controller. The SDK filters system view controllers, including `UINavigationController`, `UITabBarController`, `UIAlertController`, and `UIHostingController`. Class names are cleaned, so `MyProfileViewController` becomes `MyProfile`.
 
-**Option 1: Enable via config** (recommended):
+> **Automatic swizzling never captures SwiftUI views**, because `UIHostingController` is filtered. Use `.datalyrScreen("Home")` on your SwiftUI views instead.
+
+Enable it through the config:
 
 ```swift
 let config = DatalyrConfig(
@@ -751,31 +743,14 @@ let config = DatalyrConfig(
 try await DatalyrSDK.shared.initialize(config: config)
 ```
 
-**Option 2: Enable manually** after initialization:
+Or enable it after initialization. Set `excludedScreenClasses` before you enable tracking.
 
 ```swift
+DatalyrSDK.excludedScreenClasses = ["OnboardingContainerVC", "DebugMenuVC"]
 DatalyrSDK.enableAutomaticScreenTracking()
 ```
 
-**Exclude specific screens:**
-
-```swift
-// Set before enabling automatic tracking
-DatalyrSDK.excludedScreenClasses = ["OnboardingContainerVC", "DebugMenuVC"]
-```
-
-> **SwiftUI apps:** Automatic UIViewController swizzling does not capture SwiftUI views (`UIHostingController` is filtered). Use the `.datalyrScreen()` view modifier on your SwiftUI views instead:
->
-> ```swift
-> struct HomeView: View {
->     var body: some View {
->         Text("Home")
->             .datalyrScreen("Home")
->     }
-> }
-> ```
-
-### App Delegate Initialization
+### App delegate initialization
 
 ```swift
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -799,28 +774,26 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
 ## Global Convenience Functions
 
-Free functions that call through to `DatalyrSDK.shared`:
+Each free function calls through to `DatalyrSDK.shared`.
 
 | Function | Equivalent |
-|----------|-----------|
-| `datalyrTrack(_:properties:)` | `DatalyrSDK.shared.track(_:eventData:)` |
-| `datalyrScreen(_:properties:)` | `DatalyrSDK.shared.screen(_:properties:)` |
-| `datalyrIdentify(_:properties:)` | `DatalyrSDK.shared.identify(_:properties:)` |
-| `datalyrAlias(_:previousId:)` | `DatalyrSDK.shared.alias(_:previousId:)` |
-| `datalyrReset()` | `DatalyrSDK.shared.reset()` |
-| `datalyrFlush()` | `DatalyrSDK.shared.flush()` |
-| `datalyrGetAnonymousId()` | `DatalyrSDK.shared.getAnonymousId()` |
-| `datalyrTrackWithSKAdNetwork(_:properties:)` | `DatalyrSDK.shared.trackWithSKAdNetwork(_:eventData:)` |
-| `datalyrTrackPurchase(value:currency:productId:)` | `DatalyrSDK.shared.trackPurchase(value:currency:productId:)` |
-| `datalyrTrackSubscription(value:currency:plan:)` | `DatalyrSDK.shared.trackSubscription(value:currency:plan:)` |
-| `datalyrGetConversionValue(for:properties:)` | `DatalyrSDK.shared.getConversionValue(for:properties:)` |
-
-All async functions require `await`:
+|---|---|
+| `datalyrTrack(_:properties:)` | `track(_:eventData:)` |
+| `datalyrScreen(_:properties:)` | `screen(_:properties:)` |
+| `datalyrIdentify(_:properties:)` | `identify(_:properties:)` |
+| `datalyrAlias(_:previousId:)` | `alias(_:previousId:)` |
+| `datalyrReset()` | `reset()` |
+| `datalyrFlush()` | `flush()` |
+| `datalyrGetAnonymousId()` | `getAnonymousId()` |
+| `datalyrTrackWithSKAdNetwork(_:properties:)` | `trackWithSKAdNetwork(_:eventData:)` |
+| `datalyrTrackPurchase(value:currency:productId:)` | `trackPurchase(value:currency:productId:)` |
+| `datalyrTrackSubscription(value:currency:plan:)` | `trackSubscription(value:currency:plan:)` |
+| `datalyrGetConversionValue(for:properties:)` | `getConversionValue(for:properties:)` |
 
 ```swift
 await datalyrTrack("event_name", properties: ["key": "value"])
 await datalyrScreen("Home")
-await datalyrIdentify("user_123")
+await datalyrIdentify("user_123", properties: ["email": "person@example.com"])
 await datalyrAlias("new_id", previousId: "old_id")
 await datalyrReset()
 await datalyrFlush()
@@ -828,15 +801,13 @@ await datalyrTrackPurchase(value: 9.99, currency: "USD", productId: "sku_1")
 await datalyrTrackSubscription(value: 4.99, currency: "USD", plan: "monthly")
 await datalyrTrackWithSKAdNetwork("level_complete", properties: ["level": 5])
 
-let anonId = datalyrGetAnonymousId()
-let cv = datalyrGetConversionValue(for: "purchase", properties: ["revenue": 49.99])
+let anonymousId = datalyrGetAnonymousId()
+let conversionValue = datalyrGetConversionValue(for: "purchase", properties: ["revenue": 49.99])
 ```
 
 ---
 
-## Deep Link Handling
-
-Handle deep links for attribution tracking from `AppDelegate` or `SceneDelegate`:
+## Deep Links
 
 ```swift
 // AppDelegate
@@ -845,19 +816,14 @@ func application(
     open url: URL,
     options: [UIApplication.OpenURLOptionsKey: Any] = [:]
 ) -> Bool {
-    Task {
-        await DatalyrSDK.shared.handleDeepLink(url)
-    }
+    Task { await DatalyrSDK.shared.handleDeepLink(url) }
     return true
 }
 
 // SceneDelegate
 func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-    if let url = URLContexts.first?.url {
-        Task {
-            await DatalyrSDK.shared.handleDeepLink(url)
-        }
-    }
+    guard let url = URLContexts.first?.url else { return }
+    Task { await DatalyrSDK.shared.handleDeepLink(url) }
 }
 
 // SwiftUI
@@ -867,9 +833,7 @@ struct MyApp: App {
         WindowGroup {
             ContentView()
                 .onOpenURL { url in
-                    Task {
-                        await DatalyrSDK.shared.handleDeepLink(url)
-                    }
+                    Task { await DatalyrSDK.shared.handleDeepLink(url) }
                 }
         }
     }
@@ -880,7 +844,7 @@ struct MyApp: App {
 
 ## Delegate Protocol
 
-Implement `DatalyrSDKDelegate` to receive SDK callbacks. All methods are optional (default empty implementations are provided).
+`DatalyrSDKDelegate` supplies default empty implementations, so implement only the callbacks you need.
 
 ```swift
 class AppCoordinator: DatalyrSDKDelegate {
@@ -888,175 +852,157 @@ class AppCoordinator: DatalyrSDKDelegate {
         DatalyrSDK.shared.delegate = self
     }
 
-    func datalyrDidInitialize() {
-        // SDK is fully initialized
-    }
+    func datalyrDidInitialize() {}
 
-    func datalyrDidReceiveAttribution(_ attribution: AttributionData) {
-        // Attribution data received
-    }
+    func datalyrDidReceiveAttribution(_ attribution: AttributionData) {}
 
     func datalyrDidUpdateConversionValue(fineValue: Int, coarseValue: String?) {
-        // SKAdNetwork/AdAttributionKit conversion value updated
-        // fineValue: 0-63
-        // coarseValue: "low", "medium", or "high" (SKAN 4.0+), nil for SKAN 3.0
+        // fineValue 0 to 63
+        // coarseValue "low", "medium", or "high" on SKAN 4.0, nil on SKAN 3.0
     }
 
     func datalyrDidFailToSendEvent(_ error: DatalyrPlatformError, eventName: String?) {
-        // A platform integration failed
         switch error {
-        case .skadnetworkUpdateFailed(let underlyingError):
-            print("SKAN error: \(underlyingError?.localizedDescription ?? "")")
-        case .attributionFetchFailed(let platform, let underlyingError):
-            print("\(platform) attribution error: \(underlyingError?.localizedDescription ?? "")")
-        case .networkError(let underlyingError):
-            print("Network error: \(underlyingError.localizedDescription)")
+        case .skadnetworkUpdateFailed(let underlying):
+            print("SKAdNetwork: \(underlying?.localizedDescription ?? "unknown")")
+        case .attributionFetchFailed(let platform, let underlying):
+            print("\(platform): \(underlying?.localizedDescription ?? "unknown")")
+        case .networkError(let underlying):
+            print("Network: \(underlying.localizedDescription)")
         case .configurationError(let message):
-            print("Config error: \(message)")
+            print("Config: \(message)")
         }
     }
 }
 ```
 
-### Error Types
-
-`DatalyrPlatformError` cases:
-
-| Case | Description |
-|------|-------------|
-| `.skadnetworkUpdateFailed(underlyingError:)` | SKAdNetwork conversion value update failed |
-| `.attributionFetchFailed(platform:underlyingError:)` | Attribution fetch from a platform failed |
-| `.networkError(underlyingError:)` | Network request failed |
-| `.configurationError(message:)` | SDK configuration error |
+| `DatalyrPlatformError` case | Cause |
+|---|---|
+| `.skadnetworkUpdateFailed(underlyingError:)` | A conversion value update failed |
+| `.attributionFetchFailed(platform:underlyingError:)` | An attribution fetch failed |
+| `.networkError(underlyingError:)` | A network request failed |
+| `.configurationError(message:)` | The SDK configuration is invalid |
 
 ---
 
-## Auto Events
+## Queue and Limits
 
-Enable automatic lifecycle tracking:
+> **Nothing batches over the network.** The queue drains `batchSize` events per pass, then sends one HTTP request per event. There is no batch endpoint.
 
-```swift
-let config = DatalyrConfig(
-    apiKey: "dk_your_api_key",
-    enableAutoEvents: true,
-    autoEventConfig: AutoEventConfig(
-        trackSessions: true,
-        trackScreenViews: true,
-        trackAppUpdates: true,
-        trackPerformance: false,
-        sessionTimeoutMs: 1_800_000,  // 30 minutes
-        autoTrackScreenViews: true    // Auto-track UIKit screens via swizzle
-    )
-)
-```
+| Limit | Value |
+|---|---|
+| Events drained per pass | 10, from `batchSize` |
+| HTTP requests per drain | One per event |
+| Flush interval | 10 seconds |
+| Retries per event | 3 |
+| Retry backoff | `min(2^n × retryDelay + random(0…1), 30)` seconds |
+| `Retry-After` honored | Clamped to 0 to 30 seconds |
+| Extra waits on 429 and 408 | 5, outside the retry budget |
+| Request timeout | 15 seconds. Resource timeout 30 seconds. |
+| Client rate limit | 100 requests per 60 seconds. The SDK waits, up to 120 seconds. |
+| Queue | 1000 events |
+| Dead-letter queue | 100 events |
+| Pre-init buffers | 50 events, 50 identity calls, 50 deep links |
+| Event data payload | 32,768 bytes of serialized JSON |
+| Event name | 100 characters |
+| Journey | 30 touchpoints over 90 days |
+| Attribution lookup timeout | 10 seconds |
 
-| Event | Trigger |
-|-------|---------|
-| `app_install` | First app open (includes attribution data) |
-| `session_start` | New session begins |
-| `session_end` | 30 min inactivity timeout or app terminated |
-| `pageview` | Screen view (via `screen()` method) |
+| Response | Behavior |
+|---|---|
+| `429`, `408` | Waits for `Retry-After`, then retries, on a separate budget of 5 waits |
+| Other `4xx` | Dropped. A wrong API key produces this. |
+| `5xx`, network failure | Retried with backoff up to `maxRetries`, then moved to the dead-letter queue |
 
----
-
-## Offline Support
-
-Events are batched and stored locally when offline. They are sent when connectivity returns.
-
-### Manual Flush
+Events persist across app launches and send when connectivity returns.
 
 ```swift
 await DatalyrSDK.shared.flush()
-```
 
-### Queue Status
-
-```swift
 let status = DatalyrSDK.shared.getStatus()
 print(status.queueStats.queueSize)       // Events waiting
 print(status.queueStats.isProcessing)    // Currently sending
 print(status.queueStats.isOnline)        // Network available
-print(status.queueStats.oldestEventAge)  // Age of oldest event (TimeInterval?)
-```
+print(status.queueStats.oldestEventAge as Any)  // TimeInterval?
 
-### Initialization Check
-
-```swift
 let ready = DatalyrSDK.shared.isInitialized  // Bool
-let error = DatalyrSDK.shared.getLastError() // Error?
 ```
 
 ---
 
 ## Exported Types
 
-Public types available after importing `DatalyrSDK`:
-
 | Type | Description |
-|------|-------------|
-| `DatalyrSDK` | Main SDK class (singleton via `.shared`) |
+|---|---|
+| `DatalyrSDK` | The SDK class. Use `DatalyrSDK.shared`. |
 | `DatalyrConfig` | SDK configuration |
-| `AutoEventConfig` | Auto event tracking configuration |
-| `AttributionData` | Attribution tracking data (UTM, click IDs, campaign details) |
-| `AppleSearchAdsAttribution` | Apple Search Ads attribution fields |
-| `DeferredDeepLinkResult` | Deferred deep link result |
-| `EventPayload` | Complete event payload |
-| `DeviceContext` | Device context data |
+| `AutoEventConfig` | Automatic event configuration |
+| `AttributionData` | Attribution record |
+| `AppleSearchAdsAttribution` | Apple Search Ads fields |
+| `DeferredDeepLinkResult` | Return type of `getDeferredAttributionData()`, which always returns `nil` |
+| `EventPayload` | The wire payload |
+| `DeviceContext` | Device context |
 | `DeviceInfo` | Device information |
-| `SDKStatus` | SDK status with queue stats and attribution |
-| `QueueStats` | Event queue statistics |
-| `SessionData` | Session tracking data |
-| `QueuedEvent` | Queued event for offline storage |
+| `SDKStatus` | Status, queue stats, and attribution |
+| `QueueStats` | Queue statistics |
+| `SessionData` | Session state |
+| `QueuedEvent` | One queued event |
 | `HTTPResponse` | HTTP response wrapper |
-| `AnyCodable` | Codable wrapper for `Any` values |
-| `TouchAttribution` | Attribution data for a touchpoint |
-| `TouchPoint` | Single touchpoint in the customer journey |
-| `JourneySummary` | Journey tracking summary |
-| `DatalyrSDKDelegate` | Delegate protocol for SDK callbacks |
-| `DatalyrPlatformError` | Platform integration error enum |
-| `DatalyrError` | SDK error enum |
-| `EventData` | Typealias for `[String: Any]` |
-| `UserProperties` | Typealias for `[String: Any]` |
+| `AnyCodable` | `Codable` wrapper for `Any` |
+| `TouchAttribution` | Attribution for one touchpoint |
+| `TouchPoint` | One touchpoint in the journey |
+| `JourneySummary` | Journey summary |
+| `DatalyrSDKDelegate` | Delegate protocol |
+| `DatalyrPlatformError` | Platform integration errors |
+| `DatalyrError` | SDK errors |
+| `EventData` | `[String: Any]` |
+| `UserProperties` | `[String: Any]` |
 
 ---
 
 ## Troubleshooting
 
-### Events not appearing
+### No events in the dashboard
 
-1. Check API key starts with `dk_`
-2. Enable `debug: true` in config
-3. Check `DatalyrSDK.shared.getStatus()` for queue info
-4. Verify `DatalyrSDK.shared.isInitialized` is `true`
-5. Check network connectivity via `getStatus().queueStats.isOnline`
-6. Call `flush()` to force send
+1. Confirm the API key starts with `dk_`.
+2. Confirm `DatalyrSDK.shared.isInitialized` is `true`.
+3. Read `getStatus().queueStats.queueSize`. A queue that grows without draining means the API key is wrong.
+4. Read `getStatus().queueStats.isOnline`.
+5. Call `flush()`.
+6. Open **Events** in Datalyr and filter on `app_install`.
 
-### SKAdNetwork conversion values not updating
+Set `debug: true` to print `[Datalyr]` lines to the console. `getLastError()` always returns `nil`, so read `getStatus()` instead.
 
-1. Verify `skadTemplate` is set in config or use `initializeWithSKAdNetwork(config:template:)`
-2. Check `getConversionValue(for:properties:)` returns a non-nil value
-3. Conversion values only update on iOS 14.0+
-4. Set the delegate and implement `datalyrDidUpdateConversionValue` to monitor updates
+### Screen views are missing
 
-### Attribution data missing
+Filter on `pageview`, not `screen`. `screen()` sends the event name `pageview`. Confirm `autoEventConfig.trackScreenViews` is not `false`, which suppresses every `pageview`.
 
-1. Verify `enableAttribution: true` in config
-2. For Apple Search Ads: requires iOS 14.3+ and the AdServices framework
-3. For web-to-app: the prelander must fire `trackAppDownloadClick()` with the web SDK
-4. Check `getPlatformIntegrationStatus()` for integration availability
+### Conversion values never update
+
+1. Confirm `skadTemplate` is set, or use `configureWithSKAdNetwork(apiKey:template:)`.
+2. Confirm `getConversionValue(for:properties:)` returns a non-`nil` value.
+3. Confirm the device runs iOS 14.0 or later.
+4. Implement `datalyrDidUpdateConversionValue` to watch each update.
+
+Conversion values only increase. An event that encodes a lower fine value sends nothing.
+
+### Attribution is empty
+
+1. Confirm `enableAttribution` is `true`.
+2. Confirm your app calls `handleDeepLink(_:)` for every incoming URL.
+3. For Apple Search Ads, confirm the device runs iOS 14.3 or later. Read again after a few seconds, because the fetch does not block `initialize()`.
+4. For web-to-app, confirm the prelander calls `trackAppDownloadClick()` in the Web SDK.
+5. Call `identify()` with the user's email as the IP-match fallback.
+
+`getDeferredAttributionData()` always returns `nil`. Use `getAppleSearchAdsAttribution()`.
 
 ### Build errors
 
-```bash
-# Clean build folder
-Cmd+Shift+K in Xcode
+In Xcode:
 
-# Reset package caches
-File > Packages > Reset Package Caches
-
-# Update packages
-File > Packages > Update to Latest Package Versions
-```
+- Clean the build folder: **Cmd+Shift+K**
+- Reset package caches: **File > Packages > Reset Package Caches**
+- Update packages: **File > Packages > Update to Latest Package Versions**
 
 ---
 
