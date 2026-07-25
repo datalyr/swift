@@ -292,6 +292,21 @@ internal class UnifiedAttributionTracker {
         }
     }
 
+    /// Read-only pre-flight: would this value be sent? Commits NOTHING — the
+    /// high-water must only advance once the OS has ACCEPTED the value (audit
+    /// P2: committing before the completion made a transient SKAdNetwork
+    /// error permanently swallow that conversion value, because the retry was
+    /// then skipped as "not higher". The RN SDK commits after acceptance —
+    /// this matches it).
+    private func shouldSend(fine: Int, coarseRank newCoarse: Int) -> Bool {
+        stateLock.withLock {
+            if storage.bool(forKey: lockedKey) { return false }
+            let curFine = storage.integer(forKey: fineKey)
+            let curCoarse = storage.integer(forKey: coarseKey)
+            return fine > curFine || (fine == curFine && newCoarse > curCoarse)
+        }
+    }
+
     /// Register for attribution tracking.
     /// FSR-3: the iOS 17.4+ AdAttributionKit registration sends a 0/low conversion value.
     /// Sending it on EVERY cold launch resets any in-window high-water value to 0/low.
@@ -319,21 +334,28 @@ internal class UnifiedAttributionTracker {
     func updateConversionValue(fineValue: Int, coarseValue: String, lockWindow: Bool) async -> Bool {
         let newCoarseRank = coarseRank(coarseValue)
 
-        // Persisted monotonic guard — applies on EVERY iOS version, surviving cold launches.
-        guard commitIfHigher(fine: fineValue, coarseRank: newCoarseRank, lock: lockWindow) else {
+        // Persisted monotonic guard — applies on EVERY iOS version, surviving
+        // cold launches. Read-only here: the commit happens AFTER the OS
+        // accepts (see shouldSend). commitIfHigher stays monotonic, so a
+        // concurrent higher value winning the race can never be downgraded.
+        guard shouldSend(fine: fineValue, coarseRank: newCoarseRank) else {
             debugLog("SKAN: skipping update (not higher than persisted high-water, or window locked) fine=\(fineValue) coarse=\(coarseValue)")
             return false
         }
 
         if #available(iOS 17.4, *) {
-            return await AdAttributionKitIntegration.shared.updateConversionValue(
+            let accepted = await AdAttributionKitIntegration.shared.updateConversionValue(
                 fineValue: fineValue,
                 coarseValue: AdAttributionKitIntegration.CoarseValue.from(coarseValue),
                 lockWindow: lockWindow
             )
+            if accepted {
+                _ = commitIfHigher(fine: fineValue, coarseRank: newCoarseRank, lock: lockWindow)
+            }
+            return accepted
         } else if #available(iOS 16.1, *) {
             // SKAN 4.0
-            return await withCheckedContinuation { continuation in
+            let accepted: Bool = await withCheckedContinuation { continuation in
                 let coarse: SKAdNetwork.CoarseConversionValue
                 switch coarseValue.lowercased() {
                 case "high": coarse = .high
@@ -351,9 +373,16 @@ internal class UnifiedAttributionTracker {
                     }
                 }
             }
+            if accepted {
+                _ = commitIfHigher(fine: fineValue, coarseRank: newCoarseRank, lock: lockWindow)
+            }
+            return accepted
         } else if #available(iOS 14.0, *) {
-            // SKAN 3.0 (legacy)
+            // SKAN 3.0 (legacy) — fire-and-forget API with no acceptance
+            // signal, so commit immediately (unchanged behavior; there is
+            // nothing to wait for).
             SKAdNetwork.updateConversionValue(fineValue)
+            _ = commitIfHigher(fine: fineValue, coarseRank: newCoarseRank, lock: lockWindow)
             debugLog("SKAdNetwork 3.0: Updated to \(fineValue)")
             return true
         }
