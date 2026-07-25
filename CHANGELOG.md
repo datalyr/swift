@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.1.9] - 2026-07-25
+
+### Added
+- **Attribution on every event.** `createEventPayload` now merges persisted
+  attribution (click ids, UTMs, lyr) into every event's payload — previously
+  campaign context existed only on `app_install`, so purchases carried none.
+  Caller-supplied properties always win on key collision.
+
+### Fixed
+- **`AttributionData.toDictionary()` emits wire keys.** Mirror reflection
+  produced Swift property names (`utmSource`); now encodes through Codable so
+  keys are the snake_case CodingKeys (`utm_source`) the ingest contract reads.
+- **Web-attribution bridge guards.** Both lookup paths (email and deferred/IP)
+  no longer merge or fire `$web_attribution_matched` when the server result is
+  identity-only or points at this SDK's own visitor id.
+- **SKAN high-water commits only after the OS accepts.** A transient
+  `SKAdNetwork` error no longer permanently swallows that conversion value.
+
 ## [2.1.8] - 2026-07-12
 
 ### Changed

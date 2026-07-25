@@ -1592,7 +1592,7 @@ public class DatalyrSDK {
         // Add standard properties
         enrichedEventData["platform"] = "ios"
         enrichedEventData["anonymous_id"] = anonymousId  // Include for attribution
-        enrichedEventData["sdk_version"] = "2.1.8"
+        enrichedEventData["sdk_version"] = "2.1.9"
         enrichedEventData["schema_version"] = 1  // A3-25: versioned-envelope stamp (see web SDK)
 
         // App info from Bundle
@@ -1739,7 +1739,7 @@ public class DatalyrSDK {
 
             var installData: EventData = [
                 "platform": "ios",
-                "sdk_version": "2.1.8",
+                "sdk_version": "2.1.9",
                 "install_time": installTime
             ]
 
