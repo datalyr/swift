@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.1.10] - 2026-07-25
+
+### Fixed
+- **`identify()` no longer re-emits unchanged identity.** Every call emitted a
+  `$identify` event and ran the web-attribution lookup, even for exact
+  repeats. Apps that call identify on each launch/screen produced up to 129
+  identifies for one user in 24h (6.8/visitor/day measured on 2.1.3).
+  Identity is now fingerprinted on visitorId|userId|sorted-traits: an exact
+  repeat is skipped, any change still emits, a visitor rotation always
+  re-emits (links are never lost), and `reset()` clears it so logout→login
+  relinks.
+
 ## [2.1.9] - 2026-07-25
 
 ### Added
