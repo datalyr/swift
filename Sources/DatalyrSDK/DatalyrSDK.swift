@@ -1222,6 +1222,29 @@ public class DatalyrSDK {
 
     // MARK: - Third-Party Integration Methods
 
+    /// Bind a provider-side user id to this install (Datalyr person contract §8).
+    ///
+    /// Call with EXACTLY the id you hand the provider — e.g.
+    /// `await DatalyrSDK.shared.bindProviderIdentity(namespace: "revenuecat", providerUserId: Purchases.shared.appUserID)`
+    /// right after configuring that SDK. Emits a deterministic identity edge
+    /// (install ↔ ext:<namespace>) so provider webhooks resolve to this person
+    /// through the backend registry without depending on `datalyr_id`
+    /// attribute forwarding, and the backend gains a real eligible/complete
+    /// coverage denominator for the handoff. Safe to call on every launch —
+    /// the backend edge write is idempotent.
+    public func bindProviderIdentity(namespace: String, providerUserId: String) async {
+        let ns = namespace.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let id = providerUserId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ns.isEmpty, !id.isEmpty else {
+            logError("bindProviderIdentity requires a namespace and a provider user id")
+            return
+        }
+        await track("$provider_identity_bound", eventData: [
+            "external_ids": [ns: id],
+            "provider_namespace": ns,
+        ])
+    }
+
     /// Get attribution data formatted for Superwall's `setUserAttributes()`
     /// Returns a flat `[String: String]` dictionary with only non-empty values
     ///
