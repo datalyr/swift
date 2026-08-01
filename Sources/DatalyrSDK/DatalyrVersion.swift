@@ -24,7 +24,7 @@ import Foundation
 /// *host app's* version, not the SDK's.
 public enum DatalyrVersion {
     /// Semantic version of this SDK build. Must equal `DatalyrSDK.podspec`.
-    public static let current = "2.1.11"
+    public static let current = "2.1.12"
 
     /// Library identifier sent as `context.library`. Server-side platform
     /// detection keys on this exact string (`detectSource` in the ingest

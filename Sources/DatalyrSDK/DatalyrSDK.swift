@@ -1236,7 +1236,7 @@ public class DatalyrSDK {
         let ns = namespace.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let id = providerUserId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !ns.isEmpty, !id.isEmpty else {
-            logError("bindProviderIdentity requires a namespace and a provider user id")
+            errorLog("bindProviderIdentity requires a namespace and a provider user id")
             return
         }
         await track("$provider_identity_bound", eventData: [
@@ -1323,8 +1323,14 @@ public class DatalyrSDK {
             attrs[key] = str
         }
 
+        // Datalyr visitor id — CUSTOM key, deliberately un-prefixed: RevenueCat
+        // reserves the `$` namespace for its own attribute vocabulary and strips
+        // unknown `$` keys, so the old `$datalyrId` never reached the webhook
+        // and killed the deterministic visitor-id match. The server reads
+        // `datalyr_id` (webhooks/platforms/revenuecat.js).
+        set("datalyr_id", visitorId.isEmpty ? nil : visitorId)
+
         // Reserved attributes ($ prefix)
-        set("$datalyrId", visitorId.isEmpty ? nil : visitorId)
         set("$mediaSource", attribution.utmSource)
         set("$campaign", attribution.utmCampaign)
         set("$adGroup", attribution.adsetId)
