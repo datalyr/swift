@@ -2,7 +2,7 @@
 
 Server-side attribution, event tracking, SKAdNetwork conversion values, and Apple Search Ads attribution for iOS.
 
-Current release: **2.1.10**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.12**. Every event posts to `https://ingest.datalyr.com/track`.
 
 Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sdk-reference/ios).
 
@@ -38,7 +38,7 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 |---|---|
 | Minimum iOS | 13.0 |
 | Swift tools version | 5.7 |
-| Current release | 2.1.10 |
+| Current release | 2.1.12 |
 | Frameworks linked | `Foundation`, `UIKit`, `StoreKit`, `AdServices` (weak) |
 
 ---
@@ -49,13 +49,13 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 
 1. In Xcode, open **File > Add Package Dependencies**.
 2. Enter `https://github.com/datalyr/swift`.
-3. Select version 2.1.10.
+3. Select version 2.1.12.
 4. Add the `DatalyrSDK` product to your app target.
 
 In `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/datalyr/swift", from: "2.1.10")
+.package(url: "https://github.com/datalyr/swift", from: "2.1.12")
 ```
 
 ### CocoaPods
@@ -63,7 +63,7 @@ In `Package.swift`:
 > **The CocoaPods podspec does not ship `PrivacyInfo.xcprivacy`.** App Store review requires a privacy manifest. Add your own manifest, or install with Swift Package Manager, which does ship one.
 
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.10'
+pod 'DatalyrSDK', '~> 2.1.12'
 ```
 
 Run `pod install`. Open the generated `.xcworkspace`.
