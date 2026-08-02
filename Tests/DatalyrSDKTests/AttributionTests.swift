@@ -306,4 +306,59 @@ final class AttributionTests: XCTestCase {
         let params = await mgr.handleDeepLink(URL(string: "https://app.datalyr.com/home")!)
         XCTAssertTrue(params.isEmpty, "no attributable params → empty return → no $deep_link event")
     }
+
+    // MARK: - Deferred web→app lookup eligibility
+
+    /// The IP lookup is the only web→app bridge on iOS. Gating it on first launch forfeited
+    /// attribution for any install whose first cold start had no network, because the
+    /// first-launch marker is persisted during init regardless of what the lookup did.
+    func testDeferredLookupStaysEligibleAfterAFailedAttempt() async {
+        await DatalyrStorage.shared.removeValue(StorageKeys.firstLaunchTime)
+        await DatalyrStorage.shared.removeValue(StorageKeys.deferredLookupResolved)
+        await DatalyrStorage.shared.removeValue(StorageKeys.deferredLookupAttempts)
+
+        // Launch 1: fresh install, lookup issued but never answered (offline).
+        let launch1 = AttributionManager()
+        await launch1.initialize()
+        var eligible = await launch1.shouldAttemptDeferredLookup()
+        XCTAssertTrue(eligible, "a fresh install must attempt the lookup")
+        await launch1.recordDeferredLookupAttempt()
+
+        // Launch 2: first-launch marker is now spent, but no answer was ever received.
+        let launch2 = AttributionManager()
+        await launch2.initialize()
+        XCTAssertFalse(launch2.isInstall(), "second launch is no longer a first launch")
+        eligible = await launch2.shouldAttemptDeferredLookup()
+        XCTAssertTrue(eligible, "an unanswered lookup must retry on a later launch")
+
+        // A definitive server answer is terminal.
+        await launch2.markDeferredLookupResolved()
+        eligible = await launch2.shouldAttemptDeferredLookup()
+        XCTAssertFalse(eligible, "a resolved lookup must never be attempted again")
+    }
+
+    func testDeferredLookupStopsAtTheAttemptBound() async {
+        await DatalyrStorage.shared.removeValue(StorageKeys.firstLaunchTime)
+        await DatalyrStorage.shared.removeValue(StorageKeys.deferredLookupResolved)
+        await DatalyrStorage.shared.removeValue(StorageKeys.deferredLookupAttempts)
+
+        let manager = AttributionManager()
+        await manager.initialize()
+
+        // Every attempt fails, so only the counter can stop it.
+        var attempts = 0
+        while await manager.shouldAttemptDeferredLookup() {
+            await manager.recordDeferredLookupAttempt()
+            attempts += 1
+            if attempts > 10 { break }
+        }
+
+        XCTAssertLessThanOrEqual(attempts, 10, "repeated failures must not retry unbounded")
+        let stillEligible = await manager.shouldAttemptDeferredLookup()
+        XCTAssertFalse(stillEligible, "the attempt bound is a hard stop")
+
+        // Leave the install terminal so unrelated tests that initialize the SDK don't
+        // issue a real lookup.
+        await manager.markDeferredLookupResolved()
+    }
 }

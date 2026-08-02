@@ -450,6 +450,12 @@ internal enum StorageKeys {
     static let deadLetterQueue = "datalyr_dead_letter_queue"
     static let attributionData = "datalyr_attribution_data"
     static let firstLaunchTime = "datalyr_first_launch_time"
+    /// Deferred web→app IP lookup state, kept per install alongside the attribution
+    /// data it feeds: whether the server has given a definitive answer, and how many
+    /// requests have been issued. `firstLaunchTime` cannot serve as that state — it is
+    /// written during init regardless of what the lookup did. See AttributionManager.
+    static let deferredLookupResolved = "datalyr_deferred_lookup_resolved"
+    static let deferredLookupAttempts = "datalyr_deferred_lookup_attempts"
     static let installTracked = "datalyr_install_tracked"
     static let lastAppVersion = "datalyr_last_app_version"
     /// Fingerprint of the last identify() that actually emitted, so a host app

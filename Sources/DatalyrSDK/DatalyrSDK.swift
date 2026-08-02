@@ -313,8 +313,11 @@ public class DatalyrSDK {
             }
         }
 
-        // Attempt deferred web-to-app attribution on first install (IP-based matching)
-        if config.enableAttribution, attributionManager?.isInstall() == true {
+        // Attempt deferred web-to-app attribution (IP-based matching). Gated on the lookup
+        // not having SUCCEEDED yet rather than on first launch: the first-launch marker is
+        // written during attribution init, before this call, so it is spent whether or not
+        // the lookup ever reached the server. shouldAttemptDeferredLookup() bounds the retries.
+        if config.enableAttribution, await attributionManager?.shouldAttemptDeferredLookup() == true {
             await fetchDeferredWebAttribution()
         }
 
@@ -785,10 +788,15 @@ public class DatalyrSDK {
     /// Fetch deferred web attribution on first app install via IP-based matching.
     /// Recovers attribution data (fbclid, utm_*, etc.) from a prelander web visit
     /// by matching the device's IP to a recent $app_download_click web event.
-    /// Called automatically during initialize() when a fresh install is detected.
+    /// Called automatically during initialize() while the lookup is still eligible
+    /// (see AttributionManager.shouldAttemptDeferredLookup).
+    ///
+    /// Every exit path either marks the lookup resolved (the server answered) or leaves it
+    /// eligible for a later launch (nothing reached the server / nothing usable came back).
     private func fetchDeferredWebAttribution() async {
         guard let apiKey = config?.apiKey else {
-            debugLog("API key not available for deferred attribution fetch")
+            // Not an answer from the server — a later launch with a configured key retries.
+            errorLog("API key not available for deferred attribution fetch — web→app match skipped")
             return
         }
 
@@ -808,16 +816,45 @@ public class DatalyrSDK {
         let body: [String: Any] = ["platform": "ios"]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
+        // Spend the attempt before the request goes out: a request that never returns
+        // (app killed mid-flight, hung connection) must still count against the bound.
+        await attributionManager?.recordDeferredLookupAttempt()
+
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
 
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                debugLog("Deferred attribution lookup failed")
+            guard let httpResponse = response as? HTTPURLResponse else {
+                errorLog("Deferred attribution lookup got a non-HTTP response — retrying on a later launch")
                 return
             }
 
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let found = json["found"] as? Bool, found,
+            if httpResponse.statusCode != 200 {
+                // 5xx/408/429 are transient, so stay eligible. Anything else is definitive for
+                // this install — a disabled route (410), a rejected key (401) or a malformed
+                // request will not start working inside the server's one-hour match window.
+                let retryable = httpResponse.statusCode >= 500
+                    || httpResponse.statusCode == 408
+                    || httpResponse.statusCode == 429
+                if !retryable {
+                    await attributionManager?.markDeferredLookupResolved()
+                }
+                errorLog("Deferred attribution lookup failed with status \(httpResponse.statusCode)"
+                    + (retryable ? " — retrying on a later launch" : " — not retryable"))
+                return
+            }
+
+            // Parse BEFORE marking resolved (same ordering as the email path): a truncated
+            // body or an HTML error page served as 200 is not an answer, and must not burn
+            // the install's one shot at the bridge.
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                errorLog("Deferred attribution lookup returned an unparseable body — retrying on a later launch")
+                return
+            }
+
+            // A parsed 200 is the server's definitive answer, matched or not.
+            await attributionManager?.markDeferredLookupResolved()
+
+            guard let found = json["found"] as? Bool, found,
                   let attribution = json["attribution"] as? [String: Any] else {
                 debugLog("No deferred web attribution found for this IP")
                 return
@@ -879,8 +916,10 @@ public class DatalyrSDK {
             debugLog("Successfully merged deferred web attribution")
 
         } catch {
-            errorLog("Error fetching deferred web attribution: \(error.localizedDescription)")
-            // Non-blocking - email-based fallback will catch this on identify()
+            // Transport-level failure (offline, captive portal, timeout) — the common case
+            // right after an App Store install. Nothing was answered, so the lookup stays
+            // eligible and a later launch inside the match window retries it.
+            errorLog("Error fetching deferred web attribution — retrying on a later launch", error: error)
         }
     }
 

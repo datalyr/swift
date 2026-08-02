@@ -47,8 +47,11 @@ internal let ATTRIBUTION_PARAMS = [
 internal class AttributionManager {
     private var attributionData = AttributionData()
     private var isFirstLaunch = false
+    /// Install time as a Date, for bounding the deferred web→app lookup. nil when the
+    /// persisted stamp is absent or unparseable (install predates this stamp).
+    private var installDate: Date?
     private let storage = DatalyrStorage.shared
-    
+
     /// Initialize attribution tracking
     func initialize() async {
         debugLog("Initializing attribution manager...")
@@ -75,16 +78,19 @@ internal class AttributionManager {
         if firstLaunchTime == nil {
             // This is the first launch
             isFirstLaunch = true
-            let installTime = DateFormatter.iso8601.string(from: Date())
-            
+            let now = Date()
+            let installTime = DateFormatter.iso8601.string(from: now)
+
             attributionData.installTime = installTime
             attributionData.firstOpenTime = installTime
-            
+            installDate = now
+
             await storage.setString(StorageKeys.firstLaunchTime, value: installTime)
             debugLog("First launch detected, install time: \(installTime)")
         } else {
             isFirstLaunch = false
             attributionData.installTime = firstLaunchTime
+            installDate = firstLaunchTime.flatMap { DateFormatter.iso8601.date(from: $0) }
             debugLog("Returning user, install time: \(firstLaunchTime ?? "unknown")")
         }
     }
@@ -280,6 +286,67 @@ internal class AttributionManager {
         return attributionData
     }
     
+    // MARK: - Deferred web→app lookup state
+
+    /// The IP lookup is the ONLY web→app bridge on iOS, and it runs during init — exactly
+    /// when a freshly installed device is most likely to have no usable network (App Store
+    /// hand-off, captive portal, airplane mode). First launch is therefore the wrong gate:
+    /// `firstLaunchTime` is persisted during init whether or not the lookup ever reached the
+    /// server, so one offline cold start forfeited attribution for the life of the install.
+    /// Eligibility is instead "no definitive answer yet", bounded two ways.
+    ///
+    /// Both bounds are hard stops, so retrying cannot continue indefinitely:
+    /// - the server only matches a web touch to this IP within its match window
+    ///   (DEFERRED_IP_MATCH_WINDOW_MINUTES, default 60), so once an hour has passed since
+    ///   install there is nothing left to match and elapsed time can never shrink back;
+    /// - the attempt counter is persisted BEFORE each request is issued, so attempts are
+    ///   spent even by requests that never return, and a device with a broken/rolled-back
+    ///   clock still runs out.
+    private static let deferredLookupWindow: TimeInterval = 60 * 60
+    private static let maxDeferredLookupAttempts = 3
+
+    /// Whether the deferred web→app IP lookup should be attempted on this launch.
+    func shouldAttemptDeferredLookup() async -> Bool {
+        if await storage.getBool(StorageKeys.deferredLookupResolved) == true {
+            return false
+        }
+
+        // An install whose time is unknown cannot be bounded by the match window, and is by
+        // definition not a fresh install of this SDK version — nothing to recover.
+        guard let installDate = installDate else {
+            debugLog("Deferred lookup not attempted: install time unknown")
+            return false
+        }
+
+        let elapsed = Date().timeIntervalSince(installDate)
+        guard elapsed >= 0, elapsed < Self.deferredLookupWindow else {
+            debugLog("Deferred lookup not attempted: outside the server's IP match window")
+            return false
+        }
+
+        let attempts = Int(await storage.getDouble(StorageKeys.deferredLookupAttempts) ?? 0)
+        guard attempts < Self.maxDeferredLookupAttempts else {
+            debugLog("Deferred lookup not attempted: attempt limit reached (\(attempts))")
+            return false
+        }
+
+        return true
+    }
+
+    /// Count an issued lookup request. Called before the request goes out so an attempt that
+    /// never returns (process killed mid-flight) still consumes budget.
+    func recordDeferredLookupAttempt() async {
+        let attempts = await storage.getDouble(StorageKeys.deferredLookupAttempts) ?? 0
+        await storage.setDouble(StorageKeys.deferredLookupAttempts, value: attempts + 1)
+    }
+
+    /// Record that the server answered definitively — matched or not. Terminal: a genuine
+    /// "no web touch for this IP" must not re-ask on every launch.
+    func markDeferredLookupResolved() async {
+        await storage.setBool(StorageKeys.deferredLookupResolved, value: true)
+        debugLog("Deferred lookup resolved; no further attempts this install")
+    }
+
     /// Set attribution data manually
     func setAttributionData(_ data: AttributionData) async {
         attributionData = data
