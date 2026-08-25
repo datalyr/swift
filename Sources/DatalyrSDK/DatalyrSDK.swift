@@ -870,7 +870,10 @@ public class DatalyrSDK {
             // minutes), so it stays eligible for one more launch. Every other reason
             // is terminal, and the attempt cap bounds the retry either way.
             let missReason = (json["found"] as? Bool) == false ? (json["reason"] as? String ?? "no_candidates") : nil
-            let installAge = await attributionManager?.installAgeMinutes()
+            // Not `await`: installAgeMinutes() is a plain synchronous read of a
+            // stored Date. Marking it await compiled and behaved identically but
+            // warned, and `pod trunk push` fails validation on warnings.
+            let installAge = attributionManager?.installAgeMinutes()
             let freshNoCandidates = missReason == "no_candidates" && (installAge ?? .infinity) < 60
             if !freshNoCandidates {
                 await attributionManager?.markDeferredLookupResolved()
