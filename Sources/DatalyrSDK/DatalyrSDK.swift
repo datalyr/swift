@@ -813,7 +813,20 @@ public class DatalyrSDK {
         request.setValue(apiKey, forHTTPHeaderField: "X-Datalyr-API-Key")
         request.timeoutInterval = 10
 
-        let body: [String: Any] = ["platform": "ios"]
+        // Device fingerprint — the exact values the click-side fp_* capture
+        // approximates from the redirect request's headers. This is what opens the
+        // server's tier-2 matcher (fingerprint-corroborated store clicks up to 7
+        // days old); without it the server only runs the short exact-IP window.
+        let deviceInfo = getDeviceInfo()
+        var body: [String: Any] = [
+            "platform": "ios",
+            "os_version": deviceInfo.osVersion,
+            "device_model": deviceInfo.model,
+            "timezone": deviceInfo.timezone,
+        ]
+        if let language = Locale.preferredLanguages.first, !language.isEmpty {
+            body["language"] = language
+        }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         // Spend the attempt before the request goes out: a request that never returns
@@ -851,12 +864,34 @@ public class DatalyrSDK {
                 return
             }
 
-            // A parsed 200 is the server's definitive answer, matched or not.
-            await attributionManager?.markDeferredLookupResolved()
+            // A parsed 200 is the server's definitive answer, matched or not — with
+            // ONE exception: `no_candidates` inside the first hour after install may
+            // just be ingest lag (click → queue → analytics store takes seconds to
+            // minutes), so it stays eligible for one more launch. Every other reason
+            // is terminal, and the attempt cap bounds the retry either way.
+            let missReason = (json["found"] as? Bool) == false ? (json["reason"] as? String ?? "no_candidates") : nil
+            let installAge = await attributionManager?.installAgeMinutes()
+            let freshNoCandidates = missReason == "no_candidates" && (installAge ?? .infinity) < 60
+            if !freshNoCandidates {
+                await attributionManager?.markDeferredLookupResolved()
+            }
 
             guard let found = json["found"] as? Bool, found,
                   let attribution = json["attribution"] as? [String: Any] else {
+                // A MISS is a measurement, not a non-event. This used to be a debug log
+                // and nothing else, so the only installs that produced an event were the
+                // ones that matched — which makes the match rate (matched / attempted)
+                // uncomputable from event data, and a matcher whose threshold nobody can
+                // observe is a matcher nobody can tune. The server's `reason` distinguishes
+                // no_candidates / no_web_traffic / request_failed / not_enabled: four very
+                // different problems that all looked identical from here.
                 debugLog("No deferred web attribution found for this IP")
+                await trackAttributionMatchOutcome(
+                    matched: false,
+                    reason: json["reason"] as? String ?? "no_candidates",
+                    windowMinutes: json["window_minutes"],
+                    extra: [:]
+                )
                 return
             }
 
@@ -872,11 +907,19 @@ public class DatalyrSDK {
             // merge and do not fire the bridge event.
             if (attribution["identity_only"] as? Bool) == true {
                 debugLog("Deferred web attribution is identity-only — skipping bridge event")
+                await trackAttributionMatchOutcome(
+                    matched: false, reason: "identity_only",
+                    windowMinutes: attribution["match_window_minutes"], extra: [:]
+                )
                 return
             }
             if let matchedVisitorId = attribution["visitor_id"] as? String,
                !matchedVisitorId.isEmpty, matchedVisitorId == visitorId {
                 debugLog("Deferred web attribution visitor is our own visitor id — skipping bridge event")
+                await trackAttributionMatchOutcome(
+                    matched: false, reason: "self_match",
+                    windowMinutes: attribution["match_window_minutes"], extra: [:]
+                )
                 return
             }
 
@@ -909,9 +952,32 @@ public class DatalyrSDK {
             if let utmCampaign = attribution["utm_campaign"] { matchData["utm_campaign"] = utmCampaign }
             if let utmContent = attribution["utm_content"] { matchData["utm_content"] = utmContent }
             if let utmTerm = attribution["utm_term"] { matchData["utm_term"] = utmTerm }
+            // Ad ENTITY ids — the rename-proof join key back to synced spend. The UTMs
+            // above carry the same entities by NAME, for display.
+            if let v = attribution["campaign_id"] { matchData["campaign_id"] = v }
+            if let v = attribution["adset_id"] { matchData["adset_id"] = v }
+            if let v = attribution["ad_id"] { matchData["ad_id"] = v }
+            if let v = attribution["placement"] { matchData["placement"] = v }
+            if let v = attribution["site_source_name"] { matchData["site_source_name"] = v }
             if let timestamp = attribution["timestamp"] { matchData["web_timestamp"] = timestamp }
 
             await track("$web_attribution_matched", eventData: matchData)
+
+            // Paired with the miss branch above: together these two make
+            // matched / (matched + missed) computable per workspace and per day.
+            var matchStats: EventData = [:]
+            // Subscripting an absent key yields Optional.none, and boxing THAT as `Any`
+            // produces a non-nil `Any` wrapping nil — it would sail past an is-NSNull
+            // filter and ship `<null>` to ingest. Bind each one instead.
+            if let v = attribution["match_candidates"] { matchStats["match_candidates"] = v }
+            if let v = attribution["match_score"] { matchStats["match_score"] = v }
+            if let v = attribution["match_confidence"] { matchStats["match_confidence"] = v }
+            await trackAttributionMatchOutcome(
+                matched: true,
+                reason: "matched",
+                windowMinutes: attribution["match_window_minutes"],
+                extra: matchStats
+            )
 
             debugLog("Successfully merged deferred web attribution")
 
@@ -920,7 +986,43 @@ public class DatalyrSDK {
             // right after an App Store install. Nothing was answered, so the lookup stays
             // eligible and a later launch inside the match window retries it.
             errorLog("Error fetching deferred web attribution — retrying on a later launch", error: error)
+            // Still reported: a workspace whose misses are overwhelmingly `request_failed`
+            // has a connectivity/timeout problem, not an attribution problem, and those
+            // two need completely different fixes. The lookup stays eligible regardless.
+            await trackAttributionMatchOutcome(
+                matched: false, reason: "request_failed", windowMinutes: nil, extra: [:]
+            )
         }
+    }
+
+    /// Emit the outcome of one deferred web→app match attempt, matched or not.
+    ///
+    /// `$attribution_match` is deliberately separate from `$web_attribution_matched`:
+    /// the latter is the BRIDGE event that downstream readers consume to thread web
+    /// attribution onto mobile conversions (ingest's lyr bridge follows it, and
+    /// api/core/identity.js resolves Meta CAPI recovery through it), so it must keep
+    /// firing only when there is a real match to thread. This one is pure telemetry —
+    /// it fires on every definitive attempt, which is what turns "we matched 40
+    /// installs" into "we matched 40 of 300, and 180 of the misses were no_candidates".
+    private func trackAttributionMatchOutcome(
+        matched: Bool,
+        reason: String,
+        windowMinutes: Any?,
+        extra: EventData
+    ) async {
+        var data: EventData = [
+            "provider": "mmp",
+            "match_method": "ip",
+            "matched": matched,
+            "reason": reason
+        ]
+        if let windowMinutes = windowMinutes, !(windowMinutes is NSNull) {
+            data["match_window_minutes"] = windowMinutes
+        }
+        for (k, v) in extra where !(v is NSNull) {
+            data[k] = v
+        }
+        await track("$attribution_match", eventData: data)
     }
 
     /// Create an alias for the current user
@@ -1322,6 +1424,15 @@ public class DatalyrSDK {
         set("utm_term", attribution.utmTerm)
         set("utm_content", attribution.utmContent)
         set("lyr", attribution.lyr)
+        // Raw ad ENTITY ids. `campaign`/`adgroup`/`ad` above are the provider's
+        // conventional keys and carry NAMES when no id is known; these are the
+        // ids themselves, so a Superwall audience filter can target by ad
+        // without breaking the moment a buyer renames the campaign.
+        set("campaign_id", attribution.campaignId)
+        set("adset_id", attribution.adsetId)
+        set("ad_id", attribution.adId)
+        set("placement", attribution.placement)
+        set("site_source_name", attribution.siteSourceName)
         set("fbclid", attribution.fbclid)
         set("gclid", attribution.gclid)
         set("ttclid", attribution.ttclid)
@@ -1395,6 +1506,15 @@ public class DatalyrSDK {
         set("gbraid", attribution.gbraid)
         set("network", attribution.network)
         set("creative_id", attribution.creativeId)
+        // Raw ad ENTITY ids alongside RevenueCat's reserved $adGroup/$ad above,
+        // which carry only the ad-set/ad level. campaign_id in particular has no
+        // reserved equivalent ($campaign is the NAME), so without this a
+        // RevenueCat-sourced conversion could never join spend by campaign id.
+        set("campaign_id", attribution.campaignId)
+        set("adset_id", attribution.adsetId)
+        set("ad_id", attribution.adId)
+        set("placement", attribution.placement)
+        set("site_source_name", attribution.siteSourceName)
 
         return attrs
     }

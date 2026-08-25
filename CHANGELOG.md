@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.1.14] - 2026-08-25
+
+### Fixed
+- **The deferred web→app lookup stopped asking two hours before the server stopped
+  answering.** `AttributionManager.deferredLookupWindow` was 60 minutes against a server
+  configured for 180 (`DEFERRED_IP_MATCH_WINDOW_MINUTES` in `api/wrangler.toml`), and its
+  comment asserted the server default was 60. Two thirds of the eligible window was
+  discarded, on exactly the segment where the tail lives: a store download over cellular,
+  or the ordinary install-now-open-later. The bound is now 180, inside the server's own
+  5–360 clamp so a raised server value cannot silently outrun it again.
+
+### Added
+- **Device-fingerprint matching opens the server's 7-day tier-2 window.** The deferred
+  lookup now sends the device's exact os_version / model / language / timezone
+  (`getDeviceInfo()` + `Locale.preferredLanguages`). The edge worker stamps the
+  click-side approximations of the same signals on every redirect click, and the server
+  scores the overlap: store clicks up to 7 days old can now match, gated by a threshold,
+  a margin over the runner-up, and at least one agreeing device signal — misses report
+  `below_threshold` or `ambiguous`. `deferredLookupWindow` widens 180 min → 7 days to
+  match (the click history is server-side; a device offline at install can still recover
+  attribution days later), and a `no_candidates` answer inside the first hour after
+  install stays eligible for one more launch instead of burning the install's one shot
+  on ingest lag. Old SDKs send no fingerprint, so for them the server's behavior is
+  byte-identical to before. Kept in lockstep with the RN SDK.
+- **`getSuperwallAttributes()` / `getRevenueCatAttributes()` carry the ad entity ids.**
+  Both helpers re-list fields by hand, and neither was updated when the ids landed: they
+  emitted `campaign`/`$campaign` (the campaign NAME) with no id equivalent at all, so a
+  Superwall audience filter or a RevenueCat-sourced conversion could only ever be keyed
+  by a name that breaks on rename. `campaign_id`, `adset_id`, `ad_id`, `placement` and
+  `site_source_name` are now emitted alongside the providers' reserved keys. (Third
+  instance found of the same class: a boundary that copies attribution into a fixed-shape
+  object and silently drops whatever the list does not name.)
+- **Ad entity IDs cross the web→app bridge.** `campaign_id`, `adset_id`, `ad_id`,
+  `placement` and `site_source_name` are now merged from the lookup response into
+  persisted attribution, so they ride every later event and reach `getSuperwallAttributes()`
+  / `getRevenueCatAttributes()` (whose `adgroup` / `ad` keys existed but were always
+  empty). Ad identity previously reached revenue only as NAMES via the UTMs, and a name
+  join back to synced spend breaks retroactively for a whole reporting period the moment a
+  buyer renames a campaign mid-flight. `placement` and `site_source_name` are new fields on
+  `AttributionData`; `placement` is Meta's placement NAME and is distinct from the existing
+  numeric `placementId`.
+- **`$attribution_match` reports every match attempt, matched or not.** A miss used to be a
+  debug log and nothing else, so the only installs producing an event were the ones that
+  matched — which makes the match rate uncomputable from event data, and a matcher whose
+  threshold nobody can observe is a matcher nobody can tune. Carries `matched`, `reason`
+  (`matched` / `no_candidates` / `no_web_traffic` / `request_failed` / `identity_only` /
+  `self_match` / `not_enabled`), `match_candidates`, `match_score` and
+  `match_window_minutes`. It is deliberately separate from `$web_attribution_matched`,
+  which stays the bridge event downstream readers consume and still fires only on a real
+  match.
+
 ## [2.1.11] - 2026-07-25
 
 ### Fixed

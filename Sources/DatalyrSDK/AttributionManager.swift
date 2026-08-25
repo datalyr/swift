@@ -38,7 +38,12 @@ internal let ATTRIBUTION_PARAMS = [
     // AttributionData and have no field, so they were parsed and dropped. The whitelist now
     // reflects exactly what is captured. (dclid is captured below — ingest supports it.)
     "campaign_id", "ad_id", "adset_id", "creative_id",
-    "placement_id", "keyword", "matchtype", "network", "device"
+    "placement_id", "keyword", "matchtype", "network", "device",
+
+    // Meta ad-entity breakdowns, delivered by the Play install referrer (Android) and
+    // by the web→app bridge response. `placement` is the Meta macro's own name and is
+    // NOT the same field as `placement_id` above (Feed/Reels/Story vs an id).
+    "placement", "site_source_name"
 ]
 
 // MARK: - Attribution Manager
@@ -232,6 +237,8 @@ internal class AttributionManager {
         attributionData.adsetId = parameters["adset_id"] ?? attributionData.adsetId
         attributionData.creativeId = parameters["creative_id"] ?? attributionData.creativeId
         attributionData.placementId = parameters["placement_id"] ?? attributionData.placementId
+        attributionData.placement = parameters["placement"] ?? attributionData.placement
+        attributionData.siteSourceName = parameters["site_source_name"] ?? attributionData.siteSourceName
         attributionData.keyword = parameters["keyword"] ?? attributionData.keyword
         attributionData.matchtype = parameters["matchtype"] ?? attributionData.matchtype
         attributionData.network = parameters["network"] ?? attributionData.network
@@ -296,13 +303,22 @@ internal class AttributionManager {
     /// Eligibility is instead "no definitive answer yet", bounded two ways.
     ///
     /// Both bounds are hard stops, so retrying cannot continue indefinitely:
-    /// - the server only matches a web touch to this IP within its match window
-    ///   (DEFERRED_IP_MATCH_WINDOW_MINUTES, default 60), so once an hour has passed since
-    ///   install there is nothing left to match and elapsed time can never shrink back;
+    /// - the server only matches a web touch to this IP within its match window, so once
+    ///   that window has passed since install there is nothing left to match and elapsed
+    ///   time can never shrink back;
     /// - the attempt counter is persisted BEFORE each request is issued, so attempts are
     ///   spent even by requests that never return, and a device with a broken/rolled-back
     ///   clock still runs out.
-    private static let deferredLookupWindow: TimeInterval = 60 * 60
+    ///
+    /// This MUST NOT be tighter than the server's match reach, or the SDK stops asking
+    /// while the server would still have answered — the original 60-minute bound sat
+    /// against a server configured for 180 and forfeited two thirds of the window.
+    /// Now 7 days, matching the server's tier-2 fingerprint matcher
+    /// (DEFERRED_FP_MATCH_MAX_DAYS): the click history is server-side, so a device
+    /// that was offline at install — or whose first attempts failed in transit — can
+    /// still recover its attribution days later. The attempt cap, not the window, is
+    /// what bounds request volume.
+    private static let deferredLookupWindow: TimeInterval = 7 * 24 * 3600
     private static let maxDeferredLookupAttempts = 3
 
     /// Whether the deferred web→app IP lookup should be attempted on this launch.
@@ -338,6 +354,15 @@ internal class AttributionManager {
     func recordDeferredLookupAttempt() async {
         let attempts = await storage.getDouble(StorageKeys.deferredLookupAttempts) ?? 0
         await storage.setDouble(StorageKeys.deferredLookupAttempts, value: attempts + 1)
+    }
+
+    /// Minutes since install, or nil when the install time is unknown. Drives the
+    /// ingest-lag retry: a `no_candidates` answer in the first hour may just mean the
+    /// click has not landed in the analytics store yet.
+    func installAgeMinutes() -> Double? {
+        guard let installDate = installDate else { return nil }
+        let elapsed = Date().timeIntervalSince(installDate)
+        return elapsed >= 0 ? elapsed / 60 : nil
     }
 
     /// Record that the server answered definitively — matched or not. Terminal: a genuine
@@ -387,6 +412,27 @@ internal class AttributionManager {
         }
         if attributionData.lyr == nil, let lyr = webAttribution["lyr"] as? String {
             attributionData.lyr = lyr
+        }
+
+        // Ad ENTITY ids recovered from the matched web click. Without these the app side
+        // knew the campaign only by NAME (via the UTMs below), and a name join back to
+        // synced spend breaks retroactively the moment a buyer renames a campaign
+        // mid-flight — so an install could be perfectly matched and still land in the
+        // unattributed bucket a week later. Same gap-fill precedence as the click ids.
+        if attributionData.campaignId == nil, let v = webAttribution["campaign_id"] as? String, !v.isEmpty {
+            attributionData.campaignId = v
+        }
+        if attributionData.adsetId == nil, let v = webAttribution["adset_id"] as? String, !v.isEmpty {
+            attributionData.adsetId = v
+        }
+        if attributionData.adId == nil, let v = webAttribution["ad_id"] as? String, !v.isEmpty {
+            attributionData.adId = v
+        }
+        if attributionData.placement == nil, let v = webAttribution["placement"] as? String, !v.isEmpty {
+            attributionData.placement = v
+        }
+        if attributionData.siteSourceName == nil, let v = webAttribution["site_source_name"] as? String, !v.isEmpty {
+            attributionData.siteSourceName = v
         }
 
         // Merge UTM parameters

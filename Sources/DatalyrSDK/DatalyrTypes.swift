@@ -268,6 +268,11 @@ public struct AttributionData: Codable {
     public var adsetId: String?
     public var creativeId: String?
     public var placementId: String?
+    /// Meta's `{{placement}}` macro — a placement NAME (Feed, Reels, Story), not an id.
+    /// Distinct from `placementId` above, which is the numeric form other platforms send.
+    public var placement: String?
+    /// Meta's `{{site_source_name}}` macro — which surface ran the ad (`ig`, `fb`, `msg`).
+    public var siteSourceName: String?
     public var keyword: String?
     public var matchtype: String?
     public var network: String?
@@ -323,6 +328,8 @@ public struct AttributionData: Codable {
         case adsetId = "adset_id"
         case creativeId = "creative_id"
         case placementId = "placement_id"
+        case placement
+        case siteSourceName = "site_source_name"
         case keyword, matchtype, network, device
         case campaignSource = "campaign_source"
         case campaignMedium = "campaign_medium"
