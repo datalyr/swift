@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.16] - 2026-09-03
+
+### Fixed
+- App Store upload rejects a manifest with `NSPrivacyTracking` true and an empty `NSPrivacyTrackingDomains` (ITMS-91064). The manifest now lists `tracking.datalyr.com` only, and the SDK sends only IDFA-bearing events (ATT already authorized) to that host; every other event still goes to `ingest.datalyr.com`, which iOS never blocks. Same backend handler.
+
 ## [2.1.15] - 2026-09-03
 
 ### Added

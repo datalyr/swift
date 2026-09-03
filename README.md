@@ -2,7 +2,7 @@
 
 Server-side attribution, event tracking, SKAdNetwork conversion values, and Apple Search Ads attribution for iOS.
 
-Current release: **2.1.15**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.16**. Every event posts to `https://ingest.datalyr.com/track`.
 
 Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sdk-reference/ios).
 
@@ -38,7 +38,7 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 |---|---|
 | Minimum iOS | 13.0 |
 | Swift tools version | 5.7 |
-| Current release | 2.1.15 |
+| Current release | 2.1.16 |
 | Frameworks linked | `Foundation`, `UIKit`, `StoreKit`, `AdServices` (weak) |
 
 ---
@@ -49,19 +49,19 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 
 1. In Xcode, open **File > Add Package Dependencies**.
 2. Enter `https://github.com/datalyr/swift`.
-3. Select version 2.1.15.
+3. Select version 2.1.16.
 4. Add the `DatalyrSDK` product to your app target.
 
 In `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/datalyr/swift", from: "2.1.15")
+.package(url: "https://github.com/datalyr/swift", from: "2.1.16")
 ```
 
 ### CocoaPods
 
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.15'
+pod 'DatalyrSDK', '~> 2.1.16'
 ```
 
 Run `pod install`. Open the generated `.xcworkspace`.

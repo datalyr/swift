@@ -213,8 +213,23 @@ internal class DatalyrHTTPClient {
     }
     
     /// Create HTTP request for event payload
+    /// Apple privacy manifest: NSPrivacyTracking=true REQUIRES a non-empty
+    /// NSPrivacyTrackingDomains, and iOS fails every request to a listed host until the
+    /// user grants ATT. The manifest lists ONLY tracking.datalyr.com, and only events
+    /// that carry the IDFA (ATT already authorized) are sent there; everything else goes
+    /// to the regular endpoint and is never blocked. Same backend handler.
+    static let trackingEndpoint = "https://tracking.datalyr.com/track"
+
+    func endpointFor(_ payload: EventPayload) -> String {
+        guard config.useServerTracking else { return endpoint }
+        if let idfa = payload.eventData?["idfa"] as? String, !idfa.isEmpty {
+            return DatalyrHTTPClient.trackingEndpoint
+        }
+        return endpoint
+    }
+
     private func createRequest(for payload: EventPayload) throws -> URLRequest {
-        guard let url = URL(string: endpoint) else {
+        guard let url = URL(string: endpointFor(payload)) else {
             throw HTTPError.invalidURL
         }
         
