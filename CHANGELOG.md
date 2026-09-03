@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [2.1.15] - 2026-09-03
 
+### Added
+- AdAttributionKit is now actually called: on iOS 17.4+ every conversion value goes to both `SKAdNetwork.updatePostbackConversionValue` and `AdAttributionKit.Postback.updateConversionValue` (best-effort; SKAdNetwork stays the authority for the high-water guard). On iOS 18+ `updateReengagementConversionValue` sends a real `PostbackUpdate(conversionTypes: [.reengagement])`; on 17.4-17.x it throws `unsupportedIOSVersion` instead of silently re-sending the install value. `reengagement_available` now reports iOS 18+. AdAttributionKit is weak-linked (`weak_frameworks` for CocoaPods; the toolchain weak-links automatically for SPM).
+
 ### Fixed
 - `swift build` on a macOS host failed (`SKAdNetwork is unavailable in macOS`) even though `Package.swift` declares macOS/tvOS/watchOS. The SKAdNetwork bridge/tracker is now compiled only `#if os(iOS)` with a no-op `UnifiedAttributionTracker` elsewhere, and the ATT status reads carry a `macOS 11` availability. Declared platforms unchanged.
 - Dead-letter replay is now bounded. Every launch re-enqueued the whole dead-letter store with no cap, so a permanently-rejected event (400/413) cycled dead-letter → replay → dead-letter forever. `QueuedEvent` gains `replayCount` (decodes as 0 for existing entries); entries replayed 3× or older than 7 days are dropped and the drop count is logged once. Mirrors the RN SDK.

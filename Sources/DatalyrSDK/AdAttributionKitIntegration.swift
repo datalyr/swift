@@ -2,8 +2,62 @@ import Foundation
 #if canImport(StoreKit)
 import StoreKit
 #endif
+#if canImport(AdAttributionKit)
+import AdAttributionKit
+#endif
 
 #if os(iOS)
+
+// MARK: - AdAttributionKit postback (iOS 17.4+)
+//
+// SKAdNetwork and AdAttributionKit are separate attribution systems; an ad
+// network may run either. Apple's guidance for apps supporting both is to call
+// BOTH update APIs. The SKAdNetwork call remains the authority for the SDK's
+// high-water guard; the AdAttributionKit call is best-effort and its failure
+// (e.g. no AdAttributionKit-eligible impression on device) never blocks.
+enum DatalyrAdAttributionKit {
+    /// Returns true when the AdAttributionKit call was accepted, false when it
+    /// threw or the framework is unavailable. Never throws.
+    @available(iOS 17.4, *)
+    static func updateConversionValue(fine: Int, coarse: String, lock: Bool, reengagement: Bool = false) async -> Bool {
+        #if canImport(AdAttributionKit)
+        let coarseValue: AdAttributionKit.CoarseConversionValue
+        switch coarse {
+        case "high": coarseValue = .high
+        case "medium": coarseValue = .medium
+        default: coarseValue = .low
+        }
+        do {
+            if #available(iOS 18.0, *) {
+                let update = PostbackUpdate(
+                    fineConversionValue: fine,
+                    lockPostback: lock,
+                    coarseConversionValue: coarseValue,
+                    conversionTypes: reengagement ? [.reengagement] : nil
+                )
+                try await Postback.updateConversionValue(update)
+            } else {
+                try await Postback.updateConversionValue(fine, coarseConversionValue: coarseValue, lockPostback: lock)
+            }
+            debugLog("AdAttributionKit: postback updated fine=\(fine) coarse=\(coarse) lock=\(lock) reengagement=\(reengagement)")
+            return true
+        } catch {
+            // Expected when there is no AdAttributionKit impression for this install;
+            // SKAdNetwork carries the value in that case.
+            debugLog("AdAttributionKit: postback update not accepted: \(error)")
+            return false
+        }
+        #else
+        return false
+        #endif
+    }
+
+    /// Re-engagement postbacks need PostbackUpdate.conversionTypes (iOS 18.0+).
+    static var supportsReengagement: Bool {
+        if #available(iOS 18.0, *) { return true }
+        return false
+    }
+}
 
 // MARK: - AdAttributionKit Integration (iOS 17.4+)
 
@@ -133,6 +187,11 @@ internal class AdAttributionKitIntegration {
                     if lockWindow {
                         self?.conversionWindowLocked = true
                     }
+                    // Mirror the value into AdAttributionKit (best-effort, never blocks).
+                    Task {
+                        _ = await DatalyrAdAttributionKit.updateConversionValue(
+                            fine: fineValue, coarse: coarseValue.rawValue, lock: lockWindow)
+                    }
                     debugLog("AdAttributionKit: Updated conversion value to \(fineValue) (\(coarseValue.rawValue)), locked: \(lockWindow)")
                     continuation.resume(returning: true)
                 }
@@ -159,12 +218,9 @@ internal class AdAttributionKitIntegration {
         return false
     }
 
-    /// Check if re-engagement tracking is available (iOS 17.4+)
+    /// Check if re-engagement tracking is available (iOS 18.0+, PostbackUpdate.conversionTypes)
     var isReengagementAvailable: Bool {
-        if #available(iOS 17.4, *) {
-            return true
-        }
-        return false
+        DatalyrAdAttributionKit.supportsReengagement
     }
 
     /// Check if overlapping windows are available (iOS 18.4+)
@@ -438,7 +494,7 @@ internal class UnifiedAttributionTracker {
         if #available(iOS 17.4, *) {
             info["framework"] = "AdAttributionKit"
             info["version"] = "1.0"
-            info["reengagement_available"] = true
+            info["reengagement_available"] = DatalyrAdAttributionKit.supportsReengagement
             info["overlapping_windows"] = {
                 if #available(iOS 18.4, *) {
                     return true

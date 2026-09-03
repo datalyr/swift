@@ -473,7 +473,9 @@ The journey holds up to 30 touchpoints over a 90-day window. It is readable in t
 
 | iOS version | API used |
 |---|---|
-| 16.1 and later | SKAdNetwork 4 postback APIs (AdAttributionKit-compatible) |
+| 16.1 to 17.3 | SKAdNetwork 4 postback API |
+| 17.4 and later | SKAdNetwork 4 **and** AdAttributionKit `Postback.updateConversionValue` (both called per update) |
+| 18.0 and later | adds AdAttributionKit re-engagement postbacks (`updateReengagementConversionValue`; opt in with `EligibleForAdAttributionKitReengagementPostbackCopies`) |
 | 14.0 to 16.0 | SKAdNetwork 3.0 |
 
 ```swift

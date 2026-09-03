@@ -86,7 +86,7 @@ public class AdAttributionKitBridge {
             return AttributionInfo(
                 framework: .adAttributionKit,
                 version: "1.0",
-                supportsReengagement: true,
+                supportsReengagement: DatalyrAdAttributionKit.supportsReengagement,
                 supportsOverlappingWindows: supportsOverlapping
             )
         } else if #available(iOS 16.1, *) {
@@ -151,7 +151,7 @@ public class AdAttributionKitBridge {
         }
 
         if #available(iOS 17.4, *) {
-            // AdAttributionKit uses the same StoreKit API but with enhanced features
+            // SKAdNetwork 4 and AdAttributionKit are separate systems: send to both.
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 let skCoarse = coarseValue.toSKAdNetworkValue()
                 SKAdNetwork.updatePostbackConversionValue(fineValue, coarseValue: skCoarse, lockWindow: lockWindow) { error in
@@ -162,6 +162,8 @@ public class AdAttributionKitBridge {
                     }
                 }
             }
+            _ = await DatalyrAdAttributionKit.updateConversionValue(
+                fine: fineValue, coarse: coarseValue.rawValue, lock: lockWindow)
         } else if #available(iOS 16.1, *) {
             // SKAdNetwork 4.0
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -193,27 +195,32 @@ public class AdAttributionKitBridge {
 
     /// Check if re-engagement attribution is supported
     public var supportsReengagement: Bool {
-        if #available(iOS 17.4, *) {
-            return true
-        }
-        return false
+        DatalyrAdAttributionKit.supportsReengagement
     }
 
-    /// Update conversion value for re-engagement (AdAttributionKit iOS 17.4+)
-    /// Re-engagement tracks users who return to the app via an ad
+    /// Update the conversion value for an AdAttributionKit re-engagement postback
+    /// (iOS 18.0+, `PostbackUpdate.conversionTypes = [.reengagement]`). The app must
+    /// opt in with `EligibleForAdAttributionKitReengagementPostbackCopies` to receive
+    /// copies. On iOS 17.4-17.x there is no re-engagement API; this throws.
     @available(iOS 17.4, *)
     public func updateReengagementConversionValue(
         fineValue: Int,
         coarseValue: CoarseConversionValue,
         lockWindow: Bool
     ) async throws {
-        // Re-engagement uses the same API as initial attribution in AdAttributionKit
-        // The framework automatically distinguishes based on user state
-        try await updatePostbackConversionValue(
-            fineValue: fineValue,
-            coarseValue: coarseValue,
-            lockWindow: lockWindow
-        )
+        guard fineValue >= 0 && fineValue <= 63 else {
+            throw AttributionError.invalidConversionValue
+        }
+        guard DatalyrAdAttributionKit.supportsReengagement else {
+            throw AttributionError.unsupportedIOSVersion
+        }
+        let accepted = await DatalyrAdAttributionKit.updateConversionValue(
+            fine: fineValue, coarse: coarseValue.rawValue, lock: lockWindow, reengagement: true)
+        if !accepted {
+            throw AttributionError.updateFailed(underlying: NSError(
+                domain: "Datalyr.AdAttributionKit", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "AdAttributionKit did not accept the re-engagement postback update"]))
+        }
     }
 
     // MARK: - Overlapping Windows (iOS 18.4+)
