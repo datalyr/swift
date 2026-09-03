@@ -21,7 +21,9 @@ Pod::Spec.new do |s|
   s.swift_version    = '5.0'
 
   s.source_files     = 'Sources/DatalyrSDK/**/*.swift'
-  s.frameworks       = 'Foundation', 'UIKit', 'StoreKit', 'AdServices'
+  # Ship the privacy manifest to CocoaPods installs (SPM already does via Package.swift).
+  s.resource_bundles = { 'DatalyrSDK' => ['Sources/DatalyrSDK/PrivacyInfo.xcprivacy'] }
+  s.frameworks       = 'Foundation', 'UIKit', 'StoreKit'
   s.weak_frameworks  = 'AdServices'
 
   s.requires_arc     = true

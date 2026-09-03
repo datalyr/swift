@@ -1414,7 +1414,7 @@ public class DatalyrSDK {
             attrs[key] = str
         }
 
-        set("datalyr_id", visitorId.isEmpty ? nil : visitorId)
+        set("datalyr_id", anonymousId.isEmpty ? nil : anonymousId) // the wire/visitor_id id, NOT visitorId (never sent)
         set("media_source", attribution.utmSource)
         set("campaign", attribution.utmCampaign)
         set("adgroup", attribution.adsetId ?? attribution.utmContent)
@@ -1481,7 +1481,7 @@ public class DatalyrSDK {
         // unknown `$` keys, so the old `$datalyrId` never reached the webhook
         // and killed the deterministic visitor-id match. The server reads
         // `datalyr_id` (webhooks/platforms/revenuecat.js).
-        set("datalyr_id", visitorId.isEmpty ? nil : visitorId)
+        set("datalyr_id", anonymousId.isEmpty ? nil : anonymousId) // the wire/visitor_id id, NOT visitorId (never sent)
 
         // Reserved attributes ($ prefix)
         set("$mediaSource", attribution.utmSource)

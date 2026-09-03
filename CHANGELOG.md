@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Fixed
+- `PrivacyInfo.xcprivacy` no longer lists `ingest.datalyr.com` / `api.datalyr.com` under `NSPrivacyTrackingDomains`. iOS fails requests to listed tracking domains until the user grants ATT, so SPM installs since 2.1.8 could not deliver `app_install`, sessions or the deferred lookup for un-prompted or denied users. `NSPrivacyTracking` stays true; IDFA is still gated on ATT in code.
+- CocoaPods installs now ship the privacy manifest (`resource_bundles`); AdServices is weak-linked only.
+- `getSuperwallAttributes()` / `getRevenueCatAttributes()` set `datalyr_id` to the internal `visitorId`, which is never sent to the server (the wire carries `anonymousId`, stored as `visitor_id`). The webhook visitor-id leg could therefore never match. Now sends `anonymousId`.
+
 ## [2.1.14] - 2026-08-25
 
 ### Fixed
