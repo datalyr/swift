@@ -351,11 +351,28 @@ public struct QueuedEvent: Codable {
     public let payload: EventPayload
     public let timestamp: TimeInterval
     public var retryCount: Int
-    
-    public init(payload: EventPayload, timestamp: TimeInterval = Date().timeIntervalSince1970, retryCount: Int = 0) {
+    /// Number of times this event has been replayed out of the dead-letter store. Bounds the
+    /// replay loop so a permanently-rejected payload (400/413) is dropped after a few launches
+    /// instead of cycling forever. Decodes as 0 for entries persisted before the field existed.
+    public var replayCount: Int
+
+    public init(payload: EventPayload, timestamp: TimeInterval = Date().timeIntervalSince1970, retryCount: Int = 0, replayCount: Int = 0) {
         self.payload = payload
         self.timestamp = timestamp
         self.retryCount = retryCount
+        self.replayCount = replayCount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case payload, timestamp, retryCount, replayCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        payload = try c.decode(EventPayload.self, forKey: .payload)
+        timestamp = try c.decode(TimeInterval.self, forKey: .timestamp)
+        retryCount = try c.decodeIfPresent(Int.self, forKey: .retryCount) ?? 0
+        replayCount = try c.decodeIfPresent(Int.self, forKey: .replayCount) ?? 0
     }
 }
 

@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(StoreKit)
 import StoreKit
+#endif
+
+#if os(iOS)
 
 // MARK: - AdAttributionKit Integration (iOS 17.4+)
 
@@ -63,24 +67,34 @@ internal class AdAttributionKitIntegration {
 
     /// Register app for ad network attribution
     /// Should be called once at app launch
-    func registerAppForAttribution() async {
-        guard !isRegistered else { return }
+    /// Returns true only when the OS ACCEPTED the registration. `isRegistered` is set inside
+    /// the completion on success (not before it, as it used to be), so a rejected registration
+    /// is retried on the next launch instead of being marked done forever.
+    @discardableResult
+    func registerAppForAttribution() async -> Bool {
+        guard !isRegistered else { return true }
 
         if #available(iOS 17.4, *) {
-            do {
-                // Register for both install and re-engagement attribution
+            // Register for both install and re-engagement attribution
+            let accepted: Bool = await withCheckedContinuation { continuation in
                 SKAdNetwork.updatePostbackConversionValue(0, coarseValue: .low, lockWindow: false) { error in
                     if let error = error {
                         errorLog("Failed to register for AdAttributionKit: \(error.localizedDescription)")
+                        continuation.resume(returning: false)
                     } else {
                         debugLog("AdAttributionKit: Registered for attribution")
+                        continuation.resume(returning: true)
                     }
                 }
+            }
+            if accepted {
                 isRegistered = true
                 initializePostbackWindows()
             }
+            return accepted
         } else {
             debugLog("AdAttributionKit: Not available (requires iOS 17.4+)")
+            return false
         }
     }
 
@@ -320,8 +334,12 @@ internal class UnifiedAttributionTracker {
                 debugLog("AdAttributionKit: already registered this install; skipping 0-value re-registration")
                 return
             }
-            await AdAttributionKitIntegration.shared.registerAppForAttribution()
-            stateLock.withLock { storage.set(true, forKey: registeredKey) }
+            // Persist the one-time flag only once the OS accepted the registration; a
+            // rejected call is retried on the next launch.
+            let accepted = await AdAttributionKitIntegration.shared.registerAppForAttribution()
+            if accepted {
+                stateLock.withLock { storage.set(true, forKey: registeredKey) }
+            }
         } else if #available(iOS 14.0, *) {
             // Legacy SKAdNetwork registration (idempotent; no value sent).
             SKAdNetwork.registerAppForAdNetworkAttribution()
@@ -448,3 +466,31 @@ internal class UnifiedAttributionTracker {
         return info
     }
 }
+
+#else
+
+// MARK: - Non-iOS fallback
+// SKAdNetwork is iOS-only. Provide a no-op UnifiedAttributionTracker so the package still
+// compiles for the other declared platforms (macOS/tvOS/watchOS hosts, `swift build` on a Mac).
+internal class UnifiedAttributionTracker {
+    static let shared = UnifiedAttributionTracker()
+    private init() {}
+
+    func register() async {}
+
+    func updateConversionValue(fineValue: Int, coarseValue: String, lockWindow: Bool) async -> Bool {
+        debugLog("SKAdNetwork only available on iOS")
+        return false
+    }
+
+    func resetConversionState() {}
+
+    func applyHighWaterForTest(fineValue: Int, coarseValue: String, lockWindow: Bool) -> Bool { false }
+    func resetRegistrationForTest() {}
+
+    func getAttributionInfo() -> [String: Any] {
+        ["framework": "none", "version": "0", "reengagement_available": false]
+    }
+}
+
+#endif

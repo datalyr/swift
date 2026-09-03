@@ -2,7 +2,7 @@
 
 > Everything you need to set up mobile attribution, event tracking, and web-to-app campaigns in your iOS app.
 
-Current release: **2.1.14**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.15**. Every event posts to `https://ingest.datalyr.com/track`.
 
 **Links:** [Full Docs](https://docs.datalyr.com) | [iOS SDK Reference](https://docs.datalyr.com/sdk-reference/ios) | [GitHub](https://github.com/datalyr/swift)
 
@@ -24,23 +24,21 @@ That's all you need. Only the API key is required -- `workspaceId` is no longer 
 
 1. In Xcode, select **File > Add Package Dependencies**
 2. Enter the repository URL: `https://github.com/datalyr/swift`
-3. Select version **2.1.14**
+3. Select version **2.1.15**
 4. Add **DatalyrSDK** to your app target
 
 Or in `Package.swift`:
 ```swift
 dependencies: [
-  .package(url: "https://github.com/datalyr/swift", from: "2.1.14")
+  .package(url: "https://github.com/datalyr/swift", from: "2.1.15")
 ]
 ```
 
 ### Option 2: CocoaPods
 
-> **WARNING: The CocoaPods podspec does not ship `PrivacyInfo.xcprivacy`.** App Store review requires a privacy manifest. Add your own manifest, or install with Swift Package Manager, which does ship one.
-
 Add to your `Podfile`:
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.14'
+pod 'DatalyrSDK', '~> 2.1.15'
 ```
 
 Then run:
@@ -1065,7 +1063,7 @@ Reset packages: **File > Packages > Reset Package Caches**
 - iOS 14.0+ required (16.1+ for SKAN 4.0)
 - Is `skadTemplate` set in config?
 - Using `trackWithSKAdNetwork()` instead of `track()`?
-- SKAdNetwork IDs added to Info.plist?
+- No `SKAdNetworkItems` needed in the advertised app's Info.plist. That key is for publisher apps that *show* ads; add your ad networks' IDs only if your app also displays ads.
 
 **Links:** [Tracking Not Working](https://docs.datalyr.com/troubleshooting/tracking-not-working) | [Missing Conversions](https://docs.datalyr.com/troubleshooting/missing-conversions) | [Postback Debugging](https://docs.datalyr.com/troubleshooting/postback-debugging) | [Data Discrepancies](https://docs.datalyr.com/troubleshooting/data-discrepancies) | [Integration Errors](https://docs.datalyr.com/troubleshooting/integration-errors)
 

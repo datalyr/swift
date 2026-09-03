@@ -1,9 +1,13 @@
 import Foundation
+#if canImport(StoreKit)
 import StoreKit
-
+#endif
 #if canImport(AdAttributionKit)
 import AdAttributionKit
 #endif
+
+// SKAdNetwork is iOS-only; this bridge is compiled out on the other declared platforms.
+#if os(iOS)
 
 // MARK: - Attribution Framework Type
 public enum AttributionFramework: String {
@@ -282,3 +286,5 @@ extension AdAttributionKitBridge {
         try await updateFromConversionResult(result)
     }
 }
+
+#endif // os(iOS)

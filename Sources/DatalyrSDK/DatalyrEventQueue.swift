@@ -45,6 +45,11 @@ internal class DatalyrEventQueue {
     private let pathMonitor = NWPathMonitor()
     private let monitorQueue = DispatchQueue(label: "com.datalyr.network-monitor")
 
+    /// Called (off the lock) whenever an event is moved to the dead-letter store — retry
+    /// budget exhausted or evicted by queue overflow. The SDK forwards it to
+    /// `DatalyrSDKDelegate.datalyrDidFailToSendEvent`.
+    var onDeadLetter: ((QueuedEvent, Error) -> Void)?
+
     // Thread-safe queue management - all mutable state protected by queueLock
     private let queueLock = NSLock()
     private let processingQueue = DispatchQueue(label: "com.datalyr.eventqueue", qos: .utility)
@@ -100,7 +105,7 @@ internal class DatalyrEventQueue {
 
         // Dead-letter the evicted event (outside the lock — deadLetter is async).
         if let evicted = evicted {
-            await deadLetter(evicted)
+            await deadLetter(evicted, reason: DatalyrQueueError.evicted(queueSize: config.maxQueueSize))
         }
 
         // Persist to storage (outside lock)
@@ -207,7 +212,11 @@ internal class DatalyrEventQueue {
     }
     
     // MARK: - Private Methods
-    
+
+    /// Dead-letter replay bounds (kept in lockstep with the RN SDK's event-queue.ts).
+    static let maxDeadLetterReplays = 3
+    static let maxDeadLetterAge: TimeInterval = 7 * 24 * 60 * 60
+
     /// Initialize the queue by loading persisted events
     private func initializeQueue() async {
         if let persistedQueue = await storage.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) {
@@ -228,11 +237,31 @@ internal class DatalyrEventQueue {
         // replay" was false) — so an event that exhausted 3 retries (transient outage / temporary
         // 401) was permanently lost. Re-enqueue with retryCount reset and clear the store, giving
         // failed revenue/conversion events one fresh delivery attempt on the next app start.
+        // Bounded (mirrors the RN SDK's replayDeadLetter): each replay bumps replayCount, and
+        // entries that already replayed maxDeadLetterReplays times or are older than
+        // maxDeadLetterAge are dropped for good — a permanently-rejected payload (400/413)
+        // would otherwise loop through dead-letter → replay → dead-letter on every launch.
         if let dead = await storage.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self), !dead.isEmpty {
-            let replays = dead.map { QueuedEvent(payload: $0.payload, timestamp: $0.timestamp, retryCount: 0) }
-            queueLock.withLock { queue = replays + queue }
+            let now = Date().timeIntervalSince1970
+            var replays: [QueuedEvent] = []
+            var dropped = 0
+            for event in dead {
+                let age = now - event.timestamp
+                if event.replayCount >= Self.maxDeadLetterReplays || age > Self.maxDeadLetterAge {
+                    dropped += 1
+                    continue
+                }
+                replays.append(QueuedEvent(payload: event.payload, timestamp: event.timestamp,
+                                           retryCount: 0, replayCount: event.replayCount + 1))
+            }
+            if !replays.isEmpty {
+                queueLock.withLock { queue = replays + queue }
+            }
             await storage.removeValue(StorageKeys.deadLetterQueue)
             await persistQueue()
+            if dropped > 0 {
+                errorLog("Dropped \(dropped) undeliverable dead-letter event(s) (replayed \(Self.maxDeadLetterReplays)× or older than 7 days)")
+            }
             debugLog("Replayed \(replays.count) dead-letter event(s) for one more delivery attempt")
         }
 
@@ -269,22 +298,26 @@ internal class DatalyrEventQueue {
         // Drain in batches until the queue is empty or a batch makes no forward progress.
         // processQueueInternal sends only one batchSize-sized batch; without this loop a
         // manual flush() of a 100-event backlog would send just the first 10 (IOS-13).
-        // Progress check (count must strictly drop) prevents a busy-loop when events are
-        // failing-and-requeued (transient outage) — successes and dead-letters both reduce
-        // the count, retried-but-not-dropped events don't, so we stop and let the timer retry.
+        // Progress check (a batch must actually remove events) prevents a busy-loop when
+        // events are failing-and-requeued (transient outage) — successes and dead-letters both
+        // remove events, retried-but-not-dropped events don't, so we stop and let the timer
+        // retry. Counts removals directly rather than comparing before/after queue length:
+        // an enqueue landing mid-batch used to make `after >= before` true and stop the drain
+        // even though the batch had delivered fine.
         while true {
-            let before = queueLock.withLock { _isOnline && !queue.isEmpty ? queue.count : 0 }
-            guard before > 0 else { break }
-            await processQueueInternal()
-            let after = queueLock.withLock { queue.count }
-            if after >= before { break }
+            let hasWork = queueLock.withLock { _isOnline && !queue.isEmpty }
+            guard hasWork else { break }
+            let removed = await processQueueInternal()
+            if removed == 0 { break }
         }
 
         queueLock.withLock { _isProcessing = false }
     }
     
-    /// Internal queue processing logic
-    private func processQueueInternal() async {
+    /// Internal queue processing logic. Returns the number of events removed from the queue
+    /// by this batch (sent or dead-lettered).
+    @discardableResult
+    private func processQueueInternal() async -> Int {
         // Get events to process (up to batch size)
         let eventsToProcess: [QueuedEvent] = queueLock.withLock {
             let batchSize = min(config.batchSize, queue.count)
@@ -309,7 +342,8 @@ internal class DatalyrEventQueue {
                     // the event to a capped dead-letter store, so a sustained outage or a
                     // bad payload can't invisibly destroy revenue/conversion events.
                     errorLog("Event exceeded max retries (\(config.maxRetryCount)); moved to dead-letter: \(queuedEvent.payload.eventName)")
-                    await deadLetter(updatedEvent)
+                    let reason = response.error ?? DatalyrQueueError.maxRetriesExceeded(statusCode: response.statusCode, retries: config.maxRetryCount)
+                    await deadLetter(updatedEvent, reason: reason)
                     processedEvents.append(queuedEvent)
                 } else {
                     debugLog("Event failed, will retry: \(queuedEvent.payload.eventName) (attempt \(updatedEvent.retryCount))")
@@ -323,14 +357,18 @@ internal class DatalyrEventQueue {
         }
 
         // Remove successfully processed events from queue
+        var removedCount = 0
         if !processedEvents.isEmpty {
-            queueLock.withLock {
+            removedCount = queueLock.withLock {
+                let beforeCount = queue.count
                 queue.removeAll { processedEvent in
                     processedEvents.contains { $0.payload.eventId == processedEvent.payload.eventId }
                 }
+                return beforeCount - queue.count
             }
             await persistQueue()
         }
+        return removedCount
     }
 
     /// Persist queue to storage
@@ -343,11 +381,12 @@ internal class DatalyrEventQueue {
     /// dropping it — visible (errorLog above) and replayed once on the next launch by
     /// initializeQueue() (FSR-88), so a transient outage that beats the retry budget gets
     /// another delivery attempt rather than being lost.
-    private func deadLetter(_ event: QueuedEvent) async {
+    private func deadLetter(_ event: QueuedEvent, reason: Error) async {
         var dl = (await storage.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self)) ?? []
         dl.append(event)
         if dl.count > 100 { dl = Array(dl.suffix(100)) }
         await storage.setCodableArray(StorageKeys.deadLetterQueue, value: dl)
+        onDeadLetter?(event, reason)
     }
     
     /// Start the periodic flush timer (dispatch-source based so it fires without a RunLoop).
@@ -383,6 +422,24 @@ internal class DatalyrEventQueue {
         flushTimer?.cancel()
         flushTimer = nil
         debugLog("Flush timer stopped")
+    }
+}
+
+// MARK: - Queue Errors
+
+/// Reasons an event lands in the dead-letter store, surfaced through
+/// `DatalyrSDKDelegate.datalyrDidFailToSendEvent` as `.networkError`.
+public enum DatalyrQueueError: LocalizedError {
+    case maxRetriesExceeded(statusCode: Int, retries: Int)
+    case evicted(queueSize: Int)
+
+    public var errorDescription: String? {
+        switch self {
+        case .maxRetriesExceeded(let status, let retries):
+            return "Event exceeded \(retries) delivery attempts (last status \(status)); moved to dead-letter"
+        case .evicted(let size):
+            return "Event evicted from a full offline queue (\(size)); moved to dead-letter"
+        }
     }
 }
 

@@ -65,16 +65,37 @@ public struct AppleSearchAdsAttribution: Codable {
 /// Apple Search Ads Integration class
 /// Fetches attribution data for users who installed via Apple Search Ads
 public class AppleSearchAdsIntegration {
+    /// Storage key for the persisted attribution payload. The AdServices token is only
+    /// meaningful for a short window after install and the answer never changes, so the
+    /// first successful response is persisted here and loaded at init on later launches
+    /// (no re-fetch from Apple on every cold start).
+    public static let persistenceKey = "datalyr_asa_attribution"
+
     private var attributionData: AppleSearchAdsAttribution?
     private var fetched: Bool = false
     private var available: Bool = false
     private var debug: Bool = false
+    private let storage = DatalyrStorage.shared
+
+    /// Invoked once when a network fetch completes with a positive attribution. The SDK uses
+    /// it to emit a follow-up `$asa_attribution` event when `app_install` already went out
+    /// before Apple answered (the fetch is detached and can take 5–15s on first launch).
+    internal var onAttributionFetched: ((AppleSearchAdsAttribution) -> Void)?
 
     public init() {}
 
     /// Initialize and fetch Apple Search Ads attribution
     public func initialize(debug: Bool = false) async {
         self.debug = debug
+
+        // Persisted payload from an earlier launch → available immediately, skip the fetch.
+        if let saved = await storage.getCodable(Self.persistenceKey, type: AppleSearchAdsAttribution.self) {
+            self.attributionData = saved
+            self.fetched = true
+            self.available = true
+            log("Loaded persisted Apple Search Ads attribution (attribution=\(saved.attribution))")
+            return
+        }
 
         // Check if AdServices is available (iOS 14.3+)
         #if os(iOS)
@@ -188,8 +209,13 @@ public class AppleSearchAdsIntegration {
                     self.attributionData = attribution
                     self.fetched = true
 
+                    // Persist the first successful payload (positive or negative) so later
+                    // launches never hit Apple again and asa_* is available before app_install.
+                    await storage.setCodable(Self.persistenceKey, value: attribution)
+
                     if hasAttribution {
                         log("Apple Search Ads attribution found: campaign=\(attribution.campaignName ?? "unknown"), keyword=\(attribution.keyword ?? "none")")
+                        onAttributionFetched?(attribution)
                     } else {
                         log("No Apple Search Ads attribution (user did not come from search ad)")
                     }
@@ -236,9 +262,13 @@ public class AppleSearchAdsIntegration {
 
     /// Get attribution data as dictionary for event payload
     public func toDictionary() -> [String: Any]? {
-        guard let data = attributionData, data.attribution else {
-            return nil
-        }
+        guard let data = attributionData else { return nil }
+        return Self.toDictionary(data)
+    }
+
+    /// `asa_*` event properties for a payload; nil when the user did not come from Search Ads.
+    public static func toDictionary(_ data: AppleSearchAdsAttribution) -> [String: Any]? {
+        guard data.attribution else { return nil }
 
         var dict: [String: Any] = ["asa_attribution": true]
 

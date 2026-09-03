@@ -361,4 +361,37 @@ final class AttributionTests: XCTestCase {
         // issue a real lookup.
         await manager.markDeferredLookupResolved()
     }
+
+    // MARK: - Apple Search Ads persistence
+
+    /// A persisted ASA payload is loaded at init (available before app_install on later
+    /// launches) and short-circuits the network fetch.
+    func testAppleSearchAdsLoadsPersistedAttributionAtInit() async throws {
+        let key = AppleSearchAdsIntegration.persistenceKey
+        await DatalyrStorage.shared.removeValue(key)
+        defer { Task { await DatalyrStorage.shared.removeValue(key) } }
+
+        let saved = AppleSearchAdsAttribution(attribution: true, orgId: 1, campaignId: 42,
+                                              campaignName: "brand", adGroupId: 7, keyword: "datalyr")
+        await DatalyrStorage.shared.setCodable(key, value: saved)
+
+        let asa = AppleSearchAdsIntegration()
+        var fetchCallbackFired = false
+        asa.onAttributionFetched = { _ in fetchCallbackFired = true }
+        await asa.initialize(debug: false)
+
+        XCTAssertTrue(asa.hasFetched(), "persisted payload counts as fetched — no network call")
+        XCTAssertTrue(asa.hasAttribution())
+        XCTAssertEqual(asa.getAttributionData()?.campaignId, 42)
+        let dict = asa.toDictionary()
+        XCTAssertEqual(dict?["asa_campaign_id"] as? Int, 42)
+        XCTAssertEqual(dict?["asa_keyword"] as? String, "datalyr")
+        XCTAssertEqual(dict?["asa_attribution"] as? Bool, true)
+        XCTAssertFalse(fetchCallbackFired, "loading from storage is not a fetch; no $asa_attribution follow-up")
+    }
+
+    func testAppleSearchAdsDictionaryNilWithoutAttribution() {
+        XCTAssertNil(AppleSearchAdsIntegration.toDictionary(AppleSearchAdsAttribution(attribution: false, orgId: 1)))
+        XCTAssertNotNil(AppleSearchAdsIntegration.toDictionary(AppleSearchAdsAttribution(attribution: true)))
+    }
 }

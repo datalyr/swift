@@ -14,12 +14,17 @@ import AppTrackingTransparency
 internal class PlatformIntegrationManager {
     private var asaIntegration: AppleSearchAdsIntegration?
 
+    /// Forwarded to AppleSearchAdsIntegration.onAttributionFetched. Set BEFORE initialize().
+    var onAppleSearchAdsAttribution: ((AppleSearchAdsAttribution) -> Void)?
+
     /// Initialize platform integrations based on configuration
     func initialize(config: DatalyrConfig) async {
         // Initialize Apple Search Ads (always, if attribution enabled)
         if config.enableAttribution {
-            asaIntegration = AppleSearchAdsIntegration()
-            await asaIntegration?.initialize(debug: config.debug)
+            let asa = AppleSearchAdsIntegration()
+            asa.onAttributionFetched = onAppleSearchAdsAttribution
+            asaIntegration = asa
+            await asa.initialize(debug: config.debug)
         }
 
         debugLog("Platform integrations initialized", data: [
@@ -32,7 +37,7 @@ internal class PlatformIntegrationManager {
     /// Check if tracking is authorized (ATT)
     func isTrackingAuthorized() -> Bool {
         #if canImport(AppTrackingTransparency)
-        if #available(iOS 14, *) {
+        if #available(iOS 14, macOS 11, *) {
             return ATTrackingManager.trackingAuthorizationStatus == .authorized
         }
         #endif
@@ -43,7 +48,7 @@ internal class PlatformIntegrationManager {
     /// Returns: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
     func getTrackingAuthorizationStatus() -> UInt {
         #if canImport(AppTrackingTransparency)
-        if #available(iOS 14, *) {
+        if #available(iOS 14, macOS 11, *) {
             return ATTrackingManager.trackingAuthorizationStatus.rawValue
         }
         #endif

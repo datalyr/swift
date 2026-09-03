@@ -171,6 +171,94 @@ final class DatalyrEventQueueTests: XCTestCase {
         XCTAssertGreaterThan(dead.count, 0, "analytics events were evicted to make room")
     }
 
+    // MARK: - Dead-letter Replay Tests
+
+    private func makeDeadLetterEntry(_ name: String, replayCount: Int = 0, ageSeconds: TimeInterval = 0) -> QueuedEvent {
+        QueuedEvent(payload: createTestPayload(eventName: name),
+                    timestamp: Date().timeIntervalSince1970 - ageSeconds,
+                    retryCount: 3,
+                    replayCount: replayCount)
+    }
+
+    /// A dead-lettered event is replayed on the next launch with retryCount reset and
+    /// replayCount bumped, and the dead-letter store is cleared.
+    func testDeadLetterReplayIncrementsReplayCount() async throws {
+        await DatalyrStorage.shared.setCodableArray(StorageKeys.deadLetterQueue,
+                                                    value: [makeDeadLetterEntry("purchase", replayCount: 1)])
+
+        let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
+        let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(flushInterval: 60.0))
+        queue.setOnlineStatus(false)
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(queue.getStats().queueSize, 1, "dead-letter entry should be replayed into the queue")
+        let persisted = await DatalyrStorage.shared.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
+        XCTAssertEqual(persisted.first?.replayCount, 2, "replayCount must be incremented on replay")
+        XCTAssertEqual(persisted.first?.retryCount, 0, "retryCount must be reset for a fresh delivery window")
+        let dead = await DatalyrStorage.shared.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self)
+        XCTAssertTrue(dead == nil || dead!.isEmpty, "dead-letter store is cleared after replay")
+    }
+
+    /// Entries that already replayed 3× or are older than 7 days are dropped for good, so a
+    /// permanently-rejected (400/413) event cannot loop through dead-letter forever.
+    func testDeadLetterReplayDropsExhaustedAndStaleEntries() async throws {
+        await DatalyrStorage.shared.setCodableArray(StorageKeys.deadLetterQueue, value: [
+            makeDeadLetterEntry("exhausted", replayCount: DatalyrEventQueue.maxDeadLetterReplays),
+            makeDeadLetterEntry("stale", ageSeconds: DatalyrEventQueue.maxDeadLetterAge + 60),
+            makeDeadLetterEntry("fresh", replayCount: 2),
+        ])
+
+        let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
+        let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(flushInterval: 60.0))
+        queue.setOnlineStatus(false)
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(queue.getStats().queueSize, 1, "only the fresh, under-cap entry is replayed")
+        let persisted = await DatalyrStorage.shared.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
+        XCTAssertEqual(persisted.map { $0.payload.eventName }, ["fresh"])
+        let dead = await DatalyrStorage.shared.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self)
+        XCTAssertTrue(dead == nil || dead!.isEmpty, "dropped entries are not kept in the dead-letter store either")
+    }
+
+    /// Entries persisted before `replayCount` existed must still decode (default 0).
+    func testQueuedEventDecodesWithoutReplayCount() throws {
+        let legacy = QueuedEvent(payload: createTestPayload(eventName: "legacy"), retryCount: 2, replayCount: 5)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as! [String: Any]
+        json.removeValue(forKey: "replayCount")
+        let data = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try JSONDecoder().decode(QueuedEvent.self, from: data)
+        XCTAssertEqual(decoded.replayCount, 0)
+        XCTAssertEqual(decoded.retryCount, 2)
+        XCTAssertEqual(decoded.payload.eventName, "legacy")
+    }
+
+    /// The dead-letter hook (→ DatalyrSDKDelegate.datalyrDidFailToSendEvent) fires on eviction.
+    func testOnDeadLetterHookFiresOnEviction() async throws {
+        let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
+        let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(maxQueueSize: 2, flushInterval: 60.0))
+        queue.setOnlineStatus(false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let lock = NSLock()
+        var reported: [(String, Error)] = []
+        queue.onDeadLetter = { event, error in
+            lock.withLock { reported.append((event.payload.eventName, error)) }
+        }
+
+        for i in 0..<3 {
+            await queue.enqueue(createTestPayload(eventName: "pageview_\(i)"))
+        }
+
+        let seen = lock.withLock { reported }
+        XCTAssertEqual(seen.count, 1)
+        XCTAssertEqual(seen.first?.0, "pageview_0", "the oldest analytics event is the one evicted")
+        XCTAssertTrue(seen.first?.1 is DatalyrQueueError)
+    }
+
     // MARK: - Clear Queue Tests
 
     func testClearQueue() async throws {

@@ -2,7 +2,7 @@
 
 Server-side attribution, event tracking, SKAdNetwork conversion values, and Apple Search Ads attribution for iOS.
 
-Current release: **2.1.14**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.15**. Every event posts to `https://ingest.datalyr.com/track`.
 
 Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sdk-reference/ios).
 
@@ -38,7 +38,7 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 |---|---|
 | Minimum iOS | 13.0 |
 | Swift tools version | 5.7 |
-| Current release | 2.1.14 |
+| Current release | 2.1.15 |
 | Frameworks linked | `Foundation`, `UIKit`, `StoreKit`, `AdServices` (weak) |
 
 ---
@@ -49,21 +49,19 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 
 1. In Xcode, open **File > Add Package Dependencies**.
 2. Enter `https://github.com/datalyr/swift`.
-3. Select version 2.1.14.
+3. Select version 2.1.15.
 4. Add the `DatalyrSDK` product to your app target.
 
 In `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/datalyr/swift", from: "2.1.14")
+.package(url: "https://github.com/datalyr/swift", from: "2.1.15")
 ```
 
 ### CocoaPods
 
-> **The CocoaPods podspec does not ship `PrivacyInfo.xcprivacy`.** App Store review requires a privacy manifest. Add your own manifest, or install with Swift Package Manager, which does ship one.
-
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.14'
+pod 'DatalyrSDK', '~> 2.1.15'
 ```
 
 Run `pod install`. Open the generated `.xcworkspace`.
@@ -471,12 +469,11 @@ The journey holds up to 30 touchpoints over a 90-day window. It is readable in t
 
 > **Set `skadTemplate` at initialization.** Without it, `getConversionValue(for:properties:)` returns `nil` and `trackWithSKAdNetwork()` sends no conversion update.
 
-`initialize()` registers for attribution. The framework depends on the OS version.
+`initialize()` registers for attribution. The API used depends on the OS version.
 
-| iOS version | Framework used |
+| iOS version | API used |
 |---|---|
-| 17.4 and later | AdAttributionKit |
-| 16.1 to 17.3 | SKAdNetwork 4.0 |
+| 16.1 and later | SKAdNetwork 4 postback APIs (AdAttributionKit-compatible) |
 | 14.0 to 16.0 | SKAdNetwork 3.0 |
 
 ```swift

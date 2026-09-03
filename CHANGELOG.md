@@ -2,11 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
-
-## [Unreleased]
+## [2.1.15] - 2026-09-03
 
 ### Fixed
+- `swift build` on a macOS host failed (`SKAdNetwork is unavailable in macOS`) even though `Package.swift` declares macOS/tvOS/watchOS. The SKAdNetwork bridge/tracker is now compiled only `#if os(iOS)` with a no-op `UnifiedAttributionTracker` elsewhere, and the ATT status reads carry a `macOS 11` availability. Declared platforms unchanged.
+- Dead-letter replay is now bounded. Every launch re-enqueued the whole dead-letter store with no cap, so a permanently-rejected event (400/413) cycled dead-letter → replay → dead-letter forever. `QueuedEvent` gains `replayCount` (decodes as 0 for existing entries); entries replayed 3× or older than 7 days are dropped and the drop count is logged once. Mirrors the RN SDK.
+- The drain loop stopped early when an event was enqueued mid-batch: progress was judged by before/after queue length, so a concurrent `track()` made a fully-delivered batch look like "no progress". It now counts events actually removed.
+- Apple Search Ads attribution is persisted (`datalyr_asa_attribution`) after the first successful fetch and loaded at init, so later launches have `asa_*` immediately and never re-fetch from Apple. When the fetch lands after `app_install` already went out (the common first-launch case), the SDK emits a follow-up `$asa_attribution` event carrying the same `asa_*` properties.
+- The one-time SKAdNetwork registration flag (`isRegistered` / `datalyr_skan_registered`) was set before the OS answered, so a rejected registration was never retried. It is now set only in the completion on success.
+- Calling `trackPurchase` / `trackSubscription` / `trackWithSKAdNetwork` without `skadTemplate` logged only under `debug`. It now logs once per process, unconditionally: "skadTemplate not set — SKAdNetwork conversion values are disabled…".
+- `DatalyrSDKDelegate` wiring: `datalyrDidUpdateConversionValue` now fires from `trackWithSKAdNetwork` when a value is applied, and `datalyrDidFailToSendEvent` (previously never called) fires when an event is moved to dead-letter (retry budget exhausted or evicted by overflow) with a `DatalyrQueueError` / the last transport error.
+- README/QUICKSTART: the framework table now says "SKAdNetwork 4 postback APIs (AdAttributionKit-compatible)" instead of claiming AdAttributionKit on 17.4+; the troubleshooting list no longer tells the advertised app to add `SKAdNetworkItems` (publisher-app key); the "add your own privacy manifest" CocoaPods warnings are gone now that the pod ships it.
 - `PrivacyInfo.xcprivacy` no longer lists `ingest.datalyr.com` / `api.datalyr.com` under `NSPrivacyTrackingDomains`. iOS fails requests to listed tracking domains until the user grants ATT, so SPM installs since 2.1.8 could not deliver `app_install`, sessions or the deferred lookup for un-prompted or denied users. `NSPrivacyTracking` stays true; IDFA is still gated on ATT in code.
 - CocoaPods installs now ship the privacy manifest (`resource_bundles`); AdServices is weak-linked only.
 - `getSuperwallAttributes()` / `getRevenueCatAttributes()` set `datalyr_id` to the internal `visitorId`, which is never sent to the server (the wire carries `anonymousId`, stored as `visitor_id`). The webhook visitor-id leg could therefore never match. Now sends `anonymousId`.

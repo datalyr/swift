@@ -62,6 +62,8 @@ public class DatalyrSDK {
     
     // SKAdNetwork conversion value encoder
     private var conversionEncoder: ConversionValueEncoder?
+    // Once-per-process guard for the missing-skadTemplate warning.
+    private var warnedMissingSkadTemplate = false
 
     // Platform integrations (Apple Search Ads, IDFA/ATT)
     private var platformIntegrationManager: PlatformIntegrationManager?
@@ -154,7 +156,12 @@ public class DatalyrSDK {
             maxRetryCount: config.maxRetries
         )
         self.eventQueue = DatalyrEventQueue(httpClient: httpClient!, config: queueConfig)
-        
+        // Surface retry-exhausted / evicted events to the host app's delegate
+        // (datalyrDidFailToSendEvent previously had zero call sites).
+        eventQueue?.onDeadLetter = { [weak self] event, error in
+            self?.notifyDelegateOfError(.networkError(underlyingError: error), eventName: event.payload.eventName)
+        }
+
         // Initialize visitor ID, anonymous ID and session
         self.visitorId = await getOrCreateVisitorId()
         self.anonymousId = await getOrCreateAnonymousId()
@@ -256,6 +263,19 @@ public class DatalyrSDK {
 
         // Initialize platform integrations (Apple Search Ads, IDFA/ATT)
         self.platformIntegrationManager = PlatformIntegrationManager()
+        // Apple Search Ads answers asynchronously (detached fetch, 5–15s on first launch), so
+        // app_install below usually goes out before asa_* exists. When the fetch lands after
+        // the install was already sent, emit a follow-up `$asa_attribution` carrying the same
+        // asa_* keys so the install can still be attributed server-side. Later events get
+        // asa_* via the per-event merge; later launches load the persisted payload.
+        platformIntegrationManager?.onAppleSearchAdsAttribution = { [weak self] attribution in
+            guard let self = self, let asaData = AppleSearchAdsIntegration.toDictionary(attribution) else { return }
+            Task {
+                let installAlreadySent = await DatalyrStorage.shared.getString("datalyr_app_install_tracked") != nil
+                guard installAlreadySent else { return } // app_install itself will carry asa_*
+                await self.track("$asa_attribution", eventData: asaData)
+            }
+        }
         await platformIntegrationManager?.initialize(config: config)
 
         // Cache advertiser data (IDFA, ATT status) once at init — refreshed on ATT change
@@ -1592,8 +1612,11 @@ public class DatalyrSDK {
 
         // NEW: Automatic SKAdNetwork encoding with SKAN 4.0 support
         guard let encoder = conversionEncoder else {
-            if config?.debug == true {
-                debugLog("SKAdNetwork encoder not initialized. Pass skadTemplate in initialize() or use initializeWithSKAdNetwork()")
+            // Unconditional (errorLog, not debug-gated) and once per process: a SKAN-bearing
+            // call with no template silently disables every conversion value otherwise.
+            if !warnedMissingSkadTemplate {
+                warnedMissingSkadTemplate = true
+                errorLog("skadTemplate not set — SKAdNetwork conversion values are disabled. Set DatalyrConfig.skadTemplate ('ecommerce' | 'gaming' | 'subscription')")
             }
             return
         }
@@ -1614,6 +1637,9 @@ public class DatalyrSDK {
                 coarseValue: result.coarseValue,
                 lockWindow: result.lockWindow
             )
+            if applied {
+                notifyDelegateOfConversionUpdate(fineValue: result.fineValue, coarseValue: result.coarseValue)
+            }
             if config?.debug == true {
                 if applied {
                     debugLog("SKAdNetwork conversion value updated - fine: \(result.fineValue), coarse: \(result.coarseValue), lock: \(result.lockWindow) for event: \(event)", data: eventData)
