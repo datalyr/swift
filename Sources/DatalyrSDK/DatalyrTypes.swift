@@ -253,8 +253,27 @@ public struct AttributionData: Codable {
     public var dclid: String?   // Google Display & Video 360 (ingest clickIdMapping supports it)
     public var oppref: String?
     public var twclid: String?
-    public var liClickId: String?
+    /// LinkedIn's click id (`li_fat_id`, the param LinkedIn actually appends).
+    public var liFatId: String?
+    /// Snapchat click id. Captured from `ScCid` / `sccid` / `sclid`; `sclid` is the canonical name.
+    public var sclid: String?
+    /// AppLovin click id (`aleid`). Opaque, stored verbatim.
+    public var aleid: String?
+    /// AppLovin app-user id (`alart`). Opaque, stored verbatim. Not a click id.
+    public var alart: String?
     public var msclkid: String?
+
+    /// Renamed: LinkedIn never sends `li_click_id`. Reads and writes `liFatId`.
+    @available(*, deprecated, renamed: "liFatId")
+    public var liClickId: String? {
+        get { liFatId }
+        set { liFatId = newValue }
+    }
+
+    /// A `li_click_id` persisted by 2.1.16 and earlier. Decoded only so it can be moved to
+    /// `liFatId` by `migrateLegacyClickIds()`; nil after migration, so it is never re-encoded
+    /// (synthesized Codable skips nil optionals) and never reaches the wire.
+    internal var legacyLiClickId: String?
     
     // Partner & Affiliate Tracking
     public var partnerId: String?
@@ -317,7 +336,9 @@ public struct AttributionData: Codable {
         // FSR-35: `oppref` (OpenAI click-id) was declared on the struct but MISSING here, so
         // the synthesized encode/decode silently skipped it — captured then lost on relaunch.
         case fbclid, ttclid, gclid, wbraid, gbraid, dclid, oppref, twclid
-        case liClickId = "li_click_id"
+        case liFatId = "li_fat_id"
+        case sclid, aleid, alart
+        case legacyLiClickId = "li_click_id"
         case msclkid
         case partnerId = "partner_id"
         case affiliateId = "affiliate_id"
@@ -341,6 +362,36 @@ public struct AttributionData: Codable {
         case installReferrer = "install_referrer"
         case attributionTimestamp = "attribution_timestamp"
         case attributionCapturedAt = "attribution_captured_at"
+    }
+
+    /// Click ids in primary order, as (wire name, value). The first present one is a touch's
+    /// `clickIdType`. fbclid > gclid > ttclid is the order the SDK always used; the rest follow
+    /// the web SDK's CLICK_IDS order, with AppLovin last. `alart` is an app-user id, not a click.
+    internal var clickIdsInPrimaryOrder: [(type: String, value: String?)] {
+        return [
+            ("fbclid", fbclid), ("gclid", gclid), ("ttclid", ttclid),
+            ("gbraid", gbraid), ("wbraid", wbraid), ("oppref", oppref), ("msclkid", msclkid),
+            ("twclid", twclid), ("li_fat_id", liFatId), ("sclid", sclid), ("dclid", dclid),
+            ("aleid", aleid)
+        ]
+    }
+
+    /// Wire name of the primary click id, or nil when none is present. Presence is `!= nil`,
+    /// exactly as the original fbclid/gclid/ttclid chain tested it.
+    internal var primaryClickIdType: String? {
+        return clickIdsInPrimaryOrder.first(where: { $0.value != nil })?.type
+    }
+
+    /// Move a legacy `li_click_id` to `liFatId` (an existing `liFatId` wins). Returns true
+    /// when something changed, so the caller can re-persist.
+    @discardableResult
+    internal mutating func migrateLegacyClickIds() -> Bool {
+        guard let legacy = legacyLiClickId else { return false }
+        if (liFatId ?? "").isEmpty, !legacy.isEmpty {
+            liFatId = legacy
+        }
+        legacyLiClickId = nil
+        return true
     }
 }
 

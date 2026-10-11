@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.17] - 2026-10-11
+
+### Added
+- LinkedIn: deep links capture `li_fat_id`, the param LinkedIn actually appends, as `AttributionData.liFatId` (wire key `li_fat_id`).
+- Snapchat: `ScCid` / `sccid` / `sclid` are captured as `sclid` (previously ignored).
+- AppLovin: `aleid` (click id) and `alart` (app-user id) are captured verbatim.
+- The web-attribution match response (deferred IP lookup and `identify()` email lookup) now gap-fills `twclid`, `li_fat_id`, `sclid` and `aleid` into the persisted attribution and sends them on `$web_attribution_matched` (only when present; a `null` from the API adds no key). The API already returned the first three; they were dropped.
+- The first/last touch carries a `clickIdType` for every click id, not only `fbclid` / `gclid` / `ttclid`. Those three keep their precedence; the rest follow the web SDK's order (`gbraid`, `wbraid`, `oppref`, `msclkid`, `twclid`, `li_fat_id`, `sclid`, `dclid`), then `aleid`. `TouchAttribution` gains `twclid`, `liFatId`, `sclid`, `aleid`, and its `gbraid` / `wbraid` / `oppref` are now filled.
+
+### Changed
+- `li_click_id` is no longer captured from deep links (LinkedIn never sends it) and no longer sent. A value persisted by 2.1.16 or earlier is read once, moved to `li_fat_id` (an existing `li_fat_id` wins), and re-saved without the legacy key.
+- `AttributionData.liClickId` is deprecated and now aliases `liFatId`.
+
 ## [2.1.16] - 2026-09-03
 
 ### Fixed

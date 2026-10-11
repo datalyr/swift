@@ -30,14 +30,14 @@ final class AttributionTests: XCTestCase {
         attribution.gclid = "google_click_456"
         attribution.ttclid = "tiktok_click_789"
         attribution.twclid = "twitter_click_012"
-        attribution.liClickId = "linkedin_click_345"
+        attribution.liFatId = "linkedin_click_345"
         attribution.msclkid = "microsoft_click_678"
 
         XCTAssertEqual(attribution.fbclid, "fb_click_123")
         XCTAssertEqual(attribution.gclid, "google_click_456")
         XCTAssertEqual(attribution.ttclid, "tiktok_click_789")
         XCTAssertEqual(attribution.twclid, "twitter_click_012")
-        XCTAssertEqual(attribution.liClickId, "linkedin_click_345")
+        XCTAssertEqual(attribution.liFatId, "linkedin_click_345")
         XCTAssertEqual(attribution.msclkid, "microsoft_click_678")
     }
 

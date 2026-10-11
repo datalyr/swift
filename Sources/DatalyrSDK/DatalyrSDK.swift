@@ -210,14 +210,17 @@ public class DatalyrSDK {
                 touchAttribution.fbclid = attribution.fbclid
                 touchAttribution.gclid = attribution.gclid
                 touchAttribution.ttclid = attribution.ttclid
+                touchAttribution.gbraid = attribution.gbraid
+                touchAttribution.wbraid = attribution.wbraid
+                touchAttribution.oppref = attribution.oppref
+                touchAttribution.twclid = attribution.twclid
+                touchAttribution.liFatId = attribution.liFatId
+                touchAttribution.sclid = attribution.sclid
+                touchAttribution.aleid = attribution.aleid
                 touchAttribution.lyr = attribution.lyr
-                if attribution.fbclid != nil {
-                    touchAttribution.clickIdType = "fbclid"
-                } else if attribution.gclid != nil {
-                    touchAttribution.clickIdType = "gclid"
-                } else if attribution.ttclid != nil {
-                    touchAttribution.clickIdType = "ttclid"
-                }
+                // Every click id gets a type now (was fbclid/gclid/ttclid only); those three
+                // keep their precedence. Order lives in AttributionData.clickIdsInPrimaryOrder.
+                touchAttribution.clickIdType = attribution.primaryClickIdType
 
                 await JourneyManager.shared.recordAttribution(sessionId: sessionId, attribution: touchAttribution)
             }
@@ -731,6 +734,7 @@ public class DatalyrSDK {
             if let ttclid = attribution["ttclid"] { mergedData["ttclid"] = ttclid }
             if let gbraid = attribution["gbraid"] { mergedData["gbraid"] = gbraid }
             if let wbraid = attribution["wbraid"] { mergedData["wbraid"] = wbraid }
+            for (key, value) in webMatchPlatformClickIds(attribution) { mergedData[key] = value }
             // Emit BOTH `_fbp`/`_fbc` (the Meta cookie names the attribution MV +
             // postback actually extract — JSONExtractString(event_data,'_fbp')) AND the
             // bare keys. Previously only `fbp`/`fbc` were sent, which no reader extracts,
@@ -960,6 +964,7 @@ public class DatalyrSDK {
             if let ttclid = attribution["ttclid"] { matchData["ttclid"] = ttclid }
             if let gbraid = attribution["gbraid"] { matchData["gbraid"] = gbraid }
             if let wbraid = attribution["wbraid"] { matchData["wbraid"] = wbraid }
+            for (key, value) in webMatchPlatformClickIds(attribution) { matchData[key] = value }
             // Emit both `_fbp`/`_fbc` (extracted by the attribution MV + postback) and the
             // bare keys — see the email-path note above.
             if let fbp = attribution["_fbp"] ?? attribution["fbp"] {
@@ -2289,7 +2294,10 @@ extension AttributionData {
         // persisted/JSON key names. Value filter unchanged from the Mirror
         // version: non-empty strings only (numeric internals like
         // attribution_captured_at are SDK bookkeeping and stay off the wire).
-        guard let data = try? JSONEncoder().encode(self),
+        // A legacy `li_click_id` goes out as `li_fat_id` (ingest reads only the latter).
+        var current = self
+        current.migrateLegacyClickIds()
+        guard let data = try? JSONEncoder().encode(current),
               let obj = try? JSONSerialization.jsonObject(with: data),
               let raw = obj as? [String: Any] else { return [:] }
         return raw.compactMapValues { value -> Any? in

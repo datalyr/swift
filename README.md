@@ -2,7 +2,7 @@
 
 Server-side attribution, event tracking, SKAdNetwork conversion values, and Apple Search Ads attribution for iOS.
 
-Current release: **2.1.16**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.17**. Every event posts to `https://ingest.datalyr.com/track`.
 
 Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sdk-reference/ios).
 
@@ -38,7 +38,7 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 |---|---|
 | Minimum iOS | 13.0 |
 | Swift tools version | 5.7 |
-| Current release | 2.1.16 |
+| Current release | 2.1.17 |
 | Frameworks linked | `Foundation`, `UIKit`, `StoreKit`, `AdServices` (weak) |
 
 ---
@@ -49,19 +49,19 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 
 1. In Xcode, open **File > Add Package Dependencies**.
 2. Enter `https://github.com/datalyr/swift`.
-3. Select version 2.1.16.
+3. Select version 2.1.17.
 4. Add the `DatalyrSDK` product to your app target.
 
 In `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/datalyr/swift", from: "2.1.16")
+.package(url: "https://github.com/datalyr/swift", from: "2.1.17")
 ```
 
 ### CocoaPods
 
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.16'
+pod 'DatalyrSDK', '~> 2.1.17'
 ```
 
 Run `pod install`. Open the generated `.xcworkspace`.
@@ -408,13 +408,14 @@ Pass every incoming link to the SDK. The SDK does not read the launch URL for yo
 }
 ```
 
-The SDK reads these 38 parameters from the query string and the URL fragment. Key matching is case-insensitive.
+The SDK reads these 44 parameters from the query string and the URL fragment. Key matching is case-insensitive.
 
 | Group | Parameters |
 |---|---|
 | Datalyr | `lyr`, `datalyr`, `dl_tag`, `dl_campaign` |
-| Click IDs | `fbclid`, `ttclid`, `gclid`, `wbraid`, `gbraid`, `dclid`, `twclid`, `li_click_id`, `msclkid`, `oppref` |
-| Click ID aliases | `tt_click_id` and `tiktok_click_id` both store as `ttclid` |
+| Click IDs | `fbclid`, `ttclid`, `gclid`, `wbraid`, `gbraid`, `dclid`, `twclid`, `li_fat_id`, `sclid`, `aleid`, `msclkid`, `oppref` |
+| Click ID aliases | `tt_click_id` and `tiktok_click_id` both store as `ttclid`. Snapchat's `ScCid` (`sccid`) stores as `sclid`. |
+| AppLovin app user | `alart` (stored verbatim; not a click ID) |
 | UTM | `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `utm_id`, `utm_source_platform`, `utm_creative_format`, `utm_marketing_tactic` |
 | Partner | `partner_id`, `affiliate_id`, `referrer_id`, `source_id` |
 | Ad structure | `campaign_id`, `ad_id`, `adset_id`, `creative_id`, `placement_id`, `keyword`, `matchtype`, `network`, `device` |
@@ -434,7 +435,8 @@ let attribution = DatalyrSDK.shared.getAttributionData()
 | Install | `installTime`, `firstOpenTime` |
 | Datalyr | `lyr`, `datalyr`, `dlTag`, `dlCampaign` |
 | UTM | `utmSource`, `utmMedium`, `utmCampaign`, `utmTerm`, `utmContent`, `utmId`, `utmSourcePlatform`, `utmCreativeFormat`, `utmMarketingTactic` |
-| Click IDs | `fbclid`, `ttclid`, `gclid`, `wbraid`, `gbraid`, `dclid`, `oppref`, `twclid`, `liClickId`, `msclkid` |
+| Click IDs | `fbclid`, `ttclid`, `gclid`, `wbraid`, `gbraid`, `dclid`, `oppref`, `twclid`, `liFatId`, `sclid`, `aleid`, `msclkid` (`liClickId` is a deprecated alias of `liFatId`) |
+| AppLovin app user | `alart` |
 | Partner | `partnerId`, `affiliateId`, `referrerId`, `sourceId` |
 | Ad structure | `campaignId`, `adId`, `adsetId`, `creativeId`, `placementId`, `keyword`, `matchtype`, `network`, `device` |
 | Mirrored UTM | `campaignSource`, `campaignMedium`, `campaignName`, `campaignTerm`, `campaignContent` |
@@ -654,7 +656,7 @@ On first install the SDK asks the Datalyr API to match the device IP against `$a
 
 The match runs inside `initialize()`, before `app_install` fires. Your app needs no extra code.
 
-After a match the SDK merges the web click IDs, UTM parameters, and cookies into the mobile session, sends `$web_attribution_matched`, and stamps the merged attribution on every later event.
+After a match the SDK merges the web click IDs (`fbclid`, `gclid`, `ttclid`, `gbraid`, `wbraid`, `twclid`, `li_fat_id`, `sclid`, `aleid`), UTM parameters, and cookies into the mobile session, sends `$web_attribution_matched`, and stamps the merged attribution on every later event.
 
 When IP matching misses — a VPN toggle during install, for example — call `identify()` with the user's email. The SDK then recovers attribution by email.
 
