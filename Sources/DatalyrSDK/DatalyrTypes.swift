@@ -260,7 +260,7 @@ public struct AttributionData: Codable {
     /// AppLovin click id (`aleid`). Opaque, stored verbatim.
     public var aleid: String?
     /// AppLovin app-user id (`alart`). Opaque, stored verbatim. Not a click id. Sent only on
-    /// `app_install` / `$deep_link` (see `appUserIdEvents`).
+    /// `app_install` / `$deep_link` (see `appUserIdEvents`) and only with ATT authorized.
     public var alart: String?
     public var msclkid: String?
 
@@ -391,6 +391,21 @@ public struct AttributionData: Codable {
     /// Events that carry the persisted app-user ids. `$web_attribution_matched` is not here: it
     /// carries `alart` only when the lookup response returned one (`webMatchEventIds`).
     internal static let appUserIdEvents: Set<String> = ["app_install", "$deep_link"]
+
+    /// True only for ATT `.authorized` (raw value 3). notDetermined (0), restricted (1), denied
+    /// (2) and an unknown status all count as not authorized. `attStatus` is the cached
+    /// `att_status` from `getAdvertiserData()` (UInt), so it matches the IDFA gate exactly.
+    internal static func isTrackingAuthorized(attStatus: Any?) -> Bool {
+        if let v = attStatus as? UInt { return v == 3 }
+        if let v = attStatus as? Int { return v == 3 }
+        return false
+    }
+
+    /// Remove the app-user ids from an outgoing event's properties unless ATT is authorized.
+    internal static func removeAppUserIds(from eventData: inout [String: Any], unlessAttStatus attStatus: Any?) {
+        guard !isTrackingAuthorized(attStatus: attStatus) else { return }
+        for key in appUserIdKeys { eventData.removeValue(forKey: key) }
+    }
 
     /// Whether this attribution should record a journey touch at startup: a UTM source, any
     /// click id (was fbclid/gclid only, so a bare `?li_fat_id=` / `?ttclid=` / `?aleid=` link

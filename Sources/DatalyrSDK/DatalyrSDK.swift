@@ -1954,8 +1954,11 @@ public class DatalyrSDK {
         // clobber an explicit property like track("purchase",
         // ["utm_source": "push"]).
         if let attribution = attributionManager?.getAttributionData() {
-            // App-user ids (AppLovin `alart`) ride only app_install / $deep_link, never every event.
-            for (key, value) in attribution.eventProperties(for: eventName) where enrichedEventData[key] == nil {
+            // App-user ids (AppLovin `alart`) ride only app_install / $deep_link, and only with
+            // ATT authorized; never every event.
+            let attAuthorized = AttributionData.isTrackingAuthorized(attStatus: cachedAdvertiserData?["att_status"])
+            for (key, value) in attribution.eventProperties(for: eventName, trackingAuthorized: attAuthorized)
+                where enrichedEventData[key] == nil {
                 enrichedEventData[key] = value
             }
         }
@@ -1980,6 +1983,14 @@ public class DatalyrSDK {
                 enrichedEventData["advertiser_tracking_enabled"] = trackingAuthorized
             }
         }
+
+        // Final ATT gate for app-user ids from ANY source (install merge, $deep_link URL params,
+        // the web-match response, caller properties): without ATT authorization they are not
+        // sent. They stay persisted on the device. Same cached status that gates the IDFA, so
+        // an event carrying alart always carries the IDFA when one exists and routes to the
+        // ATT tracking domain.
+        AttributionData.removeAppUserIds(from: &enrichedEventData,
+                                         unlessAttStatus: cachedAdvertiserData?["att_status"])
 
         let workspaceIdValue = config?.workspaceId ?? ""
         return EventPayload(
@@ -2260,9 +2271,10 @@ extension DatalyrSDK: AutoEventsTrackingDelegate {
 
 extension AttributionData {
     /// The persisted attribution attached to `eventName`: every key except the app-user ids,
-    /// which only `appUserIdEvents` carry.
-    func eventProperties(for eventName: String) -> [String: Any] {
-        return toDictionary(includingAppUserIds: AttributionData.appUserIdEvents.contains(eventName))
+    /// which only `appUserIdEvents` carry, and only when ATT is authorized.
+    func eventProperties(for eventName: String, trackingAuthorized: Bool) -> [String: Any] {
+        return toDictionary(includingAppUserIds: trackingAuthorized
+                            && AttributionData.appUserIdEvents.contains(eventName))
     }
 
     /// - Parameter includingAppUserIds: include `AttributionData.appUserIdKeys` (`alart`). Only

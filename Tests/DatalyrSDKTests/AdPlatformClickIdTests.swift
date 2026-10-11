@@ -144,7 +144,7 @@ final class AdPlatformClickIdTests: XCTestCase {
         var a = AttributionData()
         a.utmSource = "applovin"; a.aleid = "AL"; a.alart = "APP_USER"
         for name in ["purchase", "session_start", "$identify", "$web_attribution_matched", "screen_view", "app_open"] {
-            let props = a.eventProperties(for: name)
+            let props = a.eventProperties(for: name, trackingAuthorized: true)
             XCTAssertNil(props["alart"], "\(name) must not carry alart")
             XCTAssertEqual(props["aleid"] as? String, "AL", "click ids still ride \(name)")
             XCTAssertEqual(props["utm_source"] as? String, "applovin")
@@ -156,8 +156,67 @@ final class AdPlatformClickIdTests: XCTestCase {
         var a = AttributionData()
         a.alart = "APP_USER"
         XCTAssertEqual(AttributionData.appUserIdEvents, ["app_install", "$deep_link"])
-        XCTAssertEqual(a.eventProperties(for: "app_install")["alart"] as? String, "APP_USER")
-        XCTAssertEqual(a.eventProperties(for: "$deep_link")["alart"] as? String, "APP_USER")
+        XCTAssertEqual(a.eventProperties(for: "app_install", trackingAuthorized: true)["alart"] as? String, "APP_USER")
+        XCTAssertEqual(a.eventProperties(for: "$deep_link", trackingAuthorized: true)["alart"] as? String, "APP_USER")
+    }
+
+    // MARK: - alart needs ATT authorized
+
+    /// ATTrackingManager.AuthorizationStatus raw values, as cached in `att_status`.
+    private let notDetermined: UInt = 0, restricted: UInt = 1, denied: UInt = 2, authorized: UInt = 3
+
+    func testOnlyAuthorizedCountsAsTrackingAuthorized() {
+        XCTAssertTrue(AttributionData.isTrackingAuthorized(attStatus: authorized))
+        XCTAssertTrue(AttributionData.isTrackingAuthorized(attStatus: 3 as Int))
+        XCTAssertFalse(AttributionData.isTrackingAuthorized(attStatus: notDetermined))
+        XCTAssertFalse(AttributionData.isTrackingAuthorized(attStatus: restricted))
+        XCTAssertFalse(AttributionData.isTrackingAuthorized(attStatus: denied))
+        XCTAssertFalse(AttributionData.isTrackingAuthorized(attStatus: nil), "unknown status is not authorized")
+    }
+
+    func testAlartOnInstallAndDeepLinkRequiresATTAuthorized() {
+        var a = AttributionData()
+        a.alart = "APP_USER"; a.aleid = "AL"
+        for name in ["app_install", "$deep_link"] {
+            for status in [notDetermined, denied] {
+                let props = a.eventProperties(for: name, trackingAuthorized: AttributionData.isTrackingAuthorized(attStatus: status))
+                XCTAssertNil(props["alart"], "\(name) with ATT \(status) must not carry alart")
+                XCTAssertEqual(props["aleid"] as? String, "AL", "click ids are not ATT-gated here")
+            }
+            let ok = a.eventProperties(for: name, trackingAuthorized: AttributionData.isTrackingAuthorized(attStatus: authorized))
+            XCTAssertEqual(ok["alart"] as? String, "APP_USER")
+        }
+    }
+
+    func testFinalGateStripsAlartFromAnySourceUnlessAuthorized() {
+        // The outgoing properties may hold alart from $deep_link URL params, the install merge
+        // or the web-match response. The final gate removes it unless ATT is authorized.
+        for status in [notDetermined, denied] {
+            var props: [String: Any] = ["alart": "FROM_URL", "aleid": "AL", "utm_source": "applovin"]
+            AttributionData.removeAppUserIds(from: &props, unlessAttStatus: status)
+            XCTAssertNil(props["alart"], "ATT \(status)")
+            XCTAssertEqual(props["aleid"] as? String, "AL")
+            XCTAssertEqual(props["utm_source"] as? String, "applovin")
+        }
+        var noStatus: [String: Any] = ["alart": "X"]
+        AttributionData.removeAppUserIds(from: &noStatus, unlessAttStatus: nil)
+        XCTAssertNil(noStatus["alart"])
+
+        var allowed: [String: Any] = ["alart": "FROM_URL"]
+        AttributionData.removeAppUserIds(from: &allowed, unlessAttStatus: authorized)
+        XCTAssertEqual(allowed["alart"] as? String, "FROM_URL")
+    }
+
+    func testPrivacyManifestDeclaresUserID() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/DatalyrSDK/PrivacyInfo.xcprivacy")
+        let plist = try PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil) as? [String: Any]
+        let types = plist?["NSPrivacyCollectedDataTypes"] as? [[String: Any]] ?? []
+        let userId = types.first { $0["NSPrivacyCollectedDataType"] as? String == "NSPrivacyCollectedDataTypeUserID" }
+        XCTAssertNotNil(userId)
+        XCTAssertEqual(userId?["NSPrivacyCollectedDataTypeLinked"] as? Bool, true)
+        XCTAssertEqual(userId?["NSPrivacyCollectedDataTypeTracking"] as? Bool, true)
     }
 
     func testWebMatchEventCarriesAlartOnlyFromTheResponse() {
@@ -165,7 +224,7 @@ final class AdPlatformClickIdTests: XCTestCase {
         XCTAssertNil(webMatchEventIds(lookupResponse([:]))["alart"])
         var stored = AttributionData()
         stored.alart = "STORED"
-        XCTAssertNil(stored.eventProperties(for: "$web_attribution_matched")["alart"],
+        XCTAssertNil(stored.eventProperties(for: "$web_attribution_matched", trackingAuthorized: true)["alart"],
                      "persisted alart is not attached to the match event")
     }
 
