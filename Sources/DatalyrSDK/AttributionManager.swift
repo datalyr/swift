@@ -61,11 +61,13 @@ internal let ATTRIBUTION_PARAMS = [
 /// answers `null` for absent ids.
 internal let WEB_MATCH_PLATFORM_CLICK_IDS = ["twclid", "li_fat_id", "sclid", "aleid"]
 
-/// The `WEB_MATCH_PLATFORM_CLICK_IDS` present (non-empty strings) in a lookup response, for
-/// the `$web_attribution_matched` properties. `null` / absent / non-string values are left out.
-internal func webMatchPlatformClickIds(_ attribution: [String: Any]) -> [String: String] {
+/// The ids to copy from a lookup response onto `$web_attribution_matched`: the
+/// `WEB_MATCH_PLATFORM_CLICK_IDS` plus `alart` when the response itself carries one (the
+/// persisted `alart` is not attached to that event). Non-empty strings only; `null` / absent /
+/// non-string values are left out.
+internal func webMatchEventIds(_ attribution: [String: Any]) -> [String: String] {
     var out: [String: String] = [:]
-    for key in WEB_MATCH_PLATFORM_CLICK_IDS {
+    for key in WEB_MATCH_PLATFORM_CLICK_IDS + AttributionData.appUserIdKeys.sorted() {
         if let value = attribution[key] as? String, !value.isEmpty { out[key] = value }
     }
     return out

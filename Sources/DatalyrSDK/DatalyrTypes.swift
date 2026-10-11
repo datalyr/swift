@@ -259,7 +259,8 @@ public struct AttributionData: Codable {
     public var sclid: String?
     /// AppLovin click id (`aleid`). Opaque, stored verbatim.
     public var aleid: String?
-    /// AppLovin app-user id (`alart`). Opaque, stored verbatim. Not a click id.
+    /// AppLovin app-user id (`alart`). Opaque, stored verbatim. Not a click id. Sent only on
+    /// `app_install` / `$deep_link` (see `appUserIdEvents`).
     public var alart: String?
     public var msclkid: String?
 
@@ -381,6 +382,15 @@ public struct AttributionData: Codable {
     internal var primaryClickIdType: String? {
         return clickIdsInPrimaryOrder.first(where: { $0.value != nil })?.type
     }
+
+    /// App-user ids (not click ids). AppLovin's `alart` is a persistent per-user id: captured
+    /// and persisted, but sent only on `appUserIdEvents`, never on every event (it would ride
+    /// every event regardless of ATT / opt-out, to the non-tracking host when there is no IDFA).
+    internal static let appUserIdKeys: Set<String> = ["alart"]
+
+    /// Events that carry the persisted app-user ids. `$web_attribution_matched` is not here: it
+    /// carries `alart` only when the lookup response returned one (`webMatchEventIds`).
+    internal static let appUserIdEvents: Set<String> = ["app_install", "$deep_link"]
 
     /// Whether this attribution should record a journey touch at startup: a UTM source, any
     /// click id (was fbclid/gclid only, so a bare `?li_fat_id=` / `?ttclid=` / `?aleid=` link

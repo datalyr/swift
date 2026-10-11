@@ -133,9 +133,40 @@ final class AdPlatformClickIdTests: XCTestCase {
         let data = mgr.getAttributionData()
         XCTAssertEqual(data.aleid, "AbC-123_xyz==")
         XCTAssertEqual(data.alart, "Usr_9-Q")
-        let wire = data.toDictionary()
+        let wire = data.toDictionary(includingAppUserIds: true)
         XCTAssertEqual(wire["aleid"] as? String, "AbC-123_xyz==")
         XCTAssertEqual(wire["alart"] as? String, "Usr_9-Q")
+    }
+
+    // MARK: - alart rides only app_install / $deep_link
+
+    func testAlartIsNotAttachedToGeneralEvents() {
+        var a = AttributionData()
+        a.utmSource = "applovin"; a.aleid = "AL"; a.alart = "APP_USER"
+        for name in ["purchase", "session_start", "$identify", "$web_attribution_matched", "screen_view", "app_open"] {
+            let props = a.eventProperties(for: name)
+            XCTAssertNil(props["alart"], "\(name) must not carry alart")
+            XCTAssertEqual(props["aleid"] as? String, "AL", "click ids still ride \(name)")
+            XCTAssertEqual(props["utm_source"] as? String, "applovin")
+        }
+        XCTAssertNil(a.toDictionary()["alart"], "the default dictionary excludes app-user ids")
+    }
+
+    func testAlartIsAttachedToAppInstallAndDeepLink() {
+        var a = AttributionData()
+        a.alart = "APP_USER"
+        XCTAssertEqual(AttributionData.appUserIdEvents, ["app_install", "$deep_link"])
+        XCTAssertEqual(a.eventProperties(for: "app_install")["alart"] as? String, "APP_USER")
+        XCTAssertEqual(a.eventProperties(for: "$deep_link")["alart"] as? String, "APP_USER")
+    }
+
+    func testWebMatchEventCarriesAlartOnlyFromTheResponse() {
+        XCTAssertEqual(webMatchEventIds(lookupResponse(["alart": "FROM_RESPONSE"])), ["alart": "FROM_RESPONSE"])
+        XCTAssertNil(webMatchEventIds(lookupResponse([:]))["alart"])
+        var stored = AttributionData()
+        stored.alart = "STORED"
+        XCTAssertNil(stored.eventProperties(for: "$web_attribution_matched")["alart"],
+                     "persisted alart is not attached to the match event")
     }
 
     func testNewIdsRoundTripThroughPersistence() throws {
@@ -343,8 +374,8 @@ final class AdPlatformClickIdTests: XCTestCase {
 
     func testWebMatchEventPropertiesCarryOnlyPresentIds() {
         XCTAssertEqual(WEB_MATCH_PLATFORM_CLICK_IDS, ["twclid", "li_fat_id", "sclid", "aleid"])
-        let props = webMatchPlatformClickIds(lookupResponse(["twclid": "TW", "sclid": "", "aleid": "AL"]))
+        let props = webMatchEventIds(lookupResponse(["twclid": "TW", "sclid": "", "aleid": "AL"]))
         XCTAssertEqual(props, ["twclid": "TW", "aleid": "AL"])
-        XCTAssertTrue(webMatchPlatformClickIds(lookupResponse([:])).isEmpty, "null ids add no keys")
+        XCTAssertTrue(webMatchEventIds(lookupResponse([:])).isEmpty, "null ids add no keys")
     }
 }

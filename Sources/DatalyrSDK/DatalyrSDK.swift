@@ -707,7 +707,7 @@ public class DatalyrSDK {
             if let ttclid = attribution["ttclid"] { mergedData["ttclid"] = ttclid }
             if let gbraid = attribution["gbraid"] { mergedData["gbraid"] = gbraid }
             if let wbraid = attribution["wbraid"] { mergedData["wbraid"] = wbraid }
-            for (key, value) in webMatchPlatformClickIds(attribution) { mergedData[key] = value }
+            for (key, value) in webMatchEventIds(attribution) { mergedData[key] = value }
             // Emit BOTH `_fbp`/`_fbc` (the Meta cookie names the attribution MV +
             // postback actually extract — JSONExtractString(event_data,'_fbp')) AND the
             // bare keys. Previously only `fbp`/`fbc` were sent, which no reader extracts,
@@ -937,7 +937,7 @@ public class DatalyrSDK {
             if let ttclid = attribution["ttclid"] { matchData["ttclid"] = ttclid }
             if let gbraid = attribution["gbraid"] { matchData["gbraid"] = gbraid }
             if let wbraid = attribution["wbraid"] { matchData["wbraid"] = wbraid }
-            for (key, value) in webMatchPlatformClickIds(attribution) { matchData[key] = value }
+            for (key, value) in webMatchEventIds(attribution) { matchData[key] = value }
             // Emit both `_fbp`/`_fbc` (extracted by the attribution MV + postback) and the
             // bare keys — see the email-path note above.
             if let fbp = attribution["_fbp"] ?? attribution["fbp"] {
@@ -1954,7 +1954,8 @@ public class DatalyrSDK {
         // clobber an explicit property like track("purchase",
         // ["utm_source": "push"]).
         if let attribution = attributionManager?.getAttributionData() {
-            for (key, value) in attribution.toDictionary() where enrichedEventData[key] == nil {
+            // App-user ids (AppLovin `alart`) ride only app_install / $deep_link, never every event.
+            for (key, value) in attribution.eventProperties(for: eventName) where enrichedEventData[key] == nil {
                 enrichedEventData[key] = value
             }
         }
@@ -2056,7 +2057,7 @@ public class DatalyrSDK {
 
             // Add attribution data if available
             if let attribution = attributionManager?.trackInstall() {
-                installData.merge(attribution.toDictionary()) { (_, new) in new }
+                installData.merge(attribution.toDictionary(includingAppUserIds: true)) { (_, new) in new }
             }
 
             await track("app_install", eventData: installData)
@@ -2258,7 +2259,15 @@ extension DatalyrSDK: AutoEventsTrackingDelegate {
 // MARK: - Attribution Data Extension
 
 extension AttributionData {
-    func toDictionary() -> [String: Any] {
+    /// The persisted attribution attached to `eventName`: every key except the app-user ids,
+    /// which only `appUserIdEvents` carry.
+    func eventProperties(for eventName: String) -> [String: Any] {
+        return toDictionary(includingAppUserIds: AttributionData.appUserIdEvents.contains(eventName))
+    }
+
+    /// - Parameter includingAppUserIds: include `AttributionData.appUserIdKeys` (`alart`). Only
+    ///   for the events in `AttributionData.appUserIdEvents`; general events never carry them.
+    func toDictionary(includingAppUserIds: Bool = false) -> [String: Any] {
         // P2-9: Mirror reflection emitted the Swift property names (utmSource,
         // liClickId, installTime), but the wire contract ingest reads is the
         // snake_case CodingKeys (utm_source, li_click_id, install_time) — so
@@ -2273,7 +2282,8 @@ extension AttributionData {
         guard let data = try? JSONEncoder().encode(current),
               let obj = try? JSONSerialization.jsonObject(with: data),
               let raw = obj as? [String: Any] else { return [:] }
-        return raw.compactMapValues { value -> Any? in
+        let filtered = includingAppUserIds ? raw : raw.filter { !AttributionData.appUserIdKeys.contains($0.key) }
+        return filtered.compactMapValues { value -> Any? in
             if let s = value as? String { return s.isEmpty ? nil : s }
             return nil
         }
