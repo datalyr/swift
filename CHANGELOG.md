@@ -15,6 +15,10 @@ All notable changes to this project will be documented in this file.
 - `li_click_id` is no longer captured from deep links (LinkedIn never sends it) and no longer sent. A value persisted by 2.1.16 or earlier is read once, moved to `li_fat_id` (an existing `li_fat_id` wins), and re-saved without the legacy key.
 - `AttributionData.liClickId` is deprecated and now aliases `liFatId`.
 
+### Fixed
+- A link with only a click id (no `utm_source` / `lyr`) now records the first/last touch. The startup gate checked only `utm_source`, `fbclid`, `gclid` and `lyr`, and `JourneyManager.recordAttribution` checked `source` / `clickId` / `campaign` / `lyr` while nothing set `clickId`, so even a bare `?fbclid=` link (the default Meta ad shape) recorded no touch. Both gates now accept any click id; `alart` alone still records none.
+- Deep-link params with an empty value (`?sclid=`) are ignored instead of stored. An empty value became the touch's click type and overwrote a real stored id. (The RN SDK already ignored them.)
+
 ## [2.1.16] - 2026-09-03
 
 ### Fixed

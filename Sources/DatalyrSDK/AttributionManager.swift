@@ -195,10 +195,11 @@ internal class AttributionManager {
             return parameters
         }
         
-        // Extract query parameters
+        // Extract query parameters. Empty values (`?sclid=`) are dropped here and below: stored,
+        // they became the touch's click type and overwrote a real stored value. (RN drops them too.)
         if let queryItems = components.queryItems {
             for item in queryItems {
-                if let value = item.value, ATTRIBUTION_PARAMS.contains(item.name.lowercased()) {
+                if let value = item.value, !value.isEmpty, ATTRIBUTION_PARAMS.contains(item.name.lowercased()) {
                     parameters[item.name.lowercased()] = value
                 }
             }
@@ -211,7 +212,7 @@ internal class AttributionManager {
             
             if let fragmentItems = fragmentComponents.queryItems {
                 for item in fragmentItems {
-                    if let value = item.value, ATTRIBUTION_PARAMS.contains(item.name.lowercased()) {
+                    if let value = item.value, !value.isEmpty, ATTRIBUTION_PARAMS.contains(item.name.lowercased()) {
                         parameters[item.name.lowercased()] = value
                     }
                 }

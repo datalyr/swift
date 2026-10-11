@@ -382,6 +382,36 @@ public struct AttributionData: Codable {
         return clickIdsInPrimaryOrder.first(where: { $0.value != nil })?.type
     }
 
+    /// Whether this attribution should record a journey touch at startup: a UTM source, any
+    /// click id (was fbclid/gclid only, so a bare `?li_fat_id=` / `?ttclid=` / `?aleid=` link
+    /// recorded nothing), or a `lyr` tag. `alart` alone does not count: it is not a click.
+    internal var hasJourneyAttribution: Bool {
+        return utmSource != nil || primaryClickIdType != nil || lyr != nil
+    }
+
+    /// The touch recorded for this attribution, stamped with its real capture time.
+    internal func makeTouchAttribution(capturedAt: TimeInterval) -> TouchAttribution {
+        var touch = TouchAttribution(timestamp: capturedAt, expiresAt: 0, capturedAt: capturedAt)
+        touch.source = utmSource ?? campaignSource
+        touch.medium = utmMedium ?? campaignMedium
+        touch.campaign = utmCampaign ?? campaignName
+        touch.fbclid = fbclid
+        touch.gclid = gclid
+        touch.ttclid = ttclid
+        touch.gbraid = gbraid
+        touch.wbraid = wbraid
+        touch.oppref = oppref
+        touch.twclid = twclid
+        touch.liFatId = liFatId
+        touch.sclid = sclid
+        touch.aleid = aleid
+        touch.lyr = lyr
+        // Every click id gets a type (was fbclid/gclid/ttclid only); those three keep their
+        // precedence. Order lives in clickIdsInPrimaryOrder.
+        touch.clickIdType = primaryClickIdType
+        return touch
+    }
+
     /// Move a legacy `li_click_id` to `liFatId` (an existing `liFatId` wins). Returns true
     /// when something changed, so the caller can re-persist.
     @discardableResult

@@ -187,41 +187,14 @@ public class DatalyrSDK {
         // attribution's capture-time vs the last recorded touch's capturedAt, and carry the
         // REAL capture timestamp into the touch instead of 0.
         if let attribution = attributionManager?.getAttributionData() {
-            let hasAttribution = attribution.utmSource != nil ||
-                                attribution.fbclid != nil ||
-                                attribution.gclid != nil ||
-                                attribution.lyr != nil
-
             let capturedAt = attribution.attributionCapturedAt ?? 0
             let lastTouchCapturedAt = JourneyManager.shared.getLastTouch()?.capturedAt ?? 0
             // Fresh iff we have a capture-time and it is newer than the last recorded touch.
             // (capturedAt == 0 means legacy/unknown — treat as NOT new so we don't re-roll.)
             let isNewAttribution = capturedAt > 0 && capturedAt > lastTouchCapturedAt
 
-            if hasAttribution && isNewAttribution {
-                var touchAttribution = TouchAttribution(
-                    timestamp: capturedAt,
-                    expiresAt: 0,
-                    capturedAt: capturedAt
-                )
-                touchAttribution.source = attribution.utmSource ?? attribution.campaignSource
-                touchAttribution.medium = attribution.utmMedium ?? attribution.campaignMedium
-                touchAttribution.campaign = attribution.utmCampaign ?? attribution.campaignName
-                touchAttribution.fbclid = attribution.fbclid
-                touchAttribution.gclid = attribution.gclid
-                touchAttribution.ttclid = attribution.ttclid
-                touchAttribution.gbraid = attribution.gbraid
-                touchAttribution.wbraid = attribution.wbraid
-                touchAttribution.oppref = attribution.oppref
-                touchAttribution.twclid = attribution.twclid
-                touchAttribution.liFatId = attribution.liFatId
-                touchAttribution.sclid = attribution.sclid
-                touchAttribution.aleid = attribution.aleid
-                touchAttribution.lyr = attribution.lyr
-                // Every click id gets a type now (was fbclid/gclid/ttclid only); those three
-                // keep their precedence. Order lives in AttributionData.clickIdsInPrimaryOrder.
-                touchAttribution.clickIdType = attribution.primaryClickIdType
-
+            if attribution.hasJourneyAttribution && isNewAttribution {
+                let touchAttribution = attribution.makeTouchAttribution(capturedAt: capturedAt)
                 await JourneyManager.shared.recordAttribution(sessionId: sessionId, attribution: touchAttribution)
             }
         }

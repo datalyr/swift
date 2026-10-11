@@ -210,6 +210,88 @@ final class AdPlatformClickIdTests: XCTestCase {
         XCTAssertEqual(back.clickIdType, "twclid")
     }
 
+    // MARK: - Bare click-id links record a touch (no utm_source seeded)
+
+    func testBareClickIdLinksRecordFirstAndLastTouch() async {
+        let cases = ["li_fat_id", "sclid", "twclid", "aleid", "fbclid", "ttclid", "gclid", "msclkid", "oppref"]
+        for key in cases {
+            let mgr = AttributionManager()
+            await mgr.handleDeepLink(URL(string: "myapp://open?\(key)=\(key)_BARE")!)
+            let data = mgr.getAttributionData()
+            XCTAssertNil(data.utmSource)
+            XCTAssertTrue(data.hasJourneyAttribution, "\(key) alone must pass the startup gate")
+
+            let touch = data.makeTouchAttribution(capturedAt: data.attributionCapturedAt ?? 1)
+            XCTAssertEqual(touch.clickIdType, key)
+
+            await JourneyManager.shared.clearJourney()
+            await JourneyManager.shared.recordAttribution(sessionId: "sess_bare", attribution: touch)
+            XCTAssertEqual(JourneyManager.shared.getFirstTouch()?.clickIdType, key, "\(key): first touch")
+            XCTAssertEqual(JourneyManager.shared.getLastTouch()?.clickIdType, key, "\(key): last touch")
+            XCTAssertNil(JourneyManager.shared.getFirstTouch()?.source)
+        }
+        let touch = JourneyManager.shared.getLastTouch()
+        XCTAssertEqual(touch?.oppref, "oppref_BARE")
+        await JourneyManager.shared.clearJourney()
+    }
+
+    func testNewIdsAreCopiedOntoTheTouch() {
+        var a = AttributionData()
+        a.twclid = "x"; a.liFatId = "li"; a.sclid = "sc"; a.aleid = "al"
+        let t = a.makeTouchAttribution(capturedAt: 5)
+        XCTAssertEqual(t.twclid, "x")
+        XCTAssertEqual(t.liFatId, "li")
+        XCTAssertEqual(t.sclid, "sc")
+        XCTAssertEqual(t.aleid, "al")
+        XCTAssertEqual(t.clickIdType, "twclid")
+        XCTAssertEqual(t.capturedAt, 5)
+    }
+
+    func testAlartOnlyRecordsNoTouch() {
+        var a = AttributionData()
+        a.alart = "app_user"
+        XCTAssertFalse(a.hasJourneyAttribution, "alart is an app-user id, not a click")
+        var withUtm = AttributionData()
+        withUtm.utmSource = "newsletter"
+        XCTAssertTrue(withUtm.hasJourneyAttribution, "the utm_source leg is unchanged")
+    }
+
+    func testJourneyGateAcceptsClickIdOnlyTouchWithoutClickIdType() async {
+        // Public recordAttribution: a caller passing only fbclid (no clickIdType, no source)
+        // was dropped because the gate checked the never-set `clickId`.
+        var t = TouchAttribution(timestamp: 1, expiresAt: 0, capturedAt: 1)
+        t.fbclid = "FB_ONLY"
+        await JourneyManager.shared.clearJourney()
+        await JourneyManager.shared.recordAttribution(sessionId: "s", attribution: t)
+        XCTAssertEqual(JourneyManager.shared.getFirstTouch()?.fbclid, "FB_ONLY")
+
+        var none = TouchAttribution(timestamp: 1, expiresAt: 0, capturedAt: 1)
+        none.medium = "only_medium"
+        await JourneyManager.shared.clearJourney()
+        await JourneyManager.shared.recordAttribution(sessionId: "s", attribution: none)
+        XCTAssertNil(JourneyManager.shared.getFirstTouch(), "no source/click/campaign/lyr → nothing recorded")
+        await JourneyManager.shared.clearJourney()
+    }
+
+    // MARK: - Empty URL values are dropped
+
+    func testEmptyValueIsNotCaptured() async {
+        let mgr = AttributionManager()
+        let params = await mgr.handleDeepLink(URL(string: "myapp://open?sclid=&fbclid=&gclid=G1")!)
+        XCTAssertEqual(params, ["gclid": "G1"])
+        XCTAssertNil(mgr.getAttributionData().sclid)
+        XCTAssertNil(mgr.getAttributionData().fbclid)
+        XCTAssertEqual(mgr.getAttributionData().primaryClickIdType, "gclid", "an empty fbclid no longer wins")
+    }
+
+    func testEmptyValueDoesNotOverwriteAStoredId() async {
+        let mgr = AttributionManager()
+        await mgr.handleDeepLink(URL(string: "myapp://open?sclid=REAL")!)
+        let params = await mgr.handleDeepLink(URL(string: "myapp://open?sclid=#sclid=")!)
+        XCTAssertTrue(params.isEmpty)
+        XCTAssertEqual(mgr.getAttributionData().sclid, "REAL")
+    }
+
     // MARK: - Web-attribution match response
 
     /// The API's lookup answer, as `formatAttributionResponse` shapes it: absent ids are `null`.
