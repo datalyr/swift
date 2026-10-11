@@ -24,6 +24,10 @@ public struct TouchAttribution: Codable {
     public var gbraid: String?
     public var wbraid: String?
     public var oppref: String?
+    public var twclid: String?
+    public var liFatId: String?
+    public var sclid: String?
+    public var aleid: String?
 
     // LYR tag
     public var lyr: String?
@@ -216,8 +220,23 @@ public class JourneyManager {
     /// Updates first-touch (if not set), last-touch, and adds touchpoint
     public func recordAttribution(sessionId: String, attribution: TouchAttribution) async {
         // Only process if we have meaningful attribution data
+        // Click ids count on their own. Nothing sets `clickId`, so a click-id-only touch (the
+        // default Meta-ad shape, `?fbclid=` with no UTMs) used to be dropped here. `clickIdType`
+        // covers ids with no touch field (msclkid, dclid).
+        let hasClickId = attribution.clickId != nil ||
+                         attribution.clickIdType != nil ||
+                         attribution.fbclid != nil ||
+                         attribution.gclid != nil ||
+                         attribution.ttclid != nil ||
+                         attribution.gbraid != nil ||
+                         attribution.wbraid != nil ||
+                         attribution.oppref != nil ||
+                         attribution.twclid != nil ||
+                         attribution.liFatId != nil ||
+                         attribution.sclid != nil ||
+                         attribution.aleid != nil
         let hasAttribution = attribution.source != nil ||
-                            attribution.clickId != nil ||
+                            hasClickId ||
                             attribution.campaign != nil ||
                             attribution.lyr != nil
 

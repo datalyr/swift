@@ -29,8 +29,17 @@ internal let ATTRIBUTION_PARAMS = [
     // Partner tracking parameters
     "partner_id", "affiliate_id", "referrer_id", "source_id",
 
-    // Other platforms
-    "twclid", "li_click_id", "msclkid",
+    // Other platforms. `li_fat_id` is LinkedIn's real click-id param; the old `li_click_id`
+    // entry captured nothing because LinkedIn never sends it (a previously persisted value is
+    // still read and migrated — see AttributionData.migrateLegacyClickIds()).
+    "twclid", "li_fat_id", "msclkid",
+
+    // Snapchat appends `ScCid` (keys are lowercased before lookup, so `sccid`); `sclid` is
+    // the canonical name ingest and the web SDK use. Both store as `sclid`.
+    "sccid", "sclid",
+
+    // AppLovin: `aleid` (click id) and `alart` (app-user id). Opaque, kept verbatim.
+    "aleid", "alart",
 
     // Custom attribution parameters
     // FSR-86: removed irclickid / fb_click_id / fb_action_ids / fb_action_types / click_id —
@@ -45,6 +54,24 @@ internal let ATTRIBUTION_PARAMS = [
     // NOT the same field as `placement_id` above (Feed/Reels/Story vs an id).
     "placement", "site_source_name"
 ]
+
+/// Click ids from the web-attribution match response (deferred IP lookup and email lookup)
+/// that are copied onto `$web_attribution_matched` and gap-filled into AttributionData, beyond
+/// the original fbclid/gclid/ttclid/gbraid/wbraid. Only non-empty strings are copied: the API
+/// answers `null` for absent ids.
+internal let WEB_MATCH_PLATFORM_CLICK_IDS = ["twclid", "li_fat_id", "sclid", "aleid"]
+
+/// The ids to copy from a lookup response onto `$web_attribution_matched`: the
+/// `WEB_MATCH_PLATFORM_CLICK_IDS` plus `alart` when the response itself carries one (the
+/// persisted `alart` is not attached to that event). Non-empty strings only; `null` / absent /
+/// non-string values are left out.
+internal func webMatchEventIds(_ attribution: [String: Any]) -> [String: String] {
+    var out: [String: String] = [:]
+    for key in WEB_MATCH_PLATFORM_CLICK_IDS + AttributionData.appUserIdKeys.sorted() {
+        if let value = attribution[key] as? String, !value.isEmpty { out[key] = value }
+    }
+    return out
+}
 
 // MARK: - Attribution Manager
 
@@ -102,8 +129,14 @@ internal class AttributionManager {
     
     /// Load persisted attribution data
     private func loadAttributionData() async {
-        if let savedData = await storage.getCodable(StorageKeys.attributionData, type: AttributionData.self) {
+        if var savedData = await storage.getCodable(StorageKeys.attributionData, type: AttributionData.self) {
+            // Installs from 2.1.16 and earlier may have persisted `li_click_id`; carry it to
+            // `li_fat_id` once and re-save so the legacy key is gone from storage.
+            let migrated = savedData.migrateLegacyClickIds()
             attributionData = savedData
+            if migrated {
+                await saveAttributionData()
+            }
             debugLog("Loaded attribution data", data: attributionData.toDictionary())
         }
     }
@@ -164,10 +197,11 @@ internal class AttributionManager {
             return parameters
         }
         
-        // Extract query parameters
+        // Extract query parameters. Empty values (`?sclid=`) are dropped here and below: stored,
+        // they became the touch's click type and overwrote a real stored value. (RN drops them too.)
         if let queryItems = components.queryItems {
             for item in queryItems {
-                if let value = item.value, ATTRIBUTION_PARAMS.contains(item.name.lowercased()) {
+                if let value = item.value, !value.isEmpty, ATTRIBUTION_PARAMS.contains(item.name.lowercased()) {
                     parameters[item.name.lowercased()] = value
                 }
             }
@@ -180,7 +214,7 @@ internal class AttributionManager {
             
             if let fragmentItems = fragmentComponents.queryItems {
                 for item in fragmentItems {
-                    if let value = item.value, ATTRIBUTION_PARAMS.contains(item.name.lowercased()) {
+                    if let value = item.value, !value.isEmpty, ATTRIBUTION_PARAMS.contains(item.name.lowercased()) {
                         parameters[item.name.lowercased()] = value
                     }
                 }
@@ -222,7 +256,10 @@ internal class AttributionManager {
         attributionData.dclid = parameters["dclid"] ?? attributionData.dclid
         attributionData.oppref = parameters["oppref"] ?? attributionData.oppref
         attributionData.twclid = parameters["twclid"] ?? attributionData.twclid
-        attributionData.liClickId = parameters["li_click_id"] ?? attributionData.liClickId
+        attributionData.liFatId = parameters["li_fat_id"] ?? attributionData.liFatId
+        attributionData.sclid = parameters["sccid"] ?? parameters["sclid"] ?? attributionData.sclid
+        attributionData.aleid = parameters["aleid"] ?? attributionData.aleid
+        attributionData.alart = parameters["alart"] ?? attributionData.alart
         attributionData.msclkid = parameters["msclkid"] ?? attributionData.msclkid
         
         // Partner & Affiliate Tracking
@@ -375,6 +412,7 @@ internal class AttributionManager {
     /// Set attribution data manually
     func setAttributionData(_ data: AttributionData) async {
         attributionData = data
+        attributionData.migrateLegacyClickIds()
         await saveAttributionData()
         debugLog("Attribution data set manually")
     }
@@ -412,6 +450,21 @@ internal class AttributionManager {
         }
         if attributionData.lyr == nil, let lyr = webAttribution["lyr"] as? String {
             attributionData.lyr = lyr
+        }
+        // X, LinkedIn, Snapchat and AppLovin click ids. The lookup response already carried
+        // twclid / li_fat_id / sclid and they were dropped here, so a matched install from
+        // those platforms reached later events with no click id. Same gap-fill precedence.
+        if attributionData.twclid == nil, let v = webAttribution["twclid"] as? String, !v.isEmpty {
+            attributionData.twclid = v
+        }
+        if attributionData.liFatId == nil, let v = webAttribution["li_fat_id"] as? String, !v.isEmpty {
+            attributionData.liFatId = v
+        }
+        if attributionData.sclid == nil, let v = webAttribution["sclid"] as? String, !v.isEmpty {
+            attributionData.sclid = v
+        }
+        if attributionData.aleid == nil, let v = webAttribution["aleid"] as? String, !v.isEmpty {
+            attributionData.aleid = v
         }
 
         // Ad ENTITY ids recovered from the matched web click. Without these the app side

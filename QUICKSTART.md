@@ -2,7 +2,7 @@
 
 > Everything you need to set up mobile attribution, event tracking, and web-to-app campaigns in your iOS app.
 
-Current release: **2.1.16**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.17**. Every event posts to `https://ingest.datalyr.com/track`.
 
 **Links:** [Full Docs](https://docs.datalyr.com) | [iOS SDK Reference](https://docs.datalyr.com/sdk-reference/ios) | [GitHub](https://github.com/datalyr/swift)
 
@@ -24,13 +24,13 @@ That's all you need. Only the API key is required -- `workspaceId` is no longer 
 
 1. In Xcode, select **File > Add Package Dependencies**
 2. Enter the repository URL: `https://github.com/datalyr/swift`
-3. Select version **2.1.16**
+3. Select version **2.1.17**
 4. Add **DatalyrSDK** to your app target
 
 Or in `Package.swift`:
 ```swift
 dependencies: [
-  .package(url: "https://github.com/datalyr/swift", from: "2.1.16")
+  .package(url: "https://github.com/datalyr/swift", from: "2.1.17")
 ]
 ```
 
@@ -38,7 +38,7 @@ dependencies: [
 
 Add to your `Podfile`:
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.16'
+pod 'DatalyrSDK', '~> 2.1.17'
 ```
 
 Then run:
@@ -499,7 +499,7 @@ Get your Workspace ID from **Settings > General** in the Datalyr dashboard.
 
 - Page views
 - UTM parameters (`utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`)
-- Ad click IDs (`fbclid`, `gclid`, `ttclid`, `twclid`, `li_click_id`, `msclkid`)
+- Ad click IDs (`fbclid`, `gclid`, `ttclid`, `twclid`, `li_fat_id`, `msclkid`)
 - Referrer data
 - Visitor ID (stored in cookie)
 - IP address and user agent

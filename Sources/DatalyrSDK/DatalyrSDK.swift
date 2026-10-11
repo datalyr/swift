@@ -187,38 +187,14 @@ public class DatalyrSDK {
         // attribution's capture-time vs the last recorded touch's capturedAt, and carry the
         // REAL capture timestamp into the touch instead of 0.
         if let attribution = attributionManager?.getAttributionData() {
-            let hasAttribution = attribution.utmSource != nil ||
-                                attribution.fbclid != nil ||
-                                attribution.gclid != nil ||
-                                attribution.lyr != nil
-
             let capturedAt = attribution.attributionCapturedAt ?? 0
             let lastTouchCapturedAt = JourneyManager.shared.getLastTouch()?.capturedAt ?? 0
             // Fresh iff we have a capture-time and it is newer than the last recorded touch.
             // (capturedAt == 0 means legacy/unknown — treat as NOT new so we don't re-roll.)
             let isNewAttribution = capturedAt > 0 && capturedAt > lastTouchCapturedAt
 
-            if hasAttribution && isNewAttribution {
-                var touchAttribution = TouchAttribution(
-                    timestamp: capturedAt,
-                    expiresAt: 0,
-                    capturedAt: capturedAt
-                )
-                touchAttribution.source = attribution.utmSource ?? attribution.campaignSource
-                touchAttribution.medium = attribution.utmMedium ?? attribution.campaignMedium
-                touchAttribution.campaign = attribution.utmCampaign ?? attribution.campaignName
-                touchAttribution.fbclid = attribution.fbclid
-                touchAttribution.gclid = attribution.gclid
-                touchAttribution.ttclid = attribution.ttclid
-                touchAttribution.lyr = attribution.lyr
-                if attribution.fbclid != nil {
-                    touchAttribution.clickIdType = "fbclid"
-                } else if attribution.gclid != nil {
-                    touchAttribution.clickIdType = "gclid"
-                } else if attribution.ttclid != nil {
-                    touchAttribution.clickIdType = "ttclid"
-                }
-
+            if attribution.hasJourneyAttribution && isNewAttribution {
+                let touchAttribution = attribution.makeTouchAttribution(capturedAt: capturedAt)
                 await JourneyManager.shared.recordAttribution(sessionId: sessionId, attribution: touchAttribution)
             }
         }
@@ -731,6 +707,7 @@ public class DatalyrSDK {
             if let ttclid = attribution["ttclid"] { mergedData["ttclid"] = ttclid }
             if let gbraid = attribution["gbraid"] { mergedData["gbraid"] = gbraid }
             if let wbraid = attribution["wbraid"] { mergedData["wbraid"] = wbraid }
+            for (key, value) in webMatchEventIds(attribution) { mergedData[key] = value }
             // Emit BOTH `_fbp`/`_fbc` (the Meta cookie names the attribution MV +
             // postback actually extract — JSONExtractString(event_data,'_fbp')) AND the
             // bare keys. Previously only `fbp`/`fbc` were sent, which no reader extracts,
@@ -960,6 +937,7 @@ public class DatalyrSDK {
             if let ttclid = attribution["ttclid"] { matchData["ttclid"] = ttclid }
             if let gbraid = attribution["gbraid"] { matchData["gbraid"] = gbraid }
             if let wbraid = attribution["wbraid"] { matchData["wbraid"] = wbraid }
+            for (key, value) in webMatchEventIds(attribution) { matchData[key] = value }
             // Emit both `_fbp`/`_fbc` (extracted by the attribution MV + postback) and the
             // bare keys — see the email-path note above.
             if let fbp = attribution["_fbp"] ?? attribution["fbp"] {
@@ -1976,7 +1954,11 @@ public class DatalyrSDK {
         // clobber an explicit property like track("purchase",
         // ["utm_source": "push"]).
         if let attribution = attributionManager?.getAttributionData() {
-            for (key, value) in attribution.toDictionary() where enrichedEventData[key] == nil {
+            // App-user ids (AppLovin `alart`) ride only app_install / $deep_link, and only with
+            // ATT authorized; never every event.
+            let attAuthorized = AttributionData.isTrackingAuthorized(attStatus: cachedAdvertiserData?["att_status"])
+            for (key, value) in attribution.eventProperties(for: eventName, trackingAuthorized: attAuthorized)
+                where enrichedEventData[key] == nil {
                 enrichedEventData[key] = value
             }
         }
@@ -2001,6 +1983,14 @@ public class DatalyrSDK {
                 enrichedEventData["advertiser_tracking_enabled"] = trackingAuthorized
             }
         }
+
+        // Final ATT gate for app-user ids from ANY source (install merge, $deep_link URL params,
+        // the web-match response, caller properties): without ATT authorization they are not
+        // sent. They stay persisted on the device. Same cached status that gates the IDFA, so
+        // an event carrying alart always carries the IDFA when one exists and routes to the
+        // ATT tracking domain.
+        AttributionData.removeAppUserIds(from: &enrichedEventData,
+                                         unlessAttStatus: cachedAdvertiserData?["att_status"])
 
         let workspaceIdValue = config?.workspaceId ?? ""
         return EventPayload(
@@ -2078,7 +2068,7 @@ public class DatalyrSDK {
 
             // Add attribution data if available
             if let attribution = attributionManager?.trackInstall() {
-                installData.merge(attribution.toDictionary()) { (_, new) in new }
+                installData.merge(attribution.toDictionary(includingAppUserIds: true)) { (_, new) in new }
             }
 
             await track("app_install", eventData: installData)
@@ -2280,7 +2270,16 @@ extension DatalyrSDK: AutoEventsTrackingDelegate {
 // MARK: - Attribution Data Extension
 
 extension AttributionData {
-    func toDictionary() -> [String: Any] {
+    /// The persisted attribution attached to `eventName`: every key except the app-user ids,
+    /// which only `appUserIdEvents` carry, and only when ATT is authorized.
+    func eventProperties(for eventName: String, trackingAuthorized: Bool) -> [String: Any] {
+        return toDictionary(includingAppUserIds: trackingAuthorized
+                            && AttributionData.appUserIdEvents.contains(eventName))
+    }
+
+    /// - Parameter includingAppUserIds: include `AttributionData.appUserIdKeys` (`alart`). Only
+    ///   for the events in `AttributionData.appUserIdEvents`; general events never carry them.
+    func toDictionary(includingAppUserIds: Bool = false) -> [String: Any] {
         // P2-9: Mirror reflection emitted the Swift property names (utmSource,
         // liClickId, installTime), but the wire contract ingest reads is the
         // snake_case CodingKeys (utm_source, li_click_id, install_time) — so
@@ -2289,10 +2288,14 @@ extension AttributionData {
         // persisted/JSON key names. Value filter unchanged from the Mirror
         // version: non-empty strings only (numeric internals like
         // attribution_captured_at are SDK bookkeeping and stay off the wire).
-        guard let data = try? JSONEncoder().encode(self),
+        // A legacy `li_click_id` goes out as `li_fat_id` (ingest reads only the latter).
+        var current = self
+        current.migrateLegacyClickIds()
+        guard let data = try? JSONEncoder().encode(current),
               let obj = try? JSONSerialization.jsonObject(with: data),
               let raw = obj as? [String: Any] else { return [:] }
-        return raw.compactMapValues { value -> Any? in
+        let filtered = includingAppUserIds ? raw : raw.filter { !AttributionData.appUserIdKeys.contains($0.key) }
+        return filtered.compactMapValues { value -> Any? in
             if let s = value as? String { return s.isEmpty ? nil : s }
             return nil
         }

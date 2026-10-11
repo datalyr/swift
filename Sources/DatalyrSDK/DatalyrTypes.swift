@@ -253,8 +253,28 @@ public struct AttributionData: Codable {
     public var dclid: String?   // Google Display & Video 360 (ingest clickIdMapping supports it)
     public var oppref: String?
     public var twclid: String?
-    public var liClickId: String?
+    /// LinkedIn's click id (`li_fat_id`, the param LinkedIn actually appends).
+    public var liFatId: String?
+    /// Snapchat click id. Captured from `ScCid` / `sccid` / `sclid`; `sclid` is the canonical name.
+    public var sclid: String?
+    /// AppLovin click id (`aleid`). Opaque, stored verbatim.
+    public var aleid: String?
+    /// AppLovin app-user id (`alart`). Opaque, stored verbatim. Not a click id. Sent only on
+    /// `app_install` / `$deep_link` (see `appUserIdEvents`) and only with ATT authorized.
+    public var alart: String?
     public var msclkid: String?
+
+    /// Renamed: LinkedIn never sends `li_click_id`. Reads and writes `liFatId`.
+    @available(*, deprecated, renamed: "liFatId")
+    public var liClickId: String? {
+        get { liFatId }
+        set { liFatId = newValue }
+    }
+
+    /// A `li_click_id` persisted by 2.1.16 and earlier. Decoded only so it can be moved to
+    /// `liFatId` by `migrateLegacyClickIds()`; nil after migration, so it is never re-encoded
+    /// (synthesized Codable skips nil optionals) and never reaches the wire.
+    internal var legacyLiClickId: String?
     
     // Partner & Affiliate Tracking
     public var partnerId: String?
@@ -317,7 +337,9 @@ public struct AttributionData: Codable {
         // FSR-35: `oppref` (OpenAI click-id) was declared on the struct but MISSING here, so
         // the synthesized encode/decode silently skipped it — captured then lost on relaunch.
         case fbclid, ttclid, gclid, wbraid, gbraid, dclid, oppref, twclid
-        case liClickId = "li_click_id"
+        case liFatId = "li_fat_id"
+        case sclid, aleid, alart
+        case legacyLiClickId = "li_click_id"
         case msclkid
         case partnerId = "partner_id"
         case affiliateId = "affiliate_id"
@@ -341,6 +363,90 @@ public struct AttributionData: Codable {
         case installReferrer = "install_referrer"
         case attributionTimestamp = "attribution_timestamp"
         case attributionCapturedAt = "attribution_captured_at"
+    }
+
+    /// Click ids in primary order, as (wire name, value). The first present one is a touch's
+    /// `clickIdType`. fbclid > gclid > ttclid is the order the SDK always used; the rest follow
+    /// the web SDK's CLICK_IDS order, with AppLovin last. `alart` is an app-user id, not a click.
+    internal var clickIdsInPrimaryOrder: [(type: String, value: String?)] {
+        return [
+            ("fbclid", fbclid), ("gclid", gclid), ("ttclid", ttclid),
+            ("gbraid", gbraid), ("wbraid", wbraid), ("oppref", oppref), ("msclkid", msclkid),
+            ("twclid", twclid), ("li_fat_id", liFatId), ("sclid", sclid), ("dclid", dclid),
+            ("aleid", aleid)
+        ]
+    }
+
+    /// Wire name of the primary click id, or nil when none is present. Presence is `!= nil`,
+    /// exactly as the original fbclid/gclid/ttclid chain tested it.
+    internal var primaryClickIdType: String? {
+        return clickIdsInPrimaryOrder.first(where: { $0.value != nil })?.type
+    }
+
+    /// App-user ids (not click ids). AppLovin's `alart` is a persistent per-user id: captured
+    /// and persisted, but sent only on `appUserIdEvents`, never on every event (it would ride
+    /// every event regardless of ATT / opt-out, to the non-tracking host when there is no IDFA).
+    internal static let appUserIdKeys: Set<String> = ["alart"]
+
+    /// Events that carry the persisted app-user ids. `$web_attribution_matched` is not here: it
+    /// carries `alart` only when the lookup response returned one (`webMatchEventIds`).
+    internal static let appUserIdEvents: Set<String> = ["app_install", "$deep_link"]
+
+    /// True only for ATT `.authorized` (raw value 3). notDetermined (0), restricted (1), denied
+    /// (2) and an unknown status all count as not authorized. `attStatus` is the cached
+    /// `att_status` from `getAdvertiserData()` (UInt), so it matches the IDFA gate exactly.
+    internal static func isTrackingAuthorized(attStatus: Any?) -> Bool {
+        if let v = attStatus as? UInt { return v == 3 }
+        if let v = attStatus as? Int { return v == 3 }
+        return false
+    }
+
+    /// Remove the app-user ids from an outgoing event's properties unless ATT is authorized.
+    internal static func removeAppUserIds(from eventData: inout [String: Any], unlessAttStatus attStatus: Any?) {
+        guard !isTrackingAuthorized(attStatus: attStatus) else { return }
+        for key in appUserIdKeys { eventData.removeValue(forKey: key) }
+    }
+
+    /// Whether this attribution should record a journey touch at startup: a UTM source, any
+    /// click id (was fbclid/gclid only, so a bare `?li_fat_id=` / `?ttclid=` / `?aleid=` link
+    /// recorded nothing), or a `lyr` tag. `alart` alone does not count: it is not a click.
+    internal var hasJourneyAttribution: Bool {
+        return utmSource != nil || primaryClickIdType != nil || lyr != nil
+    }
+
+    /// The touch recorded for this attribution, stamped with its real capture time.
+    internal func makeTouchAttribution(capturedAt: TimeInterval) -> TouchAttribution {
+        var touch = TouchAttribution(timestamp: capturedAt, expiresAt: 0, capturedAt: capturedAt)
+        touch.source = utmSource ?? campaignSource
+        touch.medium = utmMedium ?? campaignMedium
+        touch.campaign = utmCampaign ?? campaignName
+        touch.fbclid = fbclid
+        touch.gclid = gclid
+        touch.ttclid = ttclid
+        touch.gbraid = gbraid
+        touch.wbraid = wbraid
+        touch.oppref = oppref
+        touch.twclid = twclid
+        touch.liFatId = liFatId
+        touch.sclid = sclid
+        touch.aleid = aleid
+        touch.lyr = lyr
+        // Every click id gets a type (was fbclid/gclid/ttclid only); those three keep their
+        // precedence. Order lives in clickIdsInPrimaryOrder.
+        touch.clickIdType = primaryClickIdType
+        return touch
+    }
+
+    /// Move a legacy `li_click_id` to `liFatId` (an existing `liFatId` wins). Returns true
+    /// when something changed, so the caller can re-persist.
+    @discardableResult
+    internal mutating func migrateLegacyClickIds() -> Bool {
+        guard let legacy = legacyLiClickId else { return false }
+        if (liFatId ?? "").isEmpty, !legacy.isEmpty {
+            liFatId = legacy
+        }
+        legacyLiClickId = nil
+        return true
     }
 }
 

@@ -96,7 +96,7 @@ final class FullStackReviewTests: XCTestCase {
         a.lyr = "lyr1"; a.datalyr = "dl1"; a.dlTag = "tag"; a.dlCampaign = "camp"
         a.utmSource = "google"; a.utmMedium = "cpc"; a.utmCampaign = "c"; a.utmTerm = "t"; a.utmContent = "ct"
         a.fbclid = "fb"; a.ttclid = "tt"; a.gclid = "gc"; a.wbraid = "wb"; a.gbraid = "gb"
-        a.dclid = "dc"; a.oppref = "op"; a.twclid = "tw"; a.liClickId = "li"; a.msclkid = "ms"
+        a.dclid = "dc"; a.oppref = "op"; a.twclid = "tw"; a.liFatId = "li"; a.msclkid = "ms"
         a.partnerId = "p"; a.affiliateId = "af"; a.referrerId = "rf"; a.sourceId = "src"
         a.attributionCapturedAt = 1234567.0
 

@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.17] - 2026-10-11
+
+### Added
+- LinkedIn: deep links capture `li_fat_id`, the param LinkedIn actually appends, as `AttributionData.liFatId` (wire key `li_fat_id`).
+- Snapchat: `ScCid` / `sccid` / `sclid` are captured as `sclid` (previously ignored).
+- AppLovin: `aleid` (click id) and `alart` (app-user id) are captured verbatim and persisted. `aleid` rides every event like the other click ids. `alart` is a persistent per-user id, so it is sent only on `app_install` and `$deep_link` (and on `$web_attribution_matched` when the lookup response itself carries one), never on general events, and only when App Tracking Transparency is authorized. With ATT not determined, restricted or denied it stays on the device and is removed from every outgoing event, whatever its source.
+- Privacy manifest: declares `NSPrivacyCollectedDataTypeUserID` (Linked, Tracking; Analytics + Third-Party Advertising), covering `alart` and the user id passed to `identify()`.
+- The web-attribution match response (deferred IP lookup and `identify()` email lookup) now gap-fills `twclid`, `li_fat_id`, `sclid` and `aleid` into the persisted attribution and sends them on `$web_attribution_matched` (only when present; a `null` from the API adds no key). The API already returned the first three; they were dropped.
+- The first/last touch carries a `clickIdType` for every click id, not only `fbclid` / `gclid` / `ttclid`. Those three keep their precedence; the rest follow the web SDK's order (`gbraid`, `wbraid`, `oppref`, `msclkid`, `twclid`, `li_fat_id`, `sclid`, `dclid`), then `aleid`. `TouchAttribution` gains `twclid`, `liFatId`, `sclid`, `aleid`, and its `gbraid` / `wbraid` / `oppref` are now filled.
+
+### Changed
+- `li_click_id` is no longer captured from deep links (LinkedIn never sends it) and no longer sent. A value persisted by 2.1.16 or earlier is read once, moved to `li_fat_id` (an existing `li_fat_id` wins), and re-saved without the legacy key.
+- `AttributionData.liClickId` is deprecated and now aliases `liFatId`.
+
+### Fixed
+- A link with only a click id (no `utm_source` / `lyr`) now records the first/last touch. The startup gate checked only `utm_source`, `fbclid`, `gclid` and `lyr`, and `JourneyManager.recordAttribution` checked `source` / `clickId` / `campaign` / `lyr` while nothing set `clickId`, so even a bare `?fbclid=` link (the default Meta ad shape) recorded no touch. Both gates now accept any click id; `alart` alone still records none.
+- Deep-link params with an empty value (`?sclid=`) are ignored instead of stored. An empty value became the touch's click type and overwrote a real stored id. (The RN SDK already ignored them.)
+
+### Notes
+- Raw `sccid` / `ScCid` / `li_click_id` keys (from older SDK builds or `$deep_link` params) are normalised to `sclid` / `li_fat_id` server-side by ingest. No SDK change is needed for them.
+
 ## [2.1.16] - 2026-09-03
 
 ### Fixed
