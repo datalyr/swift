@@ -142,10 +142,6 @@ final class DeferredLookupWiringTests: XCTestCase {
         XCTAssertFalse(isResolved, "att_not_authorized must not resolve the lookup")
         XCTAssertEqual(attMisses, 1)
 
-        // Same status again (another trigger / same launch): no request.
-        await sdk.runDeferredLookupIfEligible()
-        XCTAssertEqual(DeferredLookupStub.bodies.count, 1, "not re-sent while the status is unchanged")
-
         // App called ATTrackingManager itself; user allowed; app becomes active.
         att.value = 3
         DeferredLookupStub.enqueue(["found": false, "reason": "no_web_traffic"])
@@ -172,37 +168,79 @@ final class DeferredLookupWiringTests: XCTestCase {
         XCTAssertEqual(sentStatuses, [0, 3])
     }
 
-    /// Denied users: no request per launch while the status stays the refused one, and the
-    /// miss is reported once per install per status. A different status asks again.
-    func testDeniedUserIsNotReaskedEveryLaunch() async {
+    /// (a) A refused install is asked again on each later launch (the workspace may have
+    /// turned on matching without ATT) — no attempt spent, no duplicate miss event.
+    func testRefusedInstallIsAskedAgainNextLaunchWithoutSpendingAttempts() async {
         att.value = 2
         var sdk = await launch()
         DeferredLookupStub.enqueue(["found": false, "reason": "att_not_authorized"])
         await sdk.runDeferredLookupIfEligible()
         XCTAssertEqual(attMisses, 1)
 
-        for _ in 0..<3 {
+        for _ in 0..<4 {
+            DeferredLookupStub.enqueue(["found": false, "reason": "att_not_authorized"])
             sdk = await launch()
             await sdk.runDeferredLookupIfEligible()
         }
-        XCTAssertEqual(DeferredLookupStub.bodies.count, 1, "no request per launch at the refused status")
-        XCTAssertEqual(attMisses, 1, "reported once per install per status")
+        XCTAssertEqual(sentStatuses, [2, 2, 2, 2, 2], "asked on every launch inside the window")
         let spent = await attempts()
-        XCTAssertEqual(spent, 0)
+        XCTAssertEqual(spent, 0, "refused requests never spend attempts")
+        let isResolved = await resolved()
+        XCTAssertFalse(isResolved)
+        XCTAssertEqual(attMisses, 1, "miss reported once per install per ATT status")
 
-        // Status changed (reset in Settings → notDetermined) — asks again, reports again.
+        // A different status is a new report.
         att.value = 0
         DeferredLookupStub.enqueue(["found": false, "reason": "att_not_authorized"])
         sdk = await launch()
         await sdk.runDeferredLookupIfEligible()
-        XCTAssertEqual(sentStatuses, [2, 0])
         XCTAssertEqual(attMisses, 2)
+    }
 
-        // Next launch with the user now authorized: runs immediately.
-        att.value = 3
-        sdk = await launch()
-        await sdk.runDeferredLookupIfEligible()
-        XCTAssertEqual(sentStatuses, [2, 0, 3])
+    /// (b) The customer turns on matching without ATT: the refused install's next lookup gets
+    /// the real answer, and the refused status is cleared (no grant re-run afterwards).
+    func testRefusedInstallGetsRealAnswerOnceServerAllowsIt() async {
+        for answer: [String: Any] in [
+            ["found": true, "attribution": ["visitor_id": "web_vis_1", "fbclid": "fb_1",
+                                            "utm_source": "facebook"]],
+            ["found": false, "reason": "no_candidates"],
+        ] {
+            await ATTDeferredLookupTests.clearLookupStorage()
+            DeferredLookupStub.reset()
+            events.value = []
+            att.value = 2
+
+            var sdk = await launch()
+            DeferredLookupStub.enqueue(["found": false, "reason": "att_not_authorized"])
+            await sdk.runDeferredLookupIfEligible()
+            let refusedBefore = await DatalyrStorage.shared.getDouble(StorageKeys.deferredLookupRefusedATTStatus)
+            XCTAssertEqual(refusedBefore, 2)
+
+            // Next launch, server switch now on.
+            DeferredLookupStub.enqueue(answer)
+            sdk = await launch()
+            await sdk.runDeferredLookupIfEligible()
+            XCTAssertEqual(DeferredLookupStub.bodies.count, 2)
+            let refusedAfter = await DatalyrStorage.shared.getDouble(StorageKeys.deferredLookupRefusedATTStatus)
+            XCTAssertNil(refusedAfter, "a real answer clears the refusal")
+            let spent = await attempts()
+            XCTAssertEqual(spent, 1, "the answered request spends its attempt")
+
+            if (answer["found"] as? Bool) == true {
+                XCTAssertTrue(events.value.contains { $0.0 == "$web_attribution_matched" })
+                let isResolved = await resolved()
+                XCTAssertTrue(isResolved)
+            } else {
+                XCTAssertTrue(events.value.contains {
+                    $0.0 == "$attribution_match" && ($0.1?["reason"] as? String) == "no_candidates"
+                })
+            }
+
+            // Granting later does not re-send (no refusal on record any more).
+            att.value = 3
+            await sdk.refreshATTOnForeground()?.value
+            XCTAssertEqual(DeferredLookupStub.bodies.count, 2)
+        }
     }
 
     // MARK: - Allowing workspaces behave like 2.1.17

@@ -894,9 +894,9 @@ public class DatalyrSDK {
                 if attStatus != 3 {
                     // The server did not look, so this request must not count against the
                     // install's attempts — the lookup after the user allows tracking needs
-                    // them. Stays unresolved. Remember the status it was declined at: the
-                    // lookup is not re-sent while the status stays the same, and runs at
-                    // once when it changes to authorized.
+                    // them. Stays unresolved and is asked again on the next launch (the
+                    // workspace may turn on matching without ATT). Remember the status it
+                    // was declined at, so a change to authorized re-runs it at once.
                     await attributionManager?.refundDeferredLookupAttempt()
                     await attributionManager?.recordDeferredLookupATTRefusal(status: attStatus)
                     debugLog("Deferred lookup waiting for ATT authorization (att_status \(attStatus))")
@@ -1356,8 +1356,7 @@ public class DatalyrSDK {
     @discardableResult
     private func refreshATTStatus(reported: UInt? = nil) -> (status: UInt, becameAuthorized: Bool) {
         guard let manager = platformIntegrationManager else {
-            // Same default as getTrackingAuthorizationStatus() without a manager.
-            return (reported ?? 3, false)
+            return (reported ?? PlatformIntegrationManager.liveTrackingAuthorizationStatus(), false)
         }
         cachedAdvertiserData = manager.getAdvertiserData()
         let status = reported ?? manager.getTrackingAuthorizationStatus()
@@ -1369,22 +1368,14 @@ public class DatalyrSDK {
         preInitLock.withLock { initialized }
     }
 
-    /// The live ATT status (not the cached one).
-    private func liveATTStatus() -> UInt {
-        platformIntegrationManager?.getTrackingAuthorizationStatus() ?? 3
-    }
-
     /// Run the deferred web→app lookup if the install is still eligible (inside the 7-day
-    /// window, not resolved, attempts left, and not declined at the current ATT status).
+    /// window, not resolved, attempts left).
     /// Single-flight: a call while a lookup is in flight queues a re-run instead of
     /// starting a second request.
     internal func runDeferredLookupIfEligible() async {
         guard initializedLocked, config?.enableAttribution == true, let manager = attributionManager else { return }
         await deferredLookupCoordinator.run(
-            isEligible: { [weak self] in
-                guard let self = self else { return false }
-                return await manager.shouldAttemptDeferredLookup(liveATTStatus: self.liveATTStatus())
-            },
+            isEligible: { await manager.shouldAttemptDeferredLookup() },
             lookup: { [weak self] in await self?.fetchDeferredWebAttribution() }
         )
     }
@@ -1396,10 +1387,9 @@ public class DatalyrSDK {
     internal func rerunDeferredLookupAfterATTGrant() async {
         guard initializedLocked, config?.enableAttribution == true, let manager = attributionManager else { return }
         await deferredLookupCoordinator.run(
-            isEligible: { [weak self] in
-                guard let self = self else { return false }
+            isEligible: {
                 guard await manager.deferredLookupRefusedATTStatus() != nil else { return false }
-                return await manager.shouldAttemptDeferredLookup(liveATTStatus: self.liveATTStatus())
+                return await manager.shouldAttemptDeferredLookup()
             },
             lookup: { [weak self] in await self?.fetchDeferredWebAttribution() }
         )

@@ -358,11 +358,12 @@ internal class AttributionManager {
     private static let deferredLookupWindow: TimeInterval = 7 * 24 * 3600
     private static let maxDeferredLookupAttempts = 3
 
-    /// Whether the deferred web→app IP lookup should be attempted now. `liveATTStatus` is
-    /// the current ATT status: when the server last declined at exactly this status
-    /// (`att_not_authorized`), asking again would get the same answer, so it is skipped
-    /// without spending an attempt until the status changes.
-    func shouldAttemptDeferredLookup(liveATTStatus: UInt? = nil) async -> Bool {
+    /// Whether the deferred web→app IP lookup should be attempted now.
+    ///
+    /// An earlier `att_not_authorized` answer does NOT stop it: the workspace may since have
+    /// turned on matching without ATT, and such a refusal is refunded, so asking again on
+    /// each launch inside the window costs no attempt.
+    func shouldAttemptDeferredLookup() async -> Bool {
         if await storage.getBool(StorageKeys.deferredLookupResolved) == true {
             return false
         }
@@ -386,16 +387,11 @@ internal class AttributionManager {
             return false
         }
 
-        if let live = liveATTStatus, let refused = await deferredLookupRefusedATTStatus(), refused == live {
-            debugLog("Deferred lookup not attempted: waiting for an ATT status change (declined at \(refused))")
-            return false
-        }
-
         return true
     }
 
     /// ATT status of the last `att_not_authorized` answer, or nil when the last answer was
-    /// anything else (or there was none).
+    /// anything else (or there was none). Gates only the re-run on ATT grant.
     func deferredLookupRefusedATTStatus() async -> UInt? {
         guard let v = await storage.getDouble(StorageKeys.deferredLookupRefusedATTStatus), v >= 0 else { return nil }
         return UInt(v)
