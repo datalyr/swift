@@ -68,8 +68,19 @@ public class DatalyrSDK {
     // Platform integrations (Apple Search Ads, IDFA/ATT)
     private var platformIntegrationManager: PlatformIntegrationManager?
 
-    // Cached advertiser data (IDFA, ATT status) — refreshed on ATT change
-    private var cachedAdvertiserData: [String: Any]?
+    // Cached advertiser data (IDFA, ATT status) — refreshed on ATT change, before each
+    // deferred lookup, and whenever the app becomes active. Written from the ATT callback,
+    // the foreground notification and the lookup while every track() reads it, so access
+    // goes through a lock; readers take one snapshot and use only that.
+    private let advertiserDataLock = NSLock()
+    private var _cachedAdvertiserData: [String: Any]?
+    private var cachedAdvertiserData: [String: Any]? {
+        get { advertiserDataLock.withLock { _cachedAdvertiserData } }
+        set { advertiserDataLock.withLock { _cachedAdvertiserData = newValue } }
+    }
+
+    /// Single-flight guard + ATT-transition tracking for the deferred web→app lookup.
+    internal let deferredLookupCoordinator = DeferredLookupCoordinator()
 
     // App lifecycle monitoring
     private var appStateObserver: NSObjectProtocol?
@@ -77,7 +88,8 @@ public class DatalyrSDK {
     private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
     #endif
     
-    private init() {
+    /// Internal (not private) so tests can drive an isolated instance; apps use `shared`.
+    internal init() {
         setupNotificationObservers()
     }
     
@@ -254,8 +266,9 @@ public class DatalyrSDK {
         }
         await platformIntegrationManager?.initialize(config: config)
 
-        // Cache advertiser data (IDFA, ATT status) once at init — refreshed on ATT change
-        cachedAdvertiserData = platformIntegrationManager?.getAdvertiserData()
+        // Cache advertiser data (IDFA, ATT status) at init — refreshed on ATT change. This
+        // also records the launch's baseline ATT status, so a later grant is seen as a change.
+        refreshATTStatus()
 
         // Mark as initialized AND snapshot+clear the pre-init buffers in the SAME critical
         // section track()/identify()/alias() use (FSR-90). Otherwise a concurrent call that
@@ -313,9 +326,7 @@ public class DatalyrSDK {
         // not having SUCCEEDED yet rather than on first launch: the first-launch marker is
         // written during attribution init, before this call, so it is spent whether or not
         // the lookup ever reached the server. shouldAttemptDeferredLookup() bounds the retries.
-        if config.enableAttribution, await attributionManager?.shouldAttemptDeferredLookup() == true {
-            await fetchDeferredWebAttribution()
-        }
+        await runDeferredLookupIfEligible()
 
         // Check for app install (after SDK is marked as initialized)
         await checkAndTrackInstall()
@@ -409,8 +420,16 @@ public class DatalyrSDK {
         await DatalyrStorage.shared.setDouble(StorageKeys.sessionTimestamp, value: Date().timeIntervalSince1970)
 
         let payload = await createEventPayload(eventName: eventName, eventData: eventData)
+        #if DEBUG
+        trackObserverForTesting?(eventName, eventData)
+        #endif
         await eventQueue?.enqueue(payload)
     }
+
+    #if DEBUG
+    /// Test support: sees every event that reaches the queue.
+    internal var trackObserverForTesting: ((String, EventData?) -> Void)?
+    #endif
     
     /// Track a screen view
     /// - Parameters:
@@ -488,15 +507,15 @@ public class DatalyrSDK {
         // 6.8 identifies per visitor per day on a shipped 2.1.3 build, worst
         // single user 129 in 24h (~64.7k events/day from one app).
         //
-        // Fingerprint = visitorId | userId | sorted traits. Including the
+        // Identity key = visitorId | userId | sorted traits. Including the
         // visitor id means a rotation (reset/new install) re-emits correctly,
         // so identity links are never lost — only exact repeats are skipped.
         // In-memory and persisted user state below still updates on every call.
-        let identityFingerprint = Self.sha256Hex(
+        let identityKey = Self.sha256Hex(
             "\(visitorId)|\(userId)|" + Self.stableTraitsString(properties)
         )
-        let previousFingerprint = await DatalyrStorage.shared.getString(StorageKeys.lastIdentityFingerprint)
-        let isRedundantIdentify = (previousFingerprint == identityFingerprint) && currentUserId == userId
+        let previousIdentityKey = await DatalyrStorage.shared.getString(StorageKeys.lastIdentityKey)
+        let isRedundantIdentify = (previousIdentityKey == identityKey) && currentUserId == userId
 
         // Update current user
         currentUserId = userId
@@ -532,7 +551,7 @@ public class DatalyrSDK {
         if isRedundantIdentify {
             debugLog("Skipping redundant identify (unchanged identity) for \(userId)")
         } else {
-            await DatalyrStorage.shared.setString(StorageKeys.lastIdentityFingerprint, value: identityFingerprint)
+            await DatalyrStorage.shared.setString(StorageKeys.lastIdentityKey, value: identityKey)
             await track("$identify", eventData: identifyData)
         }
 
@@ -750,7 +769,7 @@ public class DatalyrSDK {
     // MARK: - Web attribution dedup (once per email per install)
 
     /// Deterministic string for a traits dictionary (sorted keys) so an
-    /// unchanged identify produces an identical fingerprint across launches.
+    /// unchanged identify produces an identical identity key across launches.
     private static func stableTraitsString(_ properties: UserProperties?) -> String {
         guard let properties = properties, !properties.isEmpty else { return "" }
         return properties.keys.sorted()
@@ -790,6 +809,7 @@ public class DatalyrSDK {
     ///
     /// Every exit path either marks the lookup resolved (the server answered) or leaves it
     /// eligible for a later launch (nothing reached the server / nothing usable came back).
+    /// Call through runDeferredLookupIfEligible(), which keeps it single-flight.
     private func fetchDeferredWebAttribution() async {
         guard let apiKey = config?.apiKey else {
             // Not an answer from the server — a later launch with a configured key retries.
@@ -810,20 +830,23 @@ public class DatalyrSDK {
         request.setValue(apiKey, forHTTPHeaderField: "X-Datalyr-API-Key")
         request.timeoutInterval = 10
 
-        // Device fingerprint — the exact values the click-side fp_* capture
-        // approximates from the redirect request's headers. This is what opens the
-        // server's tier-2 matcher (fingerprint-corroborated store clicks up to 7
-        // days old); without it the server only runs the short exact-IP window.
+        // Device context — the exact values the click-side fp_* capture approximates
+        // from the redirect request's headers. This is what opens the server's tier-2
+        // matcher (device-context-corroborated store clicks up to 7 days old); without
+        // it the server only runs the short exact-IP window.
+        //
+        // att_status is read live right here, not taken from the init-time cache: the
+        // user may have answered the ATT prompt since, and a workspace that matches iOS
+        // installs only with tracking allowed decides on exactly this value.
+        let attStatus = refreshATTStatus().status
         let deviceInfo = getDeviceInfo()
-        var body: [String: Any] = [
-            "platform": "ios",
-            "os_version": deviceInfo.osVersion,
-            "device_model": deviceInfo.model,
-            "timezone": deviceInfo.timezone,
-        ]
-        if let language = Locale.preferredLanguages.first, !language.isEmpty {
-            body["language"] = language
-        }
+        let body = DeferredLookup.requestBody(
+            osVersion: deviceInfo.osVersion,
+            deviceModel: deviceInfo.model,
+            timezone: deviceInfo.timezone,
+            language: Locale.preferredLanguages.first,
+            attStatus: attStatus
+        )
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         // Spend the attempt before the request goes out: a request that never returns
@@ -841,10 +864,8 @@ public class DatalyrSDK {
             if httpResponse.statusCode != 200 {
                 // 5xx/408/429 are transient, so stay eligible. Anything else is definitive for
                 // this install — a disabled route (410), a rejected key (401) or a malformed
-                // request will not start working inside the server's one-hour match window.
-                let retryable = httpResponse.statusCode >= 500
-                    || httpResponse.statusCode == 408
-                    || httpResponse.statusCode == 429
+                // request will not start working inside the match window.
+                let retryable = DeferredLookup.disposition(forHTTPStatus: httpResponse.statusCode) == .retryLater
                 if !retryable {
                     await attributionManager?.markDeferredLookupResolved()
                 }
@@ -861,19 +882,47 @@ public class DatalyrSDK {
                 return
             }
 
-            // A parsed 200 is the server's definitive answer, matched or not — with
-            // ONE exception: `no_candidates` inside the first hour after install may
-            // just be ingest lag (click → queue → analytics store takes seconds to
-            // minutes), so it stays eligible for one more launch. Every other reason
-            // is terminal, and the attempt cap bounds the retry either way.
-            let missReason = (json["found"] as? Bool) == false ? (json["reason"] as? String ?? "no_candidates") : nil
+            // A parsed 200 is the server's definitive answer, matched or not — except
+            // `att_not_authorized` (no answer until ATT is allowed) and a fresh
+            // `no_candidates` (possible ingest lag). See DeferredLookup.disposition.
             // Not `await`: installAgeMinutes() is a plain synchronous read of a
             // stored Date. Marking it await compiled and behaved identically but
             // warned, and `pod trunk push` fails validation on warnings.
             let installAge = attributionManager?.installAgeMinutes()
-            let freshNoCandidates = missReason == "no_candidates" && (installAge ?? .infinity) < 60
-            if !freshNoCandidates {
+            let disposition = DeferredLookup.disposition(forBody: json, installAgeMinutes: installAge)
+            if disposition == .awaitingATT {
+                if attStatus != 3 {
+                    // The server did not look, so this request must not count against the
+                    // install's attempts — the lookup after the user allows tracking needs
+                    // them. Stays unresolved and is asked again on the next launch (the
+                    // workspace may turn on matching without ATT). Remember the status it
+                    // was declined at, so a change to authorized re-runs it at once.
+                    await attributionManager?.refundDeferredLookupAttempt()
+                    await attributionManager?.recordDeferredLookupATTRefusal(status: attStatus)
+                    debugLog("Deferred lookup waiting for ATT authorization (att_status \(attStatus))")
+                } else {
+                    // Declined although we sent 3 — not something a grant can fix, so the
+                    // attempt stays spent (the attempt cap bounds it) and no grant re-run.
+                    await attributionManager?.clearDeferredLookupATTRefusal()
+                    errorLog("Deferred lookup declined as att_not_authorized with att_status 3")
+                }
+                if await attributionManager?.claimATTMissReport(status: attStatus) == true {
+                    await trackAttributionMatchOutcome(
+                        matched: false,
+                        reason: DeferredLookup.attNotAuthorizedReason,
+                        windowMinutes: json["window_minutes"],
+                        extra: [:]
+                    )
+                }
+                return
+            }
+            // Any other parsed answer replaces an earlier ATT refusal.
+            await attributionManager?.clearDeferredLookupATTRefusal()
+            switch disposition {
+            case .resolve:
                 await attributionManager?.markDeferredLookupResolved()
+            case .retryLater, .awaitingATT:
+                break
             }
 
             guard let found = json["found"] as? Bool, found,
@@ -1140,9 +1189,9 @@ public class DatalyrSDK {
         // Clear stored user data
         await DatalyrStorage.shared.removeValue(StorageKeys.userId)
         await DatalyrStorage.shared.removeValue(StorageKeys.userProperties)
-        // Clear the identify fingerprint so the NEXT identify after a
+        // Clear the identify dedup key so the NEXT identify after a
         // logout/account switch always re-emits (new identity must relink).
-        await DatalyrStorage.shared.removeValue(StorageKeys.lastIdentityFingerprint)
+        await DatalyrStorage.shared.removeValue(StorageKeys.lastIdentityKey)
         await DatalyrStorage.shared.setString(StorageKeys.visitorId, value: visitorId)
         await DatalyrStorage.shared.setString(StorageKeys.anonymousId, value: anonymousId)
 
@@ -1271,10 +1320,10 @@ public class DatalyrSDK {
         }
 
         // Refresh cached advertiser data after ATT status change
-        cachedAdvertiserData = platformIntegrationManager?.getAdvertiserData()
+        let refreshed = refreshATTStatus(reported: status)
 
         // Track ATT status event
-        let attStatus = status ?? (platformIntegrationManager?.getTrackingAuthorizationStatus() ?? 0)
+        let attStatus = status ?? refreshed.status
         let statusName: String
         switch attStatus {
         case 0: statusName = "notDetermined"
@@ -1291,7 +1340,86 @@ public class DatalyrSDK {
         ])
 
         debugLog("ATT status updated: \(statusName) (\(attStatus))")
+
+        // Tracking was just allowed: if the server declined the lookup for lack of ATT, it
+        // can answer now. Not awaited, so the caller (and requestTrackingAuthorization's
+        // continuation) is not held up by the network.
+        if refreshed.becameAuthorized {
+            Task { await self.rerunDeferredLookupAfterATTGrant() }
+        }
     }
+
+    /// Re-read the ATT status live and refresh the cached advertiser data (IDFA, att_status)
+    /// that every event carries. `reported` is a status handed to us by the ATT callback,
+    /// preferred over the live read when given. Returns whether this read is the transition
+    /// to authorized (see DeferredLookupCoordinator.observeATTStatus).
+    @discardableResult
+    private func refreshATTStatus(reported: UInt? = nil) -> (status: UInt, becameAuthorized: Bool) {
+        guard let manager = platformIntegrationManager else {
+            return (reported ?? PlatformIntegrationManager.liveTrackingAuthorizationStatus(), false)
+        }
+        cachedAdvertiserData = manager.getAdvertiserData()
+        let status = reported ?? manager.getTrackingAuthorizationStatus()
+        return (status, deferredLookupCoordinator.observeATTStatus(status))
+    }
+
+    /// `initialized`, read under the lock initialize() sets it under.
+    private var initializedLocked: Bool {
+        preInitLock.withLock { initialized }
+    }
+
+    /// Run the deferred web→app lookup if the install is still eligible (inside the 7-day
+    /// window, not resolved, attempts left).
+    /// Single-flight: a call while a lookup is in flight queues a re-run instead of
+    /// starting a second request.
+    internal func runDeferredLookupIfEligible() async {
+        guard initializedLocked, config?.enableAttribution == true, let manager = attributionManager else { return }
+        await deferredLookupCoordinator.run(
+            isEligible: { await manager.shouldAttemptDeferredLookup() },
+            lookup: { [weak self] in await self?.fetchDeferredWebAttribution() }
+        )
+    }
+
+    /// Re-run after tracking became authorized — ONLY when the server's last answer was
+    /// `att_not_authorized`. Workspaces that match without ATT never send that answer, so for
+    /// them a grant changes nothing (a `no_candidates` kept open for the ingest-lag retry, or
+    /// a failed request, waits for the next launch exactly as in 2.1.17).
+    internal func rerunDeferredLookupAfterATTGrant() async {
+        guard initializedLocked, config?.enableAttribution == true, let manager = attributionManager else { return }
+        await deferredLookupCoordinator.run(
+            isEligible: {
+                guard await manager.deferredLookupRefusedATTStatus() != nil else { return false }
+                return await manager.shouldAttemptDeferredLookup()
+            },
+            lookup: { [weak self] in await self?.fetchDeferredWebAttribution() }
+        )
+    }
+
+    /// Foreground hook: re-read ATT (apps often call ATTrackingManager themselves) so events
+    /// carry the current status, and start the post-grant re-run when tracking was just
+    /// allowed. Returns the started task (tests await it).
+    @discardableResult
+    internal func refreshATTOnForeground() -> Task<Void, Never>? {
+        guard initializedLocked else { return nil }
+        guard refreshATTStatus().becameAuthorized else { return nil }
+        return Task { await self.rerunDeferredLookupAfterATTGrant() }
+    }
+
+    #if DEBUG
+    /// Test support: wire an isolated instance without running initialize() (no event
+    /// queue, no network besides the lookup itself).
+    internal func configureForDeferredLookupTesting(
+        config: DatalyrConfig,
+        attributionManager: AttributionManager,
+        platformIntegrationManager: PlatformIntegrationManager
+    ) {
+        self.config = config
+        self.attributionManager = attributionManager
+        self.platformIntegrationManager = platformIntegrationManager
+        refreshATTStatus()
+        preInitLock.withLock { initialized = true }
+    }
+    #endif
 
     /// Check if App Tracking Transparency is authorized
     /// - Returns: true if ATT is authorized or not required (pre-iOS 14.5)
@@ -1953,10 +2081,13 @@ public class DatalyrSDK {
         // enrichedEventData) WINS on key collision — attribution must never
         // clobber an explicit property like track("purchase",
         // ["utm_source": "push"]).
+        // ONE snapshot of the advertiser data per payload, so the alart gate, the IDFA and
+        // att_status below all agree even if the ATT status changes mid-build.
+        let advertiserSnapshot = cachedAdvertiserData
         if let attribution = attributionManager?.getAttributionData() {
             // App-user ids (AppLovin `alart`) ride only app_install / $deep_link, and only with
             // ATT authorized; never every event.
-            let attAuthorized = AttributionData.isTrackingAuthorized(attStatus: cachedAdvertiserData?["att_status"])
+            let attAuthorized = AttributionData.isTrackingAuthorized(attStatus: advertiserSnapshot?["att_status"])
             for (key, value) in attribution.eventProperties(for: eventName, trackingAuthorized: attAuthorized)
                 where enrichedEventData[key] == nil {
                 enrichedEventData[key] = value
@@ -1970,7 +2101,7 @@ public class DatalyrSDK {
 
         // Advertiser data (IDFA, ATT status) for server-side postback
         // Uses cached data — refreshed at init and on ATT change
-        if let advertiserData = cachedAdvertiserData {
+        if let advertiserData = advertiserSnapshot {
             enrichedEventData["advertiser_data"] = advertiserData
             // Include key fields at root level for postback workers
             if let idfa = advertiserData["idfa"] as? String {
@@ -1990,7 +2121,7 @@ public class DatalyrSDK {
         // an event carrying alart always carries the IDFA when one exists and routes to the
         // ATT tracking domain.
         AttributionData.removeAppUserIds(from: &enrichedEventData,
-                                         unlessAttStatus: cachedAdvertiserData?["att_status"])
+                                         unlessAttStatus: advertiserSnapshot?["att_status"])
 
         let workspaceIdValue = config?.workspaceId ?? ""
         return EventPayload(
@@ -2138,6 +2269,12 @@ public class DatalyrSDK {
         Task {
             await refreshSessionIfNeeded()
         }
+
+        // Apps often call ATTrackingManager.requestTrackingAuthorization themselves rather
+        // than through the SDK, and the prompt makes the app resign/become active. Re-read
+        // the status here so events carry it, and re-run the deferred lookup if tracking was
+        // just allowed after the server declined it for lack of ATT.
+        refreshATTOnForeground()
     }
     
     @objc private func appWillTerminate() {

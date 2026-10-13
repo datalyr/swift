@@ -260,7 +260,7 @@ internal class DatalyrHTTPClient {
             let serverPayload = transformForServerAPI(payload)
             requestBody = try JSONSerialization.data(withJSONObject: serverPayload)
         } else {
-            requestBody = try JSONEncoder().encode(payload)
+            requestBody = try EventPayload.wireEncoder().encode(payload)
         }
         request.httpBody = requestBody
         
@@ -368,7 +368,9 @@ internal class DatalyrHTTPClient {
         if let deviceCtx = payload.deviceContext,
            let ctxData = try? JSONEncoder().encode(deviceCtx),
            let ctxDict = try? JSONSerialization.jsonObject(with: ctxData) as? [String: Any] {
-            properties["fingerprint"] = ctxDict
+            // Ingest reads `properties.device_context` (and still accepts the pre-2.1.18
+            // `properties.fingerprint` from older SDK builds).
+            properties["device_context"] = ctxDict
         }
         result["properties"] = properties
 

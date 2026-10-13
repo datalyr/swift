@@ -2,7 +2,7 @@
 
 > Everything you need to set up mobile attribution, event tracking, and web-to-app campaigns in your iOS app.
 
-Current release: **2.1.17**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.18**. Every event posts to `https://ingest.datalyr.com/track`.
 
 **Links:** [Full Docs](https://docs.datalyr.com) | [iOS SDK Reference](https://docs.datalyr.com/sdk-reference/ios) | [GitHub](https://github.com/datalyr/swift)
 
@@ -24,13 +24,13 @@ That's all you need. Only the API key is required -- `workspaceId` is no longer 
 
 1. In Xcode, select **File > Add Package Dependencies**
 2. Enter the repository URL: `https://github.com/datalyr/swift`
-3. Select version **2.1.17**
+3. Select version **2.1.18**
 4. Add **DatalyrSDK** to your app target
 
 Or in `Package.swift`:
 ```swift
 dependencies: [
-  .package(url: "https://github.com/datalyr/swift", from: "2.1.17")
+  .package(url: "https://github.com/datalyr/swift", from: "2.1.18")
 ]
 ```
 
@@ -38,7 +38,7 @@ dependencies: [
 
 Add to your `Podfile`:
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.17'
+pod 'DatalyrSDK', '~> 2.1.18'
 ```
 
 Then run:
@@ -779,8 +779,8 @@ Privacy-compliant. No per-campaign adset cap. Unlimited optimization signals.
 
 **IP Matching (~90%+ accuracy for immediate installs):**
 1. Web SDK records visitor's IP, user agent, and all attribution data when `trackAppDownloadClick()` fires
-2. After install, mobile SDK sends the device's IP address
-3. Datalyr matches the mobile IP against recent `app_download_click` events from the same IP within 24 hours
+2. After install, mobile SDK sends the device's IP address, device context (OS version, model, timezone, language) and current ATT status
+3. Datalyr matches the device against recent `app_download_click` events — exact IP for recent clicks, IP plus device context for clicks up to 7 days old. The SDK keeps asking for up to 7 days after install until it gets an answer
 4. If match found, the app user is linked to the web visitor
 
 **Email Fallback (for delayed installs, VPN changes):**
@@ -806,7 +806,7 @@ Privacy-compliant. No per-campaign adset cap. Unlimited optimization signals.
 
 ## Step 9: App Tracking Transparency (iOS 14.5+)
 
-ATT is **not required** for web-to-app campaigns (that's the whole point). But if the user grants permission, it improves match quality by providing IDFA.
+By default, web-to-app matching does not depend on ATT. If the user grants permission, the IDFA is added to events. A workspace can choose to match iOS installs only when tracking is authorized; in that case the SDK waits for the grant and runs the match again once the user allows tracking (within 7 days of install).
 
 ```swift
 import AppTrackingTransparency
@@ -1036,7 +1036,8 @@ No. Optional iOS 14+ feature. Not needed if using web-to-app campaigns with Supe
 3. Is mobile SDK initialized in your app?
 4. Did user install from the same IP? (check for VPN/network change)
 5. Is `identify()` called with email? (iOS fallback)
-6. Is attribution within window? (24hr for IP, 30d for email)
+6. Is attribution within window? (up to 7 days for the install lookup, 30d for email)
+7. Does the workspace match iOS installs only with ATT authorized? Look for `$attribution_match` with reason `att_not_authorized`
 
 ### Postbacks Not Sending
 

@@ -456,10 +456,18 @@ internal enum StorageKeys {
     /// written during init regardless of what the lookup did. See AttributionManager.
     static let deferredLookupResolved = "datalyr_deferred_lookup_resolved"
     static let deferredLookupAttempts = "datalyr_deferred_lookup_attempts"
+    /// ATT status (0-3) of the last lookup the server declined with `att_not_authorized`.
+    /// When set, a change to authorized re-runs the lookup at once. Absent when the last
+    /// answer was anything else.
+    static let deferredLookupRefusedATTStatus = "datalyr_deferred_lookup_att_refused_status"
+    /// ATT status for which `$attribution_match` / `att_not_authorized` was last reported,
+    /// so that miss is reported once per install per status.
+    static let deferredLookupATTMissReportedStatus = "datalyr_deferred_lookup_att_miss_reported_status"
     static let installTracked = "datalyr_install_tracked"
     static let lastAppVersion = "datalyr_last_app_version"
-    /// Fingerprint of the last identify() that actually emitted, so a host app
-    /// calling identify() on every launch/screen does not re-emit unchanged
-    /// identity. See DatalyrSDK.identify().
-    static let lastIdentityFingerprint = "datalyr_last_identity_fingerprint"
+    /// Hash of the last identify() that actually emitted (visitor id, user id,
+    /// traits), so a host app calling identify() on every launch/screen does not
+    /// re-emit unchanged identity. See DatalyrSDK.identify(). The stored key string
+    /// is unchanged from earlier releases so existing installs keep their dedup state.
+    static let lastIdentityKey = "datalyr_last_identity_fingerprint"
 } 

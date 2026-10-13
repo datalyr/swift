@@ -350,7 +350,7 @@ internal class AttributionManager {
     /// This MUST NOT be tighter than the server's match reach, or the SDK stops asking
     /// while the server would still have answered — the original 60-minute bound sat
     /// against a server configured for 180 and forfeited two thirds of the window.
-    /// Now 7 days, matching the server's tier-2 fingerprint matcher
+    /// Now 7 days, matching the server's tier-2 device-context matcher
     /// (DEFERRED_FP_MATCH_MAX_DAYS): the click history is server-side, so a device
     /// that was offline at install — or whose first attempts failed in transit — can
     /// still recover its attribution days later. The attempt cap, not the window, is
@@ -358,7 +358,11 @@ internal class AttributionManager {
     private static let deferredLookupWindow: TimeInterval = 7 * 24 * 3600
     private static let maxDeferredLookupAttempts = 3
 
-    /// Whether the deferred web→app IP lookup should be attempted on this launch.
+    /// Whether the deferred web→app IP lookup should be attempted now.
+    ///
+    /// An earlier `att_not_authorized` answer does NOT stop it: the workspace may since have
+    /// turned on matching without ATT, and such a refusal is refunded, so asking again on
+    /// each launch inside the window costs no attempt.
     func shouldAttemptDeferredLookup() async -> Bool {
         if await storage.getBool(StorageKeys.deferredLookupResolved) == true {
             return false
@@ -386,11 +390,44 @@ internal class AttributionManager {
         return true
     }
 
+    /// ATT status of the last `att_not_authorized` answer, or nil when the last answer was
+    /// anything else (or there was none). Gates only the re-run on ATT grant.
+    func deferredLookupRefusedATTStatus() async -> UInt? {
+        guard let v = await storage.getDouble(StorageKeys.deferredLookupRefusedATTStatus), v >= 0 else { return nil }
+        return UInt(v)
+    }
+
+    func recordDeferredLookupATTRefusal(status: UInt) async {
+        await storage.setDouble(StorageKeys.deferredLookupRefusedATTStatus, value: Double(status))
+    }
+
+    func clearDeferredLookupATTRefusal() async {
+        await storage.removeValue(StorageKeys.deferredLookupRefusedATTStatus)
+    }
+
+    /// True when the `att_not_authorized` miss has not been reported yet for this ATT status
+    /// on this install; records it as reported.
+    func claimATTMissReport(status: UInt) async -> Bool {
+        let last = await storage.getDouble(StorageKeys.deferredLookupATTMissReportedStatus)
+        if let last = last, last == Double(status) { return false }
+        await storage.setDouble(StorageKeys.deferredLookupATTMissReportedStatus, value: Double(status))
+        return true
+    }
+
     /// Count an issued lookup request. Called before the request goes out so an attempt that
     /// never returns (process killed mid-flight) still consumes budget.
     func recordDeferredLookupAttempt() async {
         let attempts = await storage.getDouble(StorageKeys.deferredLookupAttempts) ?? 0
         await storage.setDouble(StorageKeys.deferredLookupAttempts, value: attempts + 1)
+    }
+
+    /// Give back the attempt spent on a request the server declined to match only because
+    /// ATT is not authorized yet (`att_not_authorized`). That answer says nothing about
+    /// whether a web touch exists, so it must not use up one of the install's attempts:
+    /// the lookup that runs after the user allows tracking needs that budget.
+    func refundDeferredLookupAttempt() async {
+        let attempts = await storage.getDouble(StorageKeys.deferredLookupAttempts) ?? 0
+        await storage.setDouble(StorageKeys.deferredLookupAttempts, value: max(0, attempts - 1))
     }
 
     /// Minutes since install, or nil when the install time is unknown. Drives the
@@ -575,3 +612,130 @@ internal class AttributionManager {
         )
     }
 } 
+// MARK: - Deferred web→app lookup: request body, answer handling, scheduling
+
+/// What one deferred-lookup answer means for the install's lookup state.
+internal enum DeferredLookupDisposition: Equatable {
+    /// The server answered definitively (matched or not). No further attempts this install.
+    case resolve
+    /// Nothing usable came back (transport error, 5xx, fresh `no_candidates`). The attempt
+    /// stays spent and a later launch inside the window may retry.
+    case retryLater
+    /// The server will not match this install until ATT is authorized
+    /// (`att_not_authorized`). Not an answer about the install: the attempt is refunded and
+    /// the lookup runs again once the user allows tracking.
+    case awaitingATT
+}
+
+internal enum DeferredLookup {
+    /// The miss reason the server sends when the workspace matches iOS installs only with
+    /// ATT authorized and this request did not carry `att_status: 3`.
+    static let attNotAuthorizedReason = "att_not_authorized"
+
+    /// The JSON body for POST /attribution/deferred-lookup. `att_status` is the live ATT
+    /// status (0 notDetermined, 1 restricted, 2 denied, 3 authorized) as a plain Int — the
+    /// server compares it numerically.
+    static func requestBody(
+        osVersion: String,
+        deviceModel: String,
+        timezone: String,
+        language: String?,
+        attStatus: UInt
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "platform": "ios",
+            "os_version": osVersion,
+            "device_model": deviceModel,
+            "timezone": timezone,
+            "att_status": Int(min(attStatus, UInt(Int.max))),
+        ]
+        if let language = language, !language.isEmpty {
+            body["language"] = language
+        }
+        return body
+    }
+
+    /// Disposition of a non-200 response. 5xx/408/429 are transient; anything else is
+    /// definitive for this install (disabled route, rejected key, malformed request).
+    static func disposition(forHTTPStatus statusCode: Int) -> DeferredLookupDisposition {
+        let retryable = statusCode >= 500 || statusCode == 408 || statusCode == 429
+        return retryable ? .retryLater : .resolve
+    }
+
+    /// Disposition of a parsed 200 body.
+    ///
+    /// A parsed 200 is the server's definitive answer, matched or not, with two exceptions:
+    /// - `att_not_authorized`: the server declined to look, so there is no answer yet;
+    /// - `no_candidates` inside the first hour after install may just be ingest lag
+    ///   (click → queue → analytics store takes seconds to minutes), so it stays eligible
+    ///   for one more launch. The attempt cap bounds that retry.
+    static func disposition(forBody json: [String: Any], installAgeMinutes: Double?) -> DeferredLookupDisposition {
+        guard (json["found"] as? Bool) == false else { return .resolve }
+        let reason = json["reason"] as? String ?? "no_candidates"
+        if reason == attNotAuthorizedReason { return .awaitingATT }
+        if reason == "no_candidates" && (installAgeMinutes ?? .infinity) < 60 { return .retryLater }
+        return .resolve
+    }
+}
+
+/// Per-launch scheduling state for the deferred lookup. Thread-safe.
+///
+/// - At most one lookup is in flight. A run requested while one is in flight (typically
+///   the user allowing tracking while the launch lookup is still waiting on the network)
+///   is queued — the latest request wins — and runs, with its own eligibility check, once
+///   the in-flight one finishes. So a post-grant lookup is not lost and two never overlap.
+/// - Tracks the last ATT status the SDK observed, so a transition to authorized — via
+///   requestTrackingAuthorization, updateTrackingAuthorization, or the app calling
+///   ATTrackingManager itself and coming back to the foreground — is seen exactly once.
+///   Whether that transition re-runs the lookup is decided by the caller (only after an
+///   `att_not_authorized` answer).
+internal final class DeferredLookupCoordinator {
+    typealias Pass = (isEligible: () async -> Bool, lookup: () async -> Void)
+
+    private let lock = NSLock()
+    private var inFlight = false
+    private var queued: Pass?
+    private var lastObservedATTStatus: UInt?
+
+    /// Run `lookup` if `isEligible` says so, single-flight (see type doc).
+    func run(isEligible: @escaping () async -> Bool, lookup: @escaping () async -> Void) async {
+        var pass: Pass? = (isEligible, lookup)
+        let claimed: Bool = lock.withLock {
+            if inFlight {
+                queued = pass
+                return false
+            }
+            inFlight = true
+            return true
+        }
+        guard claimed else { return }
+        while let current = pass {
+            if await current.isEligible() {
+                await current.lookup()
+            }
+            pass = lock.withLock {
+                let next = queued
+                queued = nil
+                if next == nil { inFlight = false }
+                return next
+            }
+        }
+    }
+
+    var isInFlight: Bool {
+        lock.withLock { inFlight }
+    }
+
+    /// Record the ATT status just read. Returns true only on a transition from a known
+    /// non-authorized status to authorized (3). The first observation is a baseline, not a
+    /// transition: an install that was already authorized at launch runs its lookup from
+    /// initialize() with `att_status: 3` and needs no second one.
+    func observeATTStatus(_ status: UInt) -> Bool {
+        lock.withLock {
+            let previous = lastObservedATTStatus
+            lastObservedATTStatus = status
+            guard let previous = previous else { return false }
+            return previous != 3 && status == 3
+        }
+    }
+}
