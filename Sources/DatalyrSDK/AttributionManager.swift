@@ -350,7 +350,7 @@ internal class AttributionManager {
     /// This MUST NOT be tighter than the server's match reach, or the SDK stops asking
     /// while the server would still have answered — the original 60-minute bound sat
     /// against a server configured for 180 and forfeited two thirds of the window.
-    /// Now 7 days, matching the server's tier-2 fingerprint matcher
+    /// Now 7 days, matching the server's tier-2 device-context matcher
     /// (DEFERRED_FP_MATCH_MAX_DAYS): the click history is server-side, so a device
     /// that was offline at install — or whose first attempts failed in transit — can
     /// still recover its attribution days later. The attempt cap, not the window, is
@@ -391,6 +391,15 @@ internal class AttributionManager {
     func recordDeferredLookupAttempt() async {
         let attempts = await storage.getDouble(StorageKeys.deferredLookupAttempts) ?? 0
         await storage.setDouble(StorageKeys.deferredLookupAttempts, value: attempts + 1)
+    }
+
+    /// Give back the attempt spent on a request the server declined to match only because
+    /// ATT is not authorized yet (`att_not_authorized`). That answer says nothing about
+    /// whether a web touch exists, so it must not use up one of the install's attempts:
+    /// the lookup that runs after the user allows tracking needs that budget.
+    func refundDeferredLookupAttempt() async {
+        let attempts = await storage.getDouble(StorageKeys.deferredLookupAttempts) ?? 0
+        await storage.setDouble(StorageKeys.deferredLookupAttempts, value: max(0, attempts - 1))
     }
 
     /// Minutes since install, or nil when the install time is unknown. Drives the
@@ -575,3 +584,148 @@ internal class AttributionManager {
         )
     }
 } 
+// MARK: - Deferred web→app lookup: request body, answer handling, scheduling
+
+/// What one deferred-lookup answer means for the install's lookup state.
+internal enum DeferredLookupDisposition: Equatable {
+    /// The server answered definitively (matched or not). No further attempts this install.
+    case resolve
+    /// Nothing usable came back (transport error, 5xx, fresh `no_candidates`). The attempt
+    /// stays spent and a later launch inside the window may retry.
+    case retryLater
+    /// The server will not match this install until ATT is authorized
+    /// (`att_not_authorized`). Not an answer about the install: the attempt is refunded and
+    /// the lookup runs again once the user allows tracking.
+    case awaitingATT
+}
+
+internal enum DeferredLookup {
+    /// The miss reason the server sends when the workspace matches iOS installs only with
+    /// ATT authorized and this request did not carry `att_status: 3`.
+    static let attNotAuthorizedReason = "att_not_authorized"
+
+    /// The JSON body for POST /attribution/deferred-lookup. `att_status` is the live ATT
+    /// status (0 notDetermined, 1 restricted, 2 denied, 3 authorized) as a plain Int — the
+    /// server compares it numerically.
+    static func requestBody(
+        osVersion: String,
+        deviceModel: String,
+        timezone: String,
+        language: String?,
+        attStatus: UInt
+    ) -> [String: Any] {
+        var body: [String: Any] = [
+            "platform": "ios",
+            "os_version": osVersion,
+            "device_model": deviceModel,
+            "timezone": timezone,
+            "att_status": Int(min(attStatus, UInt(Int.max))),
+        ]
+        if let language = language, !language.isEmpty {
+            body["language"] = language
+        }
+        return body
+    }
+
+    /// Disposition of a non-200 response. 5xx/408/429 are transient; anything else is
+    /// definitive for this install (disabled route, rejected key, malformed request).
+    static func disposition(forHTTPStatus statusCode: Int) -> DeferredLookupDisposition {
+        let retryable = statusCode >= 500 || statusCode == 408 || statusCode == 429
+        return retryable ? .retryLater : .resolve
+    }
+
+    /// Disposition of a parsed 200 body.
+    ///
+    /// A parsed 200 is the server's definitive answer, matched or not, with two exceptions:
+    /// - `att_not_authorized`: the server declined to look, so there is no answer yet;
+    /// - `no_candidates` inside the first hour after install may just be ingest lag
+    ///   (click → queue → analytics store takes seconds to minutes), so it stays eligible
+    ///   for one more launch. The attempt cap bounds that retry.
+    static func disposition(forBody json: [String: Any], installAgeMinutes: Double?) -> DeferredLookupDisposition {
+        guard (json["found"] as? Bool) == false else { return .resolve }
+        let reason = json["reason"] as? String ?? "no_candidates"
+        if reason == attNotAuthorizedReason { return .awaitingATT }
+        if reason == "no_candidates" && (installAgeMinutes ?? .infinity) < 60 { return .retryLater }
+        return .resolve
+    }
+}
+
+/// Per-launch scheduling state for the deferred lookup. Thread-safe.
+///
+/// - At most one lookup is in flight. A run requested while one is in flight (typically
+///   the user allowing tracking while the launch lookup is still waiting on the network)
+///   is queued, and runs once the in-flight one finishes — so the post-grant lookup is not
+///   lost, and two never overlap.
+/// - Tracks the last ATT status the SDK observed, so a transition to authorized — via
+///   requestTrackingAuthorization, updateTrackingAuthorization, or the app calling
+///   ATTrackingManager itself and coming back to the foreground — can trigger a re-run
+///   exactly once.
+/// - Lets the `att_not_authorized` miss be reported at most once per launch.
+internal final class DeferredLookupCoordinator {
+    private let lock = NSLock()
+    private var inFlight = false
+    private var rerunQueued = false
+    private var lastObservedATTStatus: UInt?
+    private var reportedATTMiss = false
+
+    /// Claim the single lookup slot. Returns false (and queues one re-run) when a lookup is
+    /// already in flight.
+    func tryBegin() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if inFlight {
+            rerunQueued = true
+            return false
+        }
+        inFlight = true
+        return true
+    }
+
+    /// Finish the in-flight lookup. Returns true when a re-run was queued meanwhile — the
+    /// caller keeps the slot and runs again; false releases the slot.
+    func finish() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if rerunQueued {
+            rerunQueued = false
+            return true
+        }
+        inFlight = false
+        return false
+    }
+
+    /// Run `lookup` if `isEligible` says so, single-flight. A call made while a run is in
+    /// progress queues one more pass instead of overlapping, and the in-progress run picks
+    /// it up before releasing the slot (eligibility is re-checked for that pass).
+    func run(isEligible: () async -> Bool, lookup: () async -> Void) async {
+        guard tryBegin() else { return }
+        repeat {
+            if await isEligible() {
+                await lookup()
+            }
+        } while finish()
+    }
+
+    var isInFlight: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return inFlight
+    }
+
+    /// Record the ATT status just read. Returns true only on a transition from a known
+    /// non-authorized status to authorized (3). The first observation is a baseline, not a
+    /// transition: an install that was already authorized at launch runs its lookup from
+    /// initialize() with `att_status: 3` and needs no second one.
+    func observeATTStatus(_ status: UInt) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let previous = lastObservedATTStatus
+        lastObservedATTStatus = status
+        guard let previous = previous else { return false }
+        return previous != 3 && status == 3
+    }
+
+    /// True the first time it is called in this launch, false after.
+    func shouldReportATTMiss() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if reportedATTMiss { return false }
+        reportedATTMiss = true
+        return true
+    }
+}

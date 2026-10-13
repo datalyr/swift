@@ -138,11 +138,62 @@ public struct EventPayload: Codable {
     public let userId: String?
     public let userProperties: [String: AnyCodable]?
 
+    /// `deviceContext` is stored on disk (the persisted event queue) under its original
+    /// key `fingerprintData`, so queues written by any earlier release still decode and a
+    /// downgrade can still read a queue written by this one. On the network (the legacy
+    /// `useServerTracking: false` path, which posts this Codable payload as-is) it is sent
+    /// as `device_context`. Decoding accepts both.
     private enum CodingKeys: String, CodingKey {
         case workspaceId, visitorId, anonymousId, sessionId
         case eventId, eventName, eventData
         case deviceContext = "fingerprintData"
+        case wireDeviceContext = "device_context"
         case source, timestamp, userId, userProperties
+    }
+
+    /// Set to true in an encoder's userInfo to produce the network shape
+    /// (`device_context`) instead of the on-disk shape (`fingerprintData`).
+    internal static let wireFormatKey = CodingUserInfoKey(rawValue: "com.datalyr.eventPayload.wireFormat")!
+
+    /// Encoder for posting an EventPayload directly (legacy path).
+    internal static func wireEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.userInfo[wireFormatKey] = true
+        return encoder
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        workspaceId = try c.decode(String.self, forKey: .workspaceId)
+        visitorId = try c.decode(String.self, forKey: .visitorId)
+        anonymousId = try c.decode(String.self, forKey: .anonymousId)
+        sessionId = try c.decode(String.self, forKey: .sessionId)
+        eventId = try c.decode(String.self, forKey: .eventId)
+        eventName = try c.decode(String.self, forKey: .eventName)
+        eventData = try c.decodeIfPresent([String: AnyCodable].self, forKey: .eventData)
+        deviceContext = try c.decodeIfPresent(DeviceContext.self, forKey: .deviceContext)
+            ?? c.decodeIfPresent(DeviceContext.self, forKey: .wireDeviceContext)
+        source = try c.decode(String.self, forKey: .source)
+        timestamp = try c.decode(String.self, forKey: .timestamp)
+        userId = try c.decodeIfPresent(String.self, forKey: .userId)
+        userProperties = try c.decodeIfPresent([String: AnyCodable].self, forKey: .userProperties)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(workspaceId, forKey: .workspaceId)
+        try c.encode(visitorId, forKey: .visitorId)
+        try c.encode(anonymousId, forKey: .anonymousId)
+        try c.encode(sessionId, forKey: .sessionId)
+        try c.encode(eventId, forKey: .eventId)
+        try c.encode(eventName, forKey: .eventName)
+        try c.encodeIfPresent(eventData, forKey: .eventData)
+        let wire = (encoder.userInfo[Self.wireFormatKey] as? Bool) == true
+        try c.encodeIfPresent(deviceContext, forKey: wire ? .wireDeviceContext : .deviceContext)
+        try c.encode(source, forKey: .source)
+        try c.encode(timestamp, forKey: .timestamp)
+        try c.encodeIfPresent(userId, forKey: .userId)
+        try c.encodeIfPresent(userProperties, forKey: .userProperties)
     }
     
     public init(

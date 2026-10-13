@@ -458,8 +458,9 @@ internal enum StorageKeys {
     static let deferredLookupAttempts = "datalyr_deferred_lookup_attempts"
     static let installTracked = "datalyr_install_tracked"
     static let lastAppVersion = "datalyr_last_app_version"
-    /// Fingerprint of the last identify() that actually emitted, so a host app
-    /// calling identify() on every launch/screen does not re-emit unchanged
-    /// identity. See DatalyrSDK.identify().
-    static let lastIdentityFingerprint = "datalyr_last_identity_fingerprint"
+    /// Hash of the last identify() that actually emitted (visitor id, user id,
+    /// traits), so a host app calling identify() on every launch/screen does not
+    /// re-emit unchanged identity. See DatalyrSDK.identify(). The stored key string
+    /// is unchanged from earlier releases so existing installs keep their dedup state.
+    static let lastIdentityKey = "datalyr_last_identity_fingerprint"
 } 

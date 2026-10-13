@@ -2,7 +2,7 @@
 
 Server-side attribution, event tracking, SKAdNetwork conversion values, and Apple Search Ads attribution for iOS.
 
-Current release: **2.1.17**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.18**. Every event posts to `https://ingest.datalyr.com/track`.
 
 Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sdk-reference/ios).
 
@@ -38,7 +38,7 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 |---|---|
 | Minimum iOS | 13.0 |
 | Swift tools version | 5.7 |
-| Current release | 2.1.17 |
+| Current release | 2.1.18 |
 | Frameworks linked | `Foundation`, `UIKit`, `StoreKit`, `AdServices` (weak) |
 
 ---
@@ -49,19 +49,19 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 
 1. In Xcode, open **File > Add Package Dependencies**.
 2. Enter `https://github.com/datalyr/swift`.
-3. Select version 2.1.17.
+3. Select version 2.1.18.
 4. Add the `DatalyrSDK` product to your app target.
 
 In `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/datalyr/swift", from: "2.1.17")
+.package(url: "https://github.com/datalyr/swift", from: "2.1.18")
 ```
 
 ### CocoaPods
 
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.17'
+pod 'DatalyrSDK', '~> 2.1.18'
 ```
 
 Run `pod install`. Open the generated `.xcworkspace`.
@@ -366,7 +366,7 @@ A repeat call with an unchanged ID and unchanged traits sends no `$identify` eve
 | `userId` | Your ID from `identify()`. The key is absent until then. |
 | `properties.sessionId` | A bare UUID. No prefix. |
 | `context.session_id` | The same session UUID. This is the field Datalyr reads. |
-| `properties.fingerprint.deviceId` | A bare UUID for the install. |
+| `properties.device_context.deviceId` | A bare UUID for the install. Sent as `properties.fingerprint` before 2.1.18. |
 
 This SDK sends no `distinct_id` and no top-level `visitor_id`. Only the Web SDK sends `distinct_id`. To pass identity to RevenueCat or Superwall, use `getRevenueCatAttributes()` or `getSuperwallAttributes()`.
 
@@ -652,9 +652,13 @@ Neither method returns `oppref` or `gaid`.
 
 ## Web-to-App Attribution
 
-On first install the SDK asks the Datalyr API to match the device IP against `$app_download_click` web events from the last 24 hours. The Web SDK fires those events through `trackAppDownloadClick()`.
+After install the SDK asks the Datalyr API to match the device against `$app_download_click` web events. The Web SDK fires those events through `trackAppDownloadClick()`. The server matches on IP plus device context (OS version, model, timezone, language), and can match clicks up to 7 days old.
 
-The match runs inside `initialize()`, before `app_install` fires. Your app needs no extra code.
+The match runs inside `initialize()`, before `app_install` fires. Your app needs no extra code. Until the server gives a definitive answer, the SDK asks again on later launches for up to 7 days after install, with at most 3 counted attempts.
+
+Each lookup sends the current ATT status (`att_status`, 0–3), read at the moment of the request. A workspace can choose to match iOS installs only when tracking is authorized. For those workspaces, a lookup with ATT not authorized gets `att_not_authorized` back: the SDK does not count that attempt and does not mark the lookup finished. When the user later allows tracking — through `requestTrackingAuthorization()`, `updateTrackingAuthorization(status:)`, or your own `ATTrackingManager` call (picked up when the app becomes active) — the SDK runs the lookup again, as long as the 7-day window and attempts remain. Only one lookup is in flight at a time.
+
+Every lookup outcome is reported as `$attribution_match` with a `reason` (`matched`, `no_candidates`, `att_not_authorized`, `request_failed`, ...). `att_not_authorized` is reported at most once per app launch.
 
 After a match the SDK merges the web click IDs (`fbclid`, `gclid`, `ttclid`, `gbraid`, `wbraid`, `twclid`, `li_fat_id`, `sclid`, `aleid`), UTM parameters, and cookies into the mobile session, sends `$web_attribution_matched`, and stamps the merged attribution on every later event.
 
