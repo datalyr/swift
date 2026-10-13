@@ -34,25 +34,29 @@ internal class PlatformIntegrationManager {
 
     // MARK: - ATT / IDFA
 
-    /// Check if tracking is authorized (ATT)
-    func isTrackingAuthorized() -> Bool {
-        #if canImport(AppTrackingTransparency)
-        if #available(iOS 14, macOS 11, *) {
-            return ATTrackingManager.trackingAuthorizationStatus == .authorized
-        }
-        #endif
-        return true
-    }
+    /// Source of the ATT status. Always the live system value in the SDK; replaceable in
+    /// tests so the ATT-dependent paths can be driven.
+    var attStatusProvider: () -> UInt = PlatformIntegrationManager.liveTrackingAuthorizationStatus
 
-    /// Get ATT authorization status
-    /// Returns: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
-    func getTrackingAuthorizationStatus() -> UInt {
+    /// The live ATT status: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized.
+    static func liveTrackingAuthorizationStatus() -> UInt {
         #if canImport(AppTrackingTransparency)
         if #available(iOS 14, macOS 11, *) {
             return ATTrackingManager.trackingAuthorizationStatus.rawValue
         }
         #endif
         return 3 // authorized (pre-iOS 14)
+    }
+
+    /// Check if tracking is authorized (ATT)
+    func isTrackingAuthorized() -> Bool {
+        return attStatusProvider() == 3
+    }
+
+    /// Get ATT authorization status
+    /// Returns: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized
+    func getTrackingAuthorizationStatus() -> UInt {
+        return attStatusProvider()
     }
 
     /// Get IDFA (Identifier for Advertisers) if authorized

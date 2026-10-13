@@ -6,15 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - The deferred web→app lookup (`POST /attribution/deferred-lookup`) sends `att_status` (0 notDetermined, 1 restricted, 2 denied, 3 authorized) as a number. It is read live from `ATTrackingManager` right before the request, not taken from the value cached at `initialize()`.
-- The lookup runs again when tracking becomes authorized: after `requestTrackingAuthorization()`, after `updateTrackingAuthorization(status:)`, and when the app becomes active after the app called `ATTrackingManager` itself. Only while the install is inside the 7-day window, unresolved, and has attempts left. Only one lookup is in flight at a time; a grant during an in-flight lookup queues one re-run.
+- After an `att_not_authorized` answer, the lookup runs again as soon as tracking becomes authorized: after `requestTrackingAuthorization()`, after `updateTrackingAuthorization(status:)`, and when the app becomes active after the app called `ATTrackingManager` itself. Only while the install is inside the 7-day window, unresolved, and has attempts left. Only one lookup is in flight at a time; a grant during an in-flight lookup queues one re-run. Without an `att_not_authorized` answer a grant triggers nothing, so workspaces that match without ATT see the 2.1.17 behaviour.
 
 ### Changed
-- An `att_not_authorized` answer (the workspace matches iOS installs only with ATT authorized) no longer ends the lookup and no longer uses up one of the 3 attempts. It is reported as `$attribution_match` with `reason: att_not_authorized` at most once per launch.
+- An `att_not_authorized` answer (the workspace matches iOS installs only with ATT authorized) no longer ends the lookup and no longer uses up one of the 3 attempts (when the request carried a status other than 3). The SDK remembers the status it was declined at and does not re-send the lookup while the live status is unchanged, so a user who denied tracking is not asked on every launch. It is reported as `$attribution_match` with `reason: att_not_authorized` once per install per ATT status.
 - The ATT status cached on events (`att_status`, `idfa`) is refreshed whenever the app becomes active, so a grant made outside the SDK is picked up without a relaunch.
-- Device context is sent as `properties.device_context` (was `properties.fingerprint`). Ingest reads both, so older builds keep working. With `useServerTracking: false` the payload key is `device_context` (was `fingerprintData`). Events already queued on disk still decode: the on-disk key is unchanged and decoding accepts both.
+- Device context is sent as `properties.device_context` (was `properties.fingerprint`). Ingest reads both, so older builds keep working. With `useServerTracking: false` (posting to your own endpoint) the payload carries the device context under both `device_context` and the old `fingerprintData`, so an endpoint reading either keeps working. Events already queued on disk still decode: the on-disk key is unchanged and decoding accepts both.
 - The identify dedup state is named `lastIdentityKey` in code; the stored key string is unchanged, so existing installs keep their state.
 
 ### Fixed
+- The cached advertiser data (IDFA, ATT status) was read and written from several threads without a lock. It is now locked, and each event takes one snapshot, so `alart`, `idfa` and `att_status` on an event always agree.
 - Privacy manifest comment said the ingest and API domains were listed as tracking domains. They are not, on purpose: a listed host is blocked until ATT is authorized, which would stop events and the lookup. Declarations are unchanged.
 - README / QUICKSTART said the IP match window is 24 hours. The SDK asks for up to 7 days after install, and the server can match clicks up to 7 days old.
 

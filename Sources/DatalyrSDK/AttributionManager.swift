@@ -358,8 +358,11 @@ internal class AttributionManager {
     private static let deferredLookupWindow: TimeInterval = 7 * 24 * 3600
     private static let maxDeferredLookupAttempts = 3
 
-    /// Whether the deferred web→app IP lookup should be attempted on this launch.
-    func shouldAttemptDeferredLookup() async -> Bool {
+    /// Whether the deferred web→app IP lookup should be attempted now. `liveATTStatus` is
+    /// the current ATT status: when the server last declined at exactly this status
+    /// (`att_not_authorized`), asking again would get the same answer, so it is skipped
+    /// without spending an attempt until the status changes.
+    func shouldAttemptDeferredLookup(liveATTStatus: UInt? = nil) async -> Bool {
         if await storage.getBool(StorageKeys.deferredLookupResolved) == true {
             return false
         }
@@ -383,6 +386,35 @@ internal class AttributionManager {
             return false
         }
 
+        if let live = liveATTStatus, let refused = await deferredLookupRefusedATTStatus(), refused == live {
+            debugLog("Deferred lookup not attempted: waiting for an ATT status change (declined at \(refused))")
+            return false
+        }
+
+        return true
+    }
+
+    /// ATT status of the last `att_not_authorized` answer, or nil when the last answer was
+    /// anything else (or there was none).
+    func deferredLookupRefusedATTStatus() async -> UInt? {
+        guard let v = await storage.getDouble(StorageKeys.deferredLookupRefusedATTStatus), v >= 0 else { return nil }
+        return UInt(v)
+    }
+
+    func recordDeferredLookupATTRefusal(status: UInt) async {
+        await storage.setDouble(StorageKeys.deferredLookupRefusedATTStatus, value: Double(status))
+    }
+
+    func clearDeferredLookupATTRefusal() async {
+        await storage.removeValue(StorageKeys.deferredLookupRefusedATTStatus)
+    }
+
+    /// True when the `att_not_authorized` miss has not been reported yet for this ATT status
+    /// on this install; records it as reported.
+    func claimATTMissReport(status: UInt) async -> Bool {
+        let last = await storage.getDouble(StorageKeys.deferredLookupATTMissReportedStatus)
+        if let last = last, last == Double(status) { return false }
+        await storage.setDouble(StorageKeys.deferredLookupATTMissReportedStatus, value: Double(status))
         return true
     }
 
@@ -654,59 +686,48 @@ internal enum DeferredLookup {
 ///
 /// - At most one lookup is in flight. A run requested while one is in flight (typically
 ///   the user allowing tracking while the launch lookup is still waiting on the network)
-///   is queued, and runs once the in-flight one finishes — so the post-grant lookup is not
-///   lost, and two never overlap.
+///   is queued — the latest request wins — and runs, with its own eligibility check, once
+///   the in-flight one finishes. So a post-grant lookup is not lost and two never overlap.
 /// - Tracks the last ATT status the SDK observed, so a transition to authorized — via
 ///   requestTrackingAuthorization, updateTrackingAuthorization, or the app calling
-///   ATTrackingManager itself and coming back to the foreground — can trigger a re-run
-///   exactly once.
-/// - Lets the `att_not_authorized` miss be reported at most once per launch.
+///   ATTrackingManager itself and coming back to the foreground — is seen exactly once.
+///   Whether that transition re-runs the lookup is decided by the caller (only after an
+///   `att_not_authorized` answer).
 internal final class DeferredLookupCoordinator {
+    typealias Pass = (isEligible: () async -> Bool, lookup: () async -> Void)
+
     private let lock = NSLock()
     private var inFlight = false
-    private var rerunQueued = false
+    private var queued: Pass?
     private var lastObservedATTStatus: UInt?
-    private var reportedATTMiss = false
 
-    /// Claim the single lookup slot. Returns false (and queues one re-run) when a lookup is
-    /// already in flight.
-    func tryBegin() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if inFlight {
-            rerunQueued = true
-            return false
-        }
-        inFlight = true
-        return true
-    }
-
-    /// Finish the in-flight lookup. Returns true when a re-run was queued meanwhile — the
-    /// caller keeps the slot and runs again; false releases the slot.
-    func finish() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if rerunQueued {
-            rerunQueued = false
+    /// Run `lookup` if `isEligible` says so, single-flight (see type doc).
+    func run(isEligible: @escaping () async -> Bool, lookup: @escaping () async -> Void) async {
+        var pass: Pass? = (isEligible, lookup)
+        let claimed: Bool = lock.withLock {
+            if inFlight {
+                queued = pass
+                return false
+            }
+            inFlight = true
             return true
         }
-        inFlight = false
-        return false
-    }
-
-    /// Run `lookup` if `isEligible` says so, single-flight. A call made while a run is in
-    /// progress queues one more pass instead of overlapping, and the in-progress run picks
-    /// it up before releasing the slot (eligibility is re-checked for that pass).
-    func run(isEligible: () async -> Bool, lookup: () async -> Void) async {
-        guard tryBegin() else { return }
-        repeat {
-            if await isEligible() {
-                await lookup()
+        guard claimed else { return }
+        while let current = pass {
+            if await current.isEligible() {
+                await current.lookup()
             }
-        } while finish()
+            pass = lock.withLock {
+                let next = queued
+                queued = nil
+                if next == nil { inFlight = false }
+                return next
+            }
+        }
     }
 
     var isInFlight: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return inFlight
+        lock.withLock { inFlight }
     }
 
     /// Record the ATT status just read. Returns true only on a transition from a known
@@ -714,18 +735,11 @@ internal final class DeferredLookupCoordinator {
     /// transition: an install that was already authorized at launch runs its lookup from
     /// initialize() with `att_status: 3` and needs no second one.
     func observeATTStatus(_ status: UInt) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        let previous = lastObservedATTStatus
-        lastObservedATTStatus = status
-        guard let previous = previous else { return false }
-        return previous != 3 && status == 3
-    }
-
-    /// True the first time it is called in this launch, false after.
-    func shouldReportATTMiss() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        if reportedATTMiss { return false }
-        reportedATTMiss = true
-        return true
+        lock.withLock {
+            let previous = lastObservedATTStatus
+            lastObservedATTStatus = status
+            guard let previous = previous else { return false }
+            return previous != 3 && status == 3
+        }
     }
 }

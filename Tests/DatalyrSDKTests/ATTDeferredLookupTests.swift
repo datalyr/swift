@@ -6,6 +6,18 @@ import XCTest
 /// context travels as `device_context`.
 final class ATTDeferredLookupTests: XCTestCase {
 
+    override func tearDown() async throws {
+        await ATTDeferredLookupTests.clearLookupStorage()
+        try await super.tearDown()
+    }
+
+    static func clearLookupStorage() async {
+        for key in [StorageKeys.deferredLookupResolved, StorageKeys.deferredLookupAttempts,
+                    StorageKeys.deferredLookupRefusedATTStatus, StorageKeys.deferredLookupATTMissReportedStatus] {
+            await DatalyrStorage.shared.removeValue(key)
+        }
+    }
+
     // MARK: - att_status in the request body
 
     func testRequestBodyCarriesATTStatusAsNumber() throws {
@@ -76,8 +88,8 @@ final class ATTDeferredLookupTests: XCTestCase {
             await manager.recordDeferredLookupAttempt()
             await manager.refundDeferredLookupAttempt()
         }
-        let attempts = await DatalyrStorage.shared.getDouble(StorageKeys.deferredLookupAttempts) ?? 0
-        XCTAssertEqual(attempts, 0)
+        let attemptCount = await DatalyrStorage.shared.getDouble(StorageKeys.deferredLookupAttempts) ?? 0
+        XCTAssertEqual(attemptCount, 0)
         let resolved = await DatalyrStorage.shared.getBool(StorageKeys.deferredLookupResolved) ?? false
         XCTAssertFalse(resolved)
 
@@ -93,13 +105,6 @@ final class ATTDeferredLookupTests: XCTestCase {
         XCTAssertEqual(floor, 0)
 
         await manager.markDeferredLookupResolved()
-    }
-
-    func testATTMissReportedOncePerLaunch() {
-        let coordinator = DeferredLookupCoordinator()
-        XCTAssertTrue(coordinator.shouldReportATTMiss())
-        XCTAssertFalse(coordinator.shouldReportATTMiss())
-        XCTAssertFalse(coordinator.shouldReportATTMiss())
     }
 
     // MARK: - Re-run on grant
@@ -118,62 +123,6 @@ final class ATTDeferredLookupTests: XCTestCase {
                        "authorized at launch: the init lookup already carries 3")
     }
 
-    /// End to end over the real pieces: lookup at launch with ATT undetermined is declined,
-    /// the user allows tracking, and the re-run goes out with att_status 3 — within the
-    /// original attempt budget.
-    func testLookupRerunsAfterGrantWithStatus3() async {
-        await DatalyrStorage.shared.removeValue(StorageKeys.firstLaunchTime)
-        await DatalyrStorage.shared.removeValue(StorageKeys.deferredLookupResolved)
-        await DatalyrStorage.shared.removeValue(StorageKeys.deferredLookupAttempts)
-
-        let manager = AttributionManager()
-        await manager.initialize()
-        let coordinator = DeferredLookupCoordinator()
-        var liveATT: UInt = 0
-        var sentStatuses: [Int] = []
-
-        // Mirrors DatalyrSDK.fetchDeferredWebAttribution's bookkeeping.
-        let lookup: () async -> Void = {
-            let body = DeferredLookup.requestBody(
-                osVersion: "18", deviceModel: "iPhone", timezone: "UTC", language: nil, attStatus: liveATT
-            )
-            sentStatuses.append(body["att_status"] as? Int ?? -1)
-            await manager.recordDeferredLookupAttempt()
-            let answer: [String: Any] = liveATT == 3
-                ? ["found": false, "reason": "no_candidates"]
-                : ["found": false, "reason": "att_not_authorized"]
-            switch DeferredLookup.disposition(forBody: answer, installAgeMinutes: 600) {
-            case .resolve: await manager.markDeferredLookupResolved()
-            case .retryLater: break
-            case .awaitingATT: await manager.refundDeferredLookupAttempt()
-            }
-        }
-        let eligible: () async -> Bool = { await manager.shouldAttemptDeferredLookup() }
-
-        _ = coordinator.observeATTStatus(liveATT)
-        await coordinator.run(isEligible: eligible, lookup: lookup)   // launch
-        XCTAssertEqual(sentStatuses, [0])
-        var stillEligible = await manager.shouldAttemptDeferredLookup()
-        XCTAssertTrue(stillEligible, "att_not_authorized leaves the lookup open")
-
-        // Foreground without a change: nothing runs.
-        if coordinator.observeATTStatus(liveATT) {
-            await coordinator.run(isEligible: eligible, lookup: lookup)
-        }
-        XCTAssertEqual(sentStatuses, [0])
-
-        // User allows tracking.
-        liveATT = 3
-        if coordinator.observeATTStatus(liveATT) {
-            await coordinator.run(isEligible: eligible, lookup: lookup)
-        }
-        XCTAssertEqual(sentStatuses, [0, 3])
-        let attempts = await DatalyrStorage.shared.getDouble(StorageKeys.deferredLookupAttempts) ?? 0
-        XCTAssertEqual(attempts, 1, "only the answered lookup used an attempt")
-        stillEligible = await manager.shouldAttemptDeferredLookup()
-        XCTAssertFalse(stillEligible, "the post-grant answer is definitive")
-    }
-
     /// No double in-flight lookups: a grant arriving mid-request queues exactly one re-run.
     func testRunIsSingleFlightAndQueuesOneRerun() async {
         let coordinator = DeferredLookupCoordinator()
@@ -183,31 +132,41 @@ final class ATTDeferredLookupTests: XCTestCase {
         var maxConcurrent = 0
         var concurrent = 0
 
-        let first = Task {
-            await coordinator.run(isEligible: { true }, lookup: {
-                runs += 1
-                concurrent += 1
-                maxConcurrent = max(maxConcurrent, concurrent)
-                if runs == 1 {
-                    await withCheckedContinuation { c in
-                        gate = c
-                        started.fulfill()
-                    }
+        var replacedRuns = 0
+        var queuedRuns = 0
+        let lookup: () async -> Void = {
+            runs += 1
+            concurrent += 1
+            maxConcurrent = max(maxConcurrent, concurrent)
+            if runs == 1 {
+                await withCheckedContinuation { c in
+                    gate = c
+                    started.fulfill()
                 }
-                concurrent -= 1
-            })
+            }
+            concurrent -= 1
+        }
+        let first = Task {
+            await coordinator.run(isEligible: { true }, lookup: lookup)
         }
         await fulfillment(of: [started], timeout: 5)
         XCTAssertTrue(coordinator.isInFlight)
 
-        // Two more triggers while in flight (e.g. updateTrackingAuthorization + didBecomeActive).
-        await coordinator.run(isEligible: { true }, lookup: { XCTFail("must not start a second lookup") })
-        await coordinator.run(isEligible: { true }, lookup: { XCTFail("must not start a second lookup") })
+        // Two more triggers while in flight (e.g. updateTrackingAuthorization + didBecomeActive):
+        // neither starts a request now; the latest is queued and runs after the first.
+        await coordinator.run(isEligible: { true }, lookup: { replacedRuns += 1 })
+        await coordinator.run(isEligible: { true }, lookup: {
+            queuedRuns += 1
+            await lookup()
+        })
+        XCTAssertEqual(runs, 1, "nothing overlaps the in-flight lookup")
 
         gate?.resume()
         await first.value
 
         XCTAssertEqual(runs, 2, "the in-flight lookup plus exactly one queued re-run")
+        XCTAssertEqual(queuedRuns, 1)
+        XCTAssertEqual(replacedRuns, 0, "the latest queued request wins")
         XCTAssertEqual(maxConcurrent, 1)
         XCTAssertFalse(coordinator.isInFlight)
 
@@ -249,7 +208,7 @@ final class ATTDeferredLookupTests: XCTestCase {
         let wire = try JSONSerialization.jsonObject(
             with: EventPayload.wireEncoder().encode(payload)) as? [String: Any]
         XCTAssertNotNil(wire?["device_context"])
-        XCTAssertNil(wire?["fingerprintData"])
+        XCTAssertNotNil(wire?["fingerprintData"], "custom endpoints may still read the old key")
 
         let disk = try JSONSerialization.jsonObject(
             with: JSONEncoder().encode(payload)) as? [String: Any]

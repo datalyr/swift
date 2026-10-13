@@ -141,8 +141,9 @@ public struct EventPayload: Codable {
     /// `deviceContext` is stored on disk (the persisted event queue) under its original
     /// key `fingerprintData`, so queues written by any earlier release still decode and a
     /// downgrade can still read a queue written by this one. On the network (the legacy
-    /// `useServerTracking: false` path, which posts this Codable payload as-is) it is sent
-    /// as `device_context`. Decoding accepts both.
+    /// `useServerTracking: false` path, which posts this Codable payload as-is to a custom
+    /// endpoint) it is sent under both `device_context` and `fingerprintData`. Decoding
+    /// accepts both.
     private enum CodingKeys: String, CodingKey {
         case workspaceId, visitorId, anonymousId, sessionId
         case eventId, eventName, eventData
@@ -151,8 +152,8 @@ public struct EventPayload: Codable {
         case source, timestamp, userId, userProperties
     }
 
-    /// Set to true in an encoder's userInfo to produce the network shape
-    /// (`device_context`) instead of the on-disk shape (`fingerprintData`).
+    /// Set to true in an encoder's userInfo to produce the network shape (`device_context`
+    /// added next to `fingerprintData`) instead of the on-disk shape.
     internal static let wireFormatKey = CodingUserInfoKey(rawValue: "com.datalyr.eventPayload.wireFormat")!
 
     /// Encoder for posting an EventPayload directly (legacy path).
@@ -188,8 +189,12 @@ public struct EventPayload: Codable {
         try c.encode(eventId, forKey: .eventId)
         try c.encode(eventName, forKey: .eventName)
         try c.encodeIfPresent(eventData, forKey: .eventData)
-        let wire = (encoder.userInfo[Self.wireFormatKey] as? Bool) == true
-        try c.encodeIfPresent(deviceContext, forKey: wire ? .wireDeviceContext : .deviceContext)
+        // Disk: `fingerprintData` only. Wire: both keys — this path posts to a caller-chosen
+        // endpoint that may still read `fingerprintData`.
+        try c.encodeIfPresent(deviceContext, forKey: .deviceContext)
+        if (encoder.userInfo[Self.wireFormatKey] as? Bool) == true {
+            try c.encodeIfPresent(deviceContext, forKey: .wireDeviceContext)
+        }
         try c.encode(source, forKey: .source)
         try c.encode(timestamp, forKey: .timestamp)
         try c.encodeIfPresent(userId, forKey: .userId)

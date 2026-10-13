@@ -656,9 +656,11 @@ After install the SDK asks the Datalyr API to match the device against `$app_dow
 
 The match runs inside `initialize()`, before `app_install` fires. Your app needs no extra code. Until the server gives a definitive answer, the SDK asks again on later launches for up to 7 days after install, with at most 3 counted attempts.
 
-Each lookup sends the current ATT status (`att_status`, 0–3), read at the moment of the request. A workspace can choose to match iOS installs only when tracking is authorized. For those workspaces, a lookup with ATT not authorized gets `att_not_authorized` back: the SDK does not count that attempt and does not mark the lookup finished. When the user later allows tracking — through `requestTrackingAuthorization()`, `updateTrackingAuthorization(status:)`, or your own `ATTrackingManager` call (picked up when the app becomes active) — the SDK runs the lookup again, as long as the 7-day window and attempts remain. Only one lookup is in flight at a time.
+Each lookup sends the current ATT status (`att_status`, 0–3), read at the moment of the request. A workspace can choose to match iOS installs only when tracking is authorized. For those workspaces, a lookup with ATT not authorized gets `att_not_authorized` back: the SDK does not count that attempt, does not mark the lookup finished, and does not ask again while the ATT status stays the same. When the user later allows tracking — through `requestTrackingAuthorization()`, `updateTrackingAuthorization(status:)`, or your own `ATTrackingManager` call (picked up when the app becomes active) — the SDK runs the lookup again right away, as long as the 7-day window and attempts remain. Only one lookup is in flight at a time.
 
-Every lookup outcome is reported as `$attribution_match` with a `reason` (`matched`, `no_candidates`, `att_not_authorized`, `request_failed`, ...). `att_not_authorized` is reported at most once per app launch.
+Workspaces that match without ATT never get `att_not_authorized`, and for them allowing tracking does not trigger an extra lookup.
+
+Every lookup outcome is reported as `$attribution_match` with a `reason` (`matched`, `no_candidates`, `att_not_authorized`, `request_failed`, ...). `att_not_authorized` is reported once per install per ATT status.
 
 After a match the SDK merges the web click IDs (`fbclid`, `gclid`, `ttclid`, `gbraid`, `wbraid`, `twclid`, `li_fat_id`, `sclid`, `aleid`), UTM parameters, and cookies into the mobile session, sends `$web_attribution_matched`, and stamps the merged attribution on every later event.
 
