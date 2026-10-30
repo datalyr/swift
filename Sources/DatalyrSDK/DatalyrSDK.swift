@@ -51,6 +51,8 @@ public class DatalyrSDK {
     private var eventQueue: DatalyrEventQueue?
     // internal (not private) so DatalyrSDK+Public.handleDeepLink can reach the real parser.
     var attributionManager: AttributionManager?
+    /// How this device's first SDK launch was classified (nil once the install was tracked).
+    var installClassification: InstallClassification?
     private var autoEventsManager: AutoEventsManager?
     
     // Session and user data
@@ -208,6 +210,10 @@ public class DatalyrSDK {
             self?.notifyDelegateOfError(.networkError(underlyingError: error), eventName: event.payload.eventName)
         }
 
+        // Install vs existing user (2.2.0): decided before the SDK writes any id or marker
+        // of its own, which would otherwise read as an earlier run of the app.
+        self.installClassification = await resolveInstallClassification(config: config)
+
         // Initialize visitor ID, anonymous ID and session
         self.visitorId = await getOrCreateVisitorId()
         self.anonymousId = await getOrCreateAnonymousId()
@@ -220,6 +226,11 @@ public class DatalyrSDK {
         if config.enableAttribution {
             self.attributionManager = AttributionManager()
             await attributionManager?.initialize()
+            // An existing user installed long ago: no web visit from the last days is
+            // theirs, so the IP lookup would only risk pinning a stranger's click on them.
+            if installClassification?.type == .existingUser {
+                await attributionManager?.markDeferredLookupResolved()
+            }
         }
 
         // Initialize journey tracking (for first-touch, last-touch, touchpoints)
@@ -295,7 +306,11 @@ public class DatalyrSDK {
             Task {
                 let installAlreadySent = await DatalyrStorage.shared.getString("datalyr_app_install_tracked") != nil
                 guard installAlreadySent else { return } // app_install itself will carry asa_*
-                await self.track("$asa_attribution", eventData: asaData)
+                var data = asaData
+                if let classification = self.installClassification {
+                    data.merge(classification.eventProperties) { current, _ in current }
+                }
+                await self.track("$asa_attribution", eventData: data)
             }
         }
         await platformIntegrationManager?.initialize(config: config)
@@ -2552,12 +2567,50 @@ public class DatalyrSDK {
         }
     }
     
+    /// Test seam: where the first-launch install signals come from.
+    static var installSignalsProvider: () async -> InstallSignals = { await DeviceInstallSignals.read() }
+
+    /// The first-launch classification: the stored one when a previous launch decided it
+    /// (a kill before app_install was enqueued must not reclassify), a fresh one when the
+    /// install was never tracked, nil once it has been.
+    func resolveInstallClassification(config: DatalyrConfig) async -> InstallClassification? {
+        let storage = DatalyrStorage.shared
+        if await storage.getString("datalyr_app_install_tracked") != nil { return nil }
+        if let data = await storage.getData(StorageKeys.installClass),
+           let stored = try? JSONDecoder().decode(InstallClassification.self, from: data) {
+            return stored
+        }
+        let classification = InstallClassifier.classify(await Self.installSignalsProvider(), hint: config.existingUserHint?())
+        if let data = try? JSONEncoder().encode(classification) {
+            await storage.setData(StorageKeys.installClass, value: data)
+        }
+        debugLog("First SDK launch classified", data: classification.eventProperties)
+        return classification
+    }
+
     /// Check and track app install
     private func checkAndTrackInstall() async {
         let isFirstLaunch = await DatalyrStorage.shared.getString("datalyr_app_install_tracked") == nil
         
         if isFirstLaunch {
             let installTime = DateFormatter.iso8601.string(from: Date())
+            let classification = installClassification
+                ?? InstallClassification(type: .unknown, method: "none", priorInstallAge: nil, originalAppVersion: nil)
+
+            if classification.type == .existingUser {
+                // Not an install: an existing user's first launch of a build with the SDK. Its
+                // own event, so no install rule, count or export picks it up; no click ids or
+                // install attribution (an old install's click is not this launch's).
+                var data: EventData = [
+                    "platform": "ios",
+                    "sdk_version": DatalyrVersion.current,
+                    "first_sdk_launch_time": installTime
+                ]
+                data.merge(classification.eventProperties) { (_, new) in new }
+                await track("$sdk_first_launch_existing", eventData: data)
+                await DatalyrStorage.shared.setString("datalyr_app_install_tracked", value: installTime)
+                return
+            }
 
             var installData: EventData = [
                 "platform": "ios",
@@ -2569,6 +2622,7 @@ public class DatalyrSDK {
             if let attribution = attributionManager?.trackInstall() {
                 installData.merge(attribution.toDictionary(includingAppUserIds: true)) { (_, new) in new }
             }
+            installData.merge(classification.eventProperties) { (_, new) in new }
 
             await track("app_install", eventData: installData)
 

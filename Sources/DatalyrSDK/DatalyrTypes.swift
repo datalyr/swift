@@ -30,6 +30,10 @@ public struct DatalyrConfig {
     public let enableAttribution: Bool
     public let autoEventConfig: AutoEventConfig?
     public let skadTemplate: String?
+    /// Optional: tell the SDK whether the person on this device already used the app
+    /// before it shipped DATALYR (e.g. a stored login token or a finished onboarding).
+    /// Read once, on the first SDK launch only. Return nil when you cannot tell.
+    public let existingUserHint: (() -> Bool?)?
 
     public init(
         apiKey: String,
@@ -47,7 +51,8 @@ public struct DatalyrConfig {
         enableAutoEvents: Bool = true,
         enableAttribution: Bool = true,
         autoEventConfig: AutoEventConfig? = nil,
-        skadTemplate: String? = nil
+        skadTemplate: String? = nil,
+        existingUserHint: (() -> Bool?)? = nil
     ) {
         self.apiKey = apiKey
         self.workspaceId = workspaceId
@@ -65,6 +70,7 @@ public struct DatalyrConfig {
         self.enableAttribution = enableAttribution
         self.autoEventConfig = autoEventConfig
         self.skadTemplate = skadTemplate
+        self.existingUserHint = existingUserHint
     }
 }
 
