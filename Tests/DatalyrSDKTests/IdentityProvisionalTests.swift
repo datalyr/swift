@@ -764,4 +764,89 @@ final class IdentityProvisionalTests: XCTestCase {
         XCTAssertFalse(rc.value.contains { $0["fbclid"] == "FB_OLD_USER" }, "old click id never pushed")
         XCTAssertEqual(rc.value.last?["datalyr_id"], anonAfterReset)
     }
+
+    // MARK: - Web match: merged before the bridge event's (slow) send, never after a reset
+
+    /// identify(email) matches; the `$web_attribution_matched` send stalls; reset() runs
+    /// during the stall. The old user's click id must not survive into the new state, and
+    /// the provider's last push carries the new datalyr_id without it.
+    func testResetDuringStalledBridgeSendLeavesNoOldClickIds() async throws {
+        DatalyrHTTPClient.protocolClassesForTesting = [SlowIngestStub.self]
+        SlowIngestStub.reset()
+        defer {
+            DatalyrHTTPClient.protocolClassesForTesting = nil
+            SlowIngestStub.reset()
+        }
+        await DatalyrStorage.shared.removeValue(StorageKeys.eventQueue)
+        let sdk = DatalyrSDK()
+        observe(sdk)
+        try await sdk.initialize(config: DatalyrConfig(
+            apiKey: "dk_test",
+            endpoint: "https://slow-ingest.test/track",
+            maxRetries: 0,
+            retryDelay: 0.01,
+            timeout: 10,
+            flushInterval: 3600,
+            enableAutoEvents: false,
+            enableAttribution: true
+        ))
+        await sdk.flush()
+        let rc = Box<[[String: String]]>([])
+        sdk.syncRevenueCatAttributes { rc.value.append($0) }
+        await drainMain()
+
+        EmailLookupStub.delay = 0.5
+        EmailLookupStub.enqueue([
+            "found": true,
+            "attribution": ["visitor_id": "web-visitor-old", "fbclid": "FB_OLD_USER"],
+        ])
+        let identifyTask = Task { await sdk.identify("user-old", properties: ["email": "old@example.com"]) }
+
+        // Lookup in flight → from now on ingest sends stall; the next send is the bridge event.
+        var deadline = Date().addingTimeInterval(5)
+        while EmailLookupStub.count == 0 && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(EmailLookupStub.count, 1)
+        let sendsBefore = SlowIngestStub.started
+        SlowIngestStub.delay = 3
+        deadline = Date().addingTimeInterval(5)
+        while SlowIngestStub.started == sendsBefore && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertGreaterThan(SlowIngestStub.started, sendsBefore, "bridge event send is stalled")
+        XCTAssertTrue(events.value.contains { $0.0 == "$web_attribution_matched" })
+
+        await sdk.reset()                      // logout during the stalled send
+        let anonAfterReset = sdk.getAnonymousId()
+        SlowIngestStub.delay = 0
+        await identifyTask.value
+        await drainMain()
+
+        XCTAssertNil(sdk.getAttributionData().fbclid, "old user's click id survived the reset")
+        XCTAssertEqual(rc.value.last?["datalyr_id"], anonAfterReset)
+        XCTAssertNotEqual(rc.value.last?["fbclid"], "FB_OLD_USER")
+        await DatalyrStorage.shared.removeValue(StorageKeys.eventQueue)
+    }
+
+    /// Deferred (IP) lookup answered after a reset: no merge, no bridge event.
+    func testDeferredLookupAnsweredAfterResetIsDropped() async {
+        let sdk = await launch()
+        DeferredLookupStub.delay = 1
+        DeferredLookupStub.enqueue([
+            "found": true,
+            "attribution": ["visitor_id": "web-visitor-old", "fbclid": "FB_OLD_INSTALL"],
+        ])
+        let lookup = Task { await sdk.runDeferredLookupIfEligible() }
+        let deadline = Date().addingTimeInterval(5)
+        while DeferredLookupStub.bodies.isEmpty && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(DeferredLookupStub.bodies.count, 1, "lookup in flight")
+        await sdk.reset()
+        await lookup.value
+
+        XCTAssertNil(sdk.getAttributionData().fbclid)
+        XCTAssertFalse(events.value.contains { $0.0 == "$web_attribution_matched" })
+    }
 }

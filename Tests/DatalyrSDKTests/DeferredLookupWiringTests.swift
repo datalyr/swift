@@ -7,12 +7,18 @@ final class DeferredLookupStub: URLProtocol {
     private static var _bodies: [[String: Any]] = []
     private static var _responses: [(status: Int, body: [String: Any])] = []
 
+    private static var _delay: TimeInterval = 0
+    /// Seconds before the stubbed answer arrives (0 = immediately).
+    static var delay: TimeInterval {
+        get { lock.withLock { _delay } }
+        set { lock.withLock { _delay = newValue } }
+    }
     static var bodies: [[String: Any]] { lock.withLock { _bodies } }
     static func enqueue(status: Int = 200, _ body: [String: Any]) {
         lock.withLock { _responses.append((status, body)) }
     }
     static func reset() {
-        lock.withLock { _bodies = []; _responses = [] }
+        lock.withLock { _bodies = []; _responses = []; _delay = 0 }
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -39,11 +45,19 @@ final class DeferredLookupStub: URLProtocol {
                 ? (200, ["found": false, "reason": "no_web_traffic"])
                 : Self._responses.removeFirst()
         }
-        let http = HTTPURLResponse(url: request.url!, statusCode: response.status,
-                                   httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
-        client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: response.body)) ?? Data())
-        client?.urlProtocolDidFinishLoading(self)
+        let respond = { [self] in
+            let http = HTTPURLResponse(url: request.url!, statusCode: response.status,
+                                       httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: response.body)) ?? Data())
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        let delay = Self.delay
+        if delay > 0 {
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: respond)
+        } else {
+            respond()
+        }
     }
     override func stopLoading() {}
 }

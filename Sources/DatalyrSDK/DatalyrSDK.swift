@@ -878,20 +878,25 @@ public class DatalyrSDK {
             if let utmTerm = attribution["utm_term"] { mergedData["utm_term"] = utmTerm }
             if let timestamp = attribution["timestamp"] { mergedData["web_timestamp"] = timestamp }
 
-            guard identityGeneration == generation else {
-                debugLog("Web attribution answer arrived after a reset — dropped")
-                return false
-            }
-
             // Canonical web→app bridge event — email and IP paths both fire
             // $web_attribution_matched, distinguished by match_method, so server
             // bridges (Meta CAPI recovery, lyr) and dashboards see one event name.
             // (Previously this path fired $web_attribution_merged, which no reader
             // consumed — email-only matches never bridged webhook conversions.)
-            await track("$web_attribution_matched", eventData: mergedData)
-
-            // Update attribution manager with web data
+            //
+            // Built before the merge (its payload is the pre-merge state, as before),
+            // merged right after the last generation check, and enqueued LAST: enqueue
+            // awaits the queue flush (network I/O), and a reset() during that wait must
+            // not receive the previous user's click ids.
+            let bridgePayload = await prepareEvent("$web_attribution_matched", eventData: mergedData)
+            guard identityGeneration == generation else {
+                debugLog("Web attribution answer arrived after a reset — dropped")
+                return false
+            }
             await attributionManager?.mergeWebAttribution(attribution)
+            if let bridgePayload = bridgePayload {
+                await eventQueue?.enqueue(bridgePayload)
+            }
 
             debugLog("Successfully merged web attribution into mobile session")
             return true
@@ -957,6 +962,9 @@ public class DatalyrSDK {
     /// eligible for a later launch (nothing reached the server / nothing usable came back).
     /// Call through runDeferredLookupIfEligible(), which keeps it single-flight.
     private func fetchDeferredWebAttribution() async {
+        // A reset (logout / account switch) during the request makes the answer belong to
+        // the identity before it: checked again right before the merge.
+        let generation = identityGeneration
         guard let apiKey = config?.apiKey else {
             // Not an answer from the server — a later launch with a configured key retries.
             errorLog("API key not available for deferred attribution fetch — web→app match skipped")
@@ -1118,8 +1126,10 @@ public class DatalyrSDK {
                 return
             }
 
-            // Merge web attribution into current session
-            await attributionManager?.mergeWebAttribution(attribution)
+            guard identityGeneration == generation else {
+                debugLog("Deferred web attribution answer arrived after a reset — dropped")
+                return
+            }
 
             // Track match event for analytics
             var matchData: EventData = [
@@ -1157,7 +1167,20 @@ public class DatalyrSDK {
             if let v = attribution["site_source_name"] { matchData["site_source_name"] = v }
             if let timestamp = attribution["timestamp"] { matchData["web_timestamp"] = timestamp }
 
-            await track("$web_attribution_matched", eventData: matchData)
+            // Same order as the email path: bridge payload built first, generation checked,
+            // merged, and the payload enqueued LAST — enqueue awaits the queue flush
+            // (network I/O), and a reset() during that wait must not receive this
+            // install's previous identity's click ids. A reset during the request drops
+            // the merge and the bridge event (and the matched telemetry).
+            let bridgePayload = await prepareEvent("$web_attribution_matched", eventData: matchData)
+            guard identityGeneration == generation else {
+                debugLog("Deferred web attribution answer arrived after a reset — dropped")
+                return
+            }
+            await attributionManager?.mergeWebAttribution(attribution)
+            if let bridgePayload = bridgePayload {
+                await eventQueue?.enqueue(bridgePayload)
+            }
 
             // Paired with the miss branch above: together these two make
             // matched / (matched + missed) computable per workspace and per day.
