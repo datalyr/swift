@@ -8,9 +8,12 @@ final class InstallClassifierTests: XCTestCase {
     private func days(_ d: Double) -> Date { now.addingTimeInterval(-d * 86_400) }
 
     private func signals(ranBefore: Bool?, bundleNewer: Bool? = false, container: Date? = nil,
-                         store: StoreInstallRecord? = nil, build: String = "244") -> InstallSignals {
-        InstallSignals(ranBefore: ranBefore, bundleNewerThanContainer: bundleNewer,
-                       containerCreatedAt: container ?? now, store: store, currentBuild: build, now: now)
+                         store: StoreInstallRecord? = nil, build: String = "244", firstRun: Date? = nil) -> InstallSignals {
+        // An earlier run's oldest item: by default as old as the container.
+        let evidence = ranBefore == true ? (firstRun ?? container ?? now.addingTimeInterval(-30 * 86_400)) : nil
+        return InstallSignals(ranBefore: ranBefore, earliestEvidence: evidence, processStart: now,
+                              bundleNewerThanContainer: bundleNewer, containerCreatedAt: container ?? now,
+                              store: store, currentBuild: build, now: now)
     }
 
     // MARK: - Decision matrix
@@ -36,6 +39,30 @@ final class InstallClassifierTests: XCTestCase {
         let c = InstallClassifier.classify(signals(ranBefore: true, bundleNewer: true, container: days(90),
                                                    store: .init(originalAppVersion: "1", originalPurchaseDate: days(90)), build: "1"), hint: nil)
         XCTAssertEqual(c.type, .existingUser)
+    }
+
+    func testAnEarlierRunUnderADayAgoIsUnknownNotExisting() {
+        // A gated SDK start on a fresh install (closed before consenting), even if it
+        // auto-updated since and has no App Store record: sent like an install.
+        for store in [nil, StoreInstallRecord(originalAppVersion: "243", originalPurchaseDate: days(0.5))] {
+            let c = InstallClassifier.classify(signals(ranBefore: true, bundleNewer: true, container: days(0.5),
+                                                       store: store, firstRun: days(0.4)), hint: nil)
+            XCTAssertEqual(c.type, .unknown)
+            XCTAssertEqual(c.method, "ran_before_recent")
+        }
+    }
+
+    func testStoreLookupNeverWaitsPastTheCap() async {
+        let started = Date()
+        let answer: Int? = await DeviceInstallSignals.firstAnswer(within: 200_000_000) {
+            // A StoreKit call that ignores cancellation and never returns in time.
+            await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
+            return 1
+        }
+        XCTAssertNil(answer)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+        let fast: Int? = await DeviceInstallSignals.firstAnswer(within: 2_000_000_000) { 7 }
+        XCTAssertEqual(fast, 7)
     }
 
     func testLateSDKStartOnTheFirstBuildIsNew() {
@@ -118,7 +145,7 @@ final class InstallClassifierTests: XCTestCase {
 
     private static func clearInstallStorage() async {
         for key in ["datalyr_app_install_tracked", StorageKeys.installClass, StorageKeys.firstLaunchTime,
-                    StorageKeys.eventQueue] {
+                    StorageKeys.eventQueue, StorageKeys.attributionData] {
             await DatalyrStorage.shared.removeValue(key)
         }
         await ATTDeferredLookupTests.clearLookupStorage()
@@ -159,12 +186,26 @@ final class InstallClassifierTests: XCTestCase {
     private func data(_ name: String) -> EventData? { events.value.first { $0.0 == name }?.1 }
 
     func testExistingUserSendsItsOwnEventAndNoInstall() async throws {
+        // An existing user who once came from a Meta ad: that click is persisted and would
+        // ride every event; it must not ride this one.
+        let seeded = AttributionManager()
+        await seeded.initialize()
+        var old = seeded.getAttributionData()
+        old.fbclid = "fb.old.click"
+        old.utmSource = "facebook"
+        await seeded.setAttributionData(old)
+        await DatalyrStorage.shared.removeValue(StorageKeys.firstLaunchTime)
+
         provide(signals(ranBefore: true, bundleNewer: true, container: days(300)))
-        _ = try await launch()
+        let sdk = try await launch()
         XCTAssertFalse(names().contains("app_install"), "\(names())")
         let existing = try XCTUnwrap(data("$sdk_first_launch_existing"))
         XCTAssertEqual(existing["install_type"] as? String, "existing_user")
-        XCTAssertNil(existing["fbclid"])
+        XCTAssertNil(existing["fbclid"], "no click id from an old install")
+        XCTAssertNil(existing["utm_source"])
+        XCTAssertFalse(sdk.attributionManager?.isInstall() ?? true)
+        let classKeyLeft = await DatalyrStorage.shared.getData(StorageKeys.installClass)
+        XCTAssertNil(classKeyLeft, "the stored class is dropped once the launch is tracked")
         let resolved = await DatalyrStorage.shared.getBool(StorageKeys.deferredLookupResolved)
         XCTAssertEqual(resolved, true, "the deferred IP lookup never runs for an existing user")
         XCTAssertTrue(DeferredLookupStub.bodies.isEmpty)

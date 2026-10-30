@@ -18,7 +18,7 @@ import Darwin
 /// Decided ONCE, as the first thing initialize() does (before the SDK writes its own
 /// ids or markers, which would otherwise look like an earlier run), and persisted:
 /// a kill before app_install is enqueued re-fires the same class next launch.
-public enum InstallType: String, Codable {
+enum InstallType: String, Codable {
     case new
     case reinstall
     case existingUser = "existing_user"
@@ -51,9 +51,12 @@ struct StoreInstallRecord: Equatable {
 
 /// Everything the decision reads. Production reads the device; tests inject values.
 struct InstallSignals {
-    /// A file the app writes (its preferences plist, Documents, Application Support)
-    /// was created before this process started. nil = unreadable.
+    /// A file or folder the app writes was created before this process started. nil = unreadable.
     var ranBefore: Bool?
+    /// The oldest such item and this process's start: an earlier run less than a day
+    /// before this one is as likely a gated SDK start on a fresh install as an old user.
+    var earliestEvidence: Date? = nil
+    var processStart: Date? = nil
     /// The app bundle is well newer than the data container: updated on this device.
     var bundleNewerThanContainer: Bool?
     /// Creation date of the app's data container (Library). Never sent.
@@ -68,6 +71,8 @@ struct InstallSignals {
 enum InstallClassifier {
     /// A reinstall's App Store record predates this container by at least this much.
     static let reinstallGap: TimeInterval = 24 * 3600
+    /// An earlier run less recent than this before the current process counts as an old install.
+    static let recentRunWindow: TimeInterval = 24 * 3600
 
     static func classify(_ s: InstallSignals, hint: Bool?) -> InstallClassification {
         if hint == true {
@@ -76,6 +81,14 @@ enum InstallClassifier {
                                          originalAppVersion: s.store?.originalAppVersion)
         }
         let storeBuildDiffers = s.store.map { $0.originalAppVersion != s.currentBuild }
+        if s.ranBefore == true, let earliest = s.earliestEvidence, let start = s.processStart,
+           earliest > start.addingTimeInterval(-recentRunWindow) {
+            // The app first ran here less than a day ago, before the SDK started: a fresh
+            // install whose app gates the SDK (consent, login), possibly auto-updated since,
+            // or a brand-new user of an older build. Sent like an install, labelled.
+            return InstallClassification(type: .unknown, method: "ran_before_recent",
+                                         priorInstallAge: nil, originalAppVersion: s.store?.originalAppVersion)
+        }
         if s.ranBefore == true {
             // An earlier process of this app wrote files here. An existing user who updated
             // into the SDK, unless the record says this very build was the first one this
@@ -141,31 +154,39 @@ enum DeviceInstallSignals {
         let library = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first
         let containerCreatedAt = library.flatMap { creationDate($0) }
         var ranBefore: Bool? = nil
+        var earliestEvidence: Date? = nil
         if let processStart {
-            ranBefore = appWrittenFiles().contains { url in
-                guard let created = creationDate(url) else { return false }
-                return created < processStart.addingTimeInterval(-1)
-            }
+            let cutoff = processStart.addingTimeInterval(-1)
+            earliestEvidence = appWrittenItems().compactMap { creationDate($0) }.filter { $0 < cutoff }.min()
+            ranBefore = earliestEvidence != nil
         }
         var bundleNewer: Bool? = nil
         if let bundleDate = creationDate(Bundle.main.bundleURL), let containerCreatedAt {
             bundleNewer = bundleDate > containerCreatedAt.addingTimeInterval(3600)
         }
         let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? ""
-        return InstallSignals(ranBefore: ranBefore, bundleNewerThanContainer: bundleNewer,
-                              containerCreatedAt: containerCreatedAt, store: await storeRecord(),
-                              currentBuild: build, now: now)
+        return InstallSignals(ranBefore: ranBefore, earliestEvidence: earliestEvidence, processStart: processStart,
+                              bundleNewerThanContainer: bundleNewer, containerCreatedAt: containerCreatedAt,
+                              store: await storeRecord(), currentBuild: build, now: now)
     }
 
-    /// Files only the app itself creates: its preferences plist and the top level of
-    /// Documents and Application Support. Never Library or Caches themselves, which
-    /// the system creates at install time.
-    static func appWrittenFiles() -> [URL] {
+    /// Items only a run of the app creates. Folders first: their creation date is stable,
+    /// while files saved atomically (the preferences plist included) get a new one on
+    /// every save. Never Library, Caches or Documents themselves, which the system
+    /// creates at install time. Caches can be purged, which only hides evidence.
+    static func appWrittenItems() -> [URL] {
         let fileManager = FileManager.default
         var urls: [URL] = []
-        if let library = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first,
-           let bundleId = Bundle.main.bundleIdentifier {
-            urls.append(library.appendingPathComponent("Preferences/\(bundleId).plist"))
+        let bundleId = Bundle.main.bundleIdentifier
+        if let library = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first {
+            for path in ["WebKit", "Cookies"] { urls.append(library.appendingPathComponent(path)) }
+            if let bundleId {
+                urls.append(library.appendingPathComponent("HTTPStorages/\(bundleId)"))   // iOS 14+ URLSession
+                urls.append(library.appendingPathComponent("Preferences/\(bundleId).plist"))
+            }
+        }
+        if let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first, let bundleId {
+            urls.append(caches.appendingPathComponent(bundleId))                        // URLCache
         }
         for directory in [FileManager.SearchPathDirectory.documentDirectory, .applicationSupportDirectory] {
             guard let root = fileManager.urls(for: directory, in: .userDomainMask).first,
@@ -196,31 +217,51 @@ enum DeviceInstallSignals {
     }
 
     /// AppTransaction.shared in production only, capped at storeTimeout. Never refresh():
-    /// that shows an App Store sign-in prompt.
+    /// that shows an App Store sign-in prompt. The call runs in its own task and the
+    /// caller resumes at the cap whether or not StoreKit has answered (a task group
+    /// would wait for the StoreKit child, which does not stop on cancellation).
     static func storeRecord() async -> StoreInstallRecord? {
         #if canImport(StoreKit)
         guard #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, *) else { return nil }
-        return await withTaskGroup(of: StoreInstallRecord?.self) { group in
-            group.addTask {
-                guard let result = try? await AppTransaction.shared else { return nil }
-                let transaction: AppTransaction
-                switch result {
-                case .verified(let value), .unverified(let value, _): transaction = value
-                }
-                guard transaction.environment == .production else { return nil }
-                return StoreInstallRecord(originalAppVersion: transaction.originalAppVersion,
-                                          originalPurchaseDate: transaction.originalPurchaseDate)
+        return await firstAnswer(within: storeTimeout) {
+            guard let result = try? await AppTransaction.shared else { return nil }
+            let transaction: AppTransaction
+            switch result {
+            case .verified(let value), .unverified(let value, _): transaction = value
             }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: storeTimeout)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
+            guard transaction.environment == .production else { return nil }
+            return StoreInstallRecord(originalAppVersion: transaction.originalAppVersion,
+                                      originalPurchaseDate: transaction.originalPurchaseDate)
         }
         #else
         return nil
         #endif
+    }
+
+    /// The work's answer, or nil once `nanoseconds` pass first. Never waits past the cap.
+    static func firstAnswer<T>(within nanoseconds: UInt64, _ work: @escaping () async -> T?) async -> T? {
+        return await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+            let once = ResumeOnce(continuation)
+            let worker = Task { once.resume(await work()) }
+            Task {
+                try? await Task.sleep(nanoseconds: nanoseconds)
+                worker.cancel()
+                once.resume(nil)
+            }
+        }
+    }
+}
+
+/// Resumes a continuation exactly once, from whichever side answers first.
+private final class ResumeOnce<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T?, Never>?
+    init(_ continuation: CheckedContinuation<T?, Never>) { self.continuation = continuation }
+    func resume(_ value: T?) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
     }
 }
