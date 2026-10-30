@@ -468,6 +468,10 @@ internal enum StorageKeys {
     /// so that miss is reported once per install per status.
     static let deferredLookupATTMissReportedStatus = "datalyr_deferred_lookup_att_miss_reported_status"
     static let installTracked = "datalyr_install_tracked"
+    /// The first-launch install classification (InstallClassification JSON), decided once.
+    static let installClass = "datalyr_install_class"
+    /// Set when this device's first SDK launch was an existing user: its Search Ads data is an old install's.
+    static let existingUserInstall = "datalyr_existing_user_install"
     static let lastAppVersion = "datalyr_last_app_version"
     /// Hash of the last identify() that actually emitted (visitor id, user id,
     /// traits), so a host app calling identify() on every launch/screen does not

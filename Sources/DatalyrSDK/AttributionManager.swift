@@ -314,6 +314,11 @@ internal class AttributionManager {
     }
     
     /// Track install and return attribution data
+    /// The first SDK launch was an existing user's (InstallClassifier): not an install.
+    func markExistingUserLaunch() {
+        isFirstLaunch = false
+    }
+
     func trackInstall() -> AttributionData {
         if isFirstLaunch {
             let installTime = DateFormatter.iso8601.string(from: Date())

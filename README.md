@@ -2,7 +2,7 @@
 
 Server-side attribution, event tracking, SKAdNetwork conversion values, and Apple Search Ads attribution for iOS.
 
-Current release: **2.1.19**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.2.0**. Every event posts to `https://ingest.datalyr.com/track`.
 
 Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sdk-reference/ios).
 
@@ -38,7 +38,7 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 |---|---|
 | Minimum iOS | 13.0 |
 | Swift tools version | 5.7 |
-| Current release | 2.1.19 |
+| Current release | 2.2.0 |
 | Frameworks linked | `Foundation`, `UIKit`, `StoreKit`, `AdServices` (weak) |
 
 ---
@@ -49,19 +49,19 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 
 1. In Xcode, open **File > Add Package Dependencies**.
 2. Enter `https://github.com/datalyr/swift`.
-3. Select version 2.1.19.
+3. Select version 2.2.0.
 4. Add the `DatalyrSDK` product to your app target.
 
 In `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/datalyr/swift", from: "2.1.19")
+.package(url: "https://github.com/datalyr/swift", from: "2.2.0")
 ```
 
 ### CocoaPods
 
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.19'
+pod 'DatalyrSDK', '~> 2.2.0'
 ```
 
 Run `pod install`. Open the generated `.xcworkspace`.
@@ -162,6 +162,7 @@ try await DatalyrSDK.shared.initialize(config: config)
 | `enableAttribution` | `Bool` | `true` | — |
 | `autoEventConfig` | `AutoEventConfig?` | `nil` | — |
 | `skadTemplate` | `String?` | `nil` | `gaming`, `subscription`, or ecommerce |
+| `existingUserHint` | `(() -> Bool?)?` | `nil` | Read once on the first SDK launch. `true` marks an existing user (sends `$sdk_first_launch_existing`, not `app_install`) |
 
 `skadTemplate` accepts any string. Anything other than `gaming` or `subscription` becomes the ecommerce template, with no warning.
 

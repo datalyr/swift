@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.0] - 2026-10-30
+
+### Changed
+- The first SDK launch on a device is now classified before the SDK writes any id of its own. The test is whether a run of the app already happened here: app folders and files were created before this process started. Those are WebKit, Cookies, HTTPStorages, the URL cache, the preferences plist, and the top level of Documents and Application Support. Folders matter most, because files saved atomically get a new date on every save. StoreKit 2 `AppTransaction` (iOS 16+, production only, 3 s hard cap, never `refresh()`) and the app bundle's date against the data container's are cross-checks. The result is stored, so a kill before the event is queued re-fires the same class.
+- An existing user who updated into a build with the SDK no longer sends `app_install`. That launch sends `$sdk_first_launch_existing` with `install_type: existing_user`, `detection_method`, a coarse `prior_install_age` and, when known, `original_app_version`. It carries no click ids, UTMs or Search Ads data. That device never sends `$asa_attribution`, and its later events carry no Search Ads data (an old install's). Previously every existing user's first launch after the SDK was added was reported as an install.
+- `app_install` now carries `install_type` and `detection_method`, plus `prior_install_age` / `original_app_version` when known.
+    - `install_type` is `new`, `reinstall` or `unknown`.
+    - A reinstall is a fresh install on this device where the App Store record shows this Apple Account got the app at least a day before. That also covers a new device or a Family Sharing member.
+    - An earlier run less than a day before this launch is `unknown`, and is still sent like an install. This covers apps that start the SDK only after consent or login.
+- For an existing user, the deferred web-to-app IP lookup is marked resolved and never runs.
+
+### Added
+- `DatalyrConfig(existingUserHint:)`: an optional closure the app can use to say whether the person already used the app before it shipped DATALYR (for example a stored login token). It is read once, on the first SDK launch only, on the thread `initialize()` runs on, so keep it cheap and free of UI work. Only `true` changes the result; `false` and `nil` leave the decision to the device signals. Recommended for apps that start the SDK only after consent or login.
+
+### Notes
+- App extensions have their own container, so an extension's first SDK launch reads as new. This was already the case before 2.2.0.
+
+### Privacy
+- The privacy manifest declares `NSPrivacyAccessedAPICategoryFileTimestamp` with reason `C617.1` (timestamps of files inside the app container). Raw dates are never sent, only the age bucket.
+
 ## [2.1.19] - 2026-10-29
 
 ### Added
