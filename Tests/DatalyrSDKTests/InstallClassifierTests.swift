@@ -144,7 +144,7 @@ final class InstallClassifierTests: XCTestCase {
     }
 
     private static func clearInstallStorage() async {
-        for key in ["datalyr_app_install_tracked", StorageKeys.installClass, StorageKeys.firstLaunchTime,
+        for key in ["datalyr_app_install_tracked", StorageKeys.installClass, StorageKeys.existingUserInstall, StorageKeys.firstLaunchTime,
                     StorageKeys.eventQueue, StorageKeys.attributionData] {
             await DatalyrStorage.shared.removeValue(key)
         }
@@ -206,6 +206,8 @@ final class InstallClassifierTests: XCTestCase {
         XCTAssertFalse(sdk.attributionManager?.isInstall() ?? true)
         let classKeyLeft = await DatalyrStorage.shared.getData(StorageKeys.installClass)
         XCTAssertNil(classKeyLeft, "the stored class is dropped once the launch is tracked")
+        let suppressed = await DatalyrStorage.shared.getBool(StorageKeys.existingUserInstall)
+        XCTAssertEqual(suppressed, true, "later launches keep Search Ads data off this user's events")
         let resolved = await DatalyrStorage.shared.getBool(StorageKeys.deferredLookupResolved)
         XCTAssertEqual(resolved, true, "the deferred IP lookup never runs for an existing user")
         XCTAssertTrue(DeferredLookupStub.bodies.isEmpty)

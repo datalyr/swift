@@ -162,6 +162,7 @@ try await DatalyrSDK.shared.initialize(config: config)
 | `enableAttribution` | `Bool` | `true` | — |
 | `autoEventConfig` | `AutoEventConfig?` | `nil` | — |
 | `skadTemplate` | `String?` | `nil` | `gaming`, `subscription`, or ecommerce |
+| `existingUserHint` | `(() -> Bool?)?` | `nil` | Read once on the first SDK launch. `true` marks an existing user (sends `$sdk_first_launch_existing`, not `app_install`) |
 
 `skadTemplate` accepts any string. Anything other than `gaming` or `subscription` becomes the ecommerce template, with no warning.
 

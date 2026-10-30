@@ -53,6 +53,8 @@ public class DatalyrSDK {
     var attributionManager: AttributionManager?
     /// How this device's first SDK launch was classified (nil once the install was tracked).
     var installClassification: InstallClassification?
+    /// This device's first SDK launch was an existing user's (persisted): no Search Ads data on its events.
+    private var existingUserInstall = false
     private var autoEventsManager: AutoEventsManager?
     
     // Session and user data
@@ -213,6 +215,8 @@ public class DatalyrSDK {
         // Install vs existing user (2.2.0): decided before the SDK writes any id or marker
         // of its own, which would otherwise read as an earlier run of the app.
         self.installClassification = await resolveInstallClassification(config: config)
+        let storedExistingUser = await DatalyrStorage.shared.getBool(StorageKeys.existingUserInstall) == true
+        self.existingUserInstall = installClassification?.type == .existingUser || storedExistingUser
 
         // Initialize visitor ID, anonymous ID and session
         self.visitorId = await getOrCreateVisitorId()
@@ -308,7 +312,7 @@ public class DatalyrSDK {
                 let installAlreadySent = await DatalyrStorage.shared.getString("datalyr_app_install_tracked") != nil
                 guard installAlreadySent else { return } // app_install itself will carry asa_*
                 // An existing user's Search Ads answer describes an install from long ago.
-                if self.installClassification?.type == .existingUser { return }
+                if self.existingUserInstall { return }
                 var data = asaData
                 if let classification = self.installClassification {
                     data.merge(classification.eventProperties) { current, _ in current }
@@ -2454,7 +2458,7 @@ public class DatalyrSDK {
         }
 
         // Apple Search Ads attribution if available
-        if eventName != Self.existingUserFirstLaunchEvent, let asaData = platformIntegrationManager?.getAppleSearchAdsData() {
+        if !existingUserInstall, let asaData = platformIntegrationManager?.getAppleSearchAdsData() {
             enrichedEventData.merge(asaData) { (_, new) in new }
         }
 
@@ -2616,6 +2620,7 @@ public class DatalyrSDK {
                 data.merge(classification.eventProperties) { (_, new) in new }
                 await track(Self.existingUserFirstLaunchEvent, eventData: data)
                 await DatalyrStorage.shared.setString("datalyr_app_install_tracked", value: installTime)
+                await DatalyrStorage.shared.setBool(StorageKeys.existingUserInstall, value: true)
                 await DatalyrStorage.shared.removeValue(StorageKeys.installClass)
                 return
             }
