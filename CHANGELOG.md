@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.19] - 2026-10-29
+
+### Added
+- `identify(_:properties:provisional:)` (and `datalyrIdentify(_:properties:provisional:)`). Pass `provisional: true` for the app's own pre-login ID (a guest or device ID assigned before sign-in). A provisional ID is ignored while a signed-in (non-provisional) user is identified, so re-sending it on launch never overrides the account. Replacing it with the real account ID, or with another provisional ID, does not run the account-switch `reset()`. Every event sent while it is current, `$identify` included, carries `properties.$provisional_user_id = true`, which lets DATALYR convert the provisional ID into the account once (identity §2.10). The flag is persisted across launches and cleared by `reset()`, by a non-provisional `identify()` and by `alias()`. No `$alias` is sent. Calls without `provisional` behave as in 2.1.18, and their identify dedup key is unchanged.
+- `syncRevenueCatAttributes(_:)` / `syncSuperwallAttributes(_:)` (instance and static). The handler is called on the main thread right away (or when `initialize()` finishes), and again after every `reset()` (including the reset inside `identify()` on an account switch), after an `identify()` that changed the identity, after `bindProviderIdentity()`, after `updateTrackingAuthorization(status:)`, and after a web→app attribution match. Before this, apps set the attributes once, and after `reset()` rotated the anonymous ID the provider kept the old `datalyr_id`. On logout call `Purchases.shared.logOut()` / `Superwall.shared.reset()` FIRST, then `reset()`.
+
+### Fixed
+- The web-attribution self-match guard (deferred IP lookup and `identify()` email lookup) compared the matched `visitor_id` with the SDK's `visitorId`, which is never sent. The server keys SDK events on `anonymousId`, so the guard never fired and this install's own events reflected back were recorded as a web match. It now compares with `anonymousId` (and still with `visitorId`); a self-match is reported as `$attribution_match` with `reason: self_match` and is not merged.
+
+### Docs
+- README / QUICKSTART: sync handlers, logout ordering, provisional IDs, set the attributes and identify before showing the paywall. RevenueCat's `datalyr_id` key documented (the old `$datalyrId` row was stale since the key changed).
+
 ## [2.1.18] - 2026-10-13
 
 ### Added

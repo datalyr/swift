@@ -2,7 +2,7 @@
 
 > Everything you need to set up mobile attribution, event tracking, and web-to-app campaigns in your iOS app.
 
-Current release: **2.1.18**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.19**. Every event posts to `https://ingest.datalyr.com/track`.
 
 **Links:** [Full Docs](https://docs.datalyr.com) | [iOS SDK Reference](https://docs.datalyr.com/sdk-reference/ios) | [GitHub](https://github.com/datalyr/swift)
 
@@ -24,13 +24,13 @@ That's all you need. Only the API key is required -- `workspaceId` is no longer 
 
 1. In Xcode, select **File > Add Package Dependencies**
 2. Enter the repository URL: `https://github.com/datalyr/swift`
-3. Select version **2.1.18**
+3. Select version **2.1.19**
 4. Add **DatalyrSDK** to your app target
 
 Or in `Package.swift`:
 ```swift
 dependencies: [
-  .package(url: "https://github.com/datalyr/swift", from: "2.1.18")
+  .package(url: "https://github.com/datalyr/swift", from: "2.1.19")
 ]
 ```
 
@@ -38,7 +38,7 @@ dependencies: [
 
 Add to your `Podfile`:
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.18'
+pod 'DatalyrSDK', '~> 2.1.19'
 ```
 
 Then run:
@@ -258,6 +258,13 @@ await DatalyrSDK.shared.identify("user_123", properties: [
 - After login
 - After profile update (if email changes)
 
+**Pre-login ID:** if your app assigns its own user ID before sign-in (a guest or device ID), send it with `provisional: true`. It is ignored while a signed-in user is identified, and the real `identify()` after sign-in does not run `reset()`:
+
+```swift
+await DatalyrSDK.shared.identify(guestId, provisional: true)   // before sign-in
+await DatalyrSDK.shared.identify(account.uid, properties: ["email": account.email])  // after
+```
+
 ### 3e. Alias
 
 Associate a new user ID with a previous one (e.g., after account merge):
@@ -276,6 +283,14 @@ await DatalyrSDK.shared.reset()
 ```
 
 Always call `reset()` on logout. Without it, the next user's events are attributed to the previous user.
+
+With RevenueCat or Superwall, log out of them FIRST, then reset DATALYR, so the new `datalyr_id` reaches the new anonymous provider user:
+
+```swift
+_ = try? await Purchases.shared.logOut()
+Superwall.shared.reset()
+await DatalyrSDK.shared.reset()
+```
 
 ### 3g. Anonymous ID
 
@@ -330,15 +345,16 @@ A session expires after 30 minutes of inactivity. That 30 minutes is hardcoded f
 import DatalyrSDK
 import SuperwallKit
 
-// After BOTH SDKs are initialized
-let attrs = DatalyrSDK.shared.getSuperwallAttributes()
-Superwall.shared.setUserAttributes(attrs)
+// Once, after Superwall is configured
+DatalyrSDK.shared.syncSuperwallAttributes { attrs in
+    Superwall.shared.setUserAttributes(attrs)
+}
 ```
 
-**Call this:**
-- After both SDKs are initialized (on app launch)
-- Again after `identify()` if user info changes
-- Again after the user responds to the ATT prompt (to include IDFA)
+The handler runs on the main thread right away (or when DATALYR finishes initializing), and again after every `reset()`, after an `identify()` that changed the identity, after the ATT prompt, and after a web→app match. You do not need to call it again yourself.
+
+- Register it and call `identify()` BEFORE showing the paywall.
+- On logout call `Superwall.shared.reset()` FIRST, then `DatalyrSDK.shared.reset()`.
 
 **Returned attribute keys:**
 
@@ -401,16 +417,22 @@ Only non-empty values are included. This method returns no `gaid` and no `oppref
 import DatalyrSDK
 import RevenueCat
 
-// After BOTH SDKs are initialized
-let attrs = DatalyrSDK.shared.getRevenueCatAttributes()
-Purchases.shared.attribution.setAttributes(attrs)
+// Once, after Purchases is configured
+DatalyrSDK.shared.syncRevenueCatAttributes { attrs in
+    Purchases.shared.attribution.setAttributes(attrs)
+}
 ```
+
+The handler runs on the main thread right away (or when DATALYR finishes initializing), and again after every `reset()`, after an `identify()` that changed the identity, after the ATT prompt, and after a web→app match.
+
+- Register it and call `identify()` BEFORE showing the paywall.
+- On logout call `Purchases.shared.logOut()` FIRST, then `DatalyrSDK.shared.reset()`. Otherwise the new `datalyr_id` lands on the logged-out RevenueCat user.
 
 **Returned attribute keys (reserved `$`-prefixed):**
 
 | Key | Description |
 |---|---|
-| `$datalyrId` | Datalyr visitor ID |
+| `datalyr_id` | DATALYR anonymous ID (custom key; RevenueCat drops unknown `$` keys) |
 | `$mediaSource` | Acquisition source |
 | `$campaign` | Campaign name |
 | `$adGroup` | Ad group / adset |
@@ -814,12 +836,10 @@ import AppTrackingTransparency
 // Request after onboarding, not on first launch
 ATTrackingManager.requestTrackingAuthorization { status in
     Task {
-        // updateTrackingAuthorization takes a UInt?, not a Bool
+        // updateTrackingAuthorization takes a UInt?, not a Bool.
+        // It also re-runs the syncSuperwallAttributes / syncRevenueCatAttributes handlers,
+        // so the IDFA reaches both providers.
         await DatalyrSDK.shared.updateTrackingAuthorization(status: status.rawValue)
-
-        // After the ATT response, re-pass attributes to include IDFA
-        let attrs = DatalyrSDK.shared.getSuperwallAttributes() // or getRevenueCatAttributes()
-        Superwall.shared.setUserAttributes(attrs)
     }
 }
 ```
@@ -937,7 +957,7 @@ print("Click ID: \(attribution.fbclid ?? attribution.gclid ?? attribution.ttclid
 
 8. **Don't track the same event client AND server** -- Creates duplicates. Don't call `trackPurchase()` AND have webhooks send the same purchase event.
 
-9. **Call `getSuperwallAttributes()` / `getRevenueCatAttributes()` again after ATT prompt** -- Includes IDFA if user authorized.
+9. **Use `syncSuperwallAttributes` / `syncRevenueCatAttributes`, not a one-time set** -- The handlers re-push `datalyr_id` after `reset()` and the IDFA after the ATT prompt.
 
 10. **Use dynamic values for purchase conversion rules** -- Static values don't reflect actual order amounts.
 
@@ -949,7 +969,8 @@ print("Click ID: \(attribution.fbclid ?? attribution.gclid ?? attribution.ttclid
 |---|---|---|
 | Using `trackPurchase()` with Superwall/RevenueCat | Counts trials and failed payments as revenue | Use webhooks only for subscription revenue |
 | Not calling `identify()` with email | iOS web-to-app attribution fails (no fallback) | Always identify with email after signup/login |
-| Not passing attributes to Superwall/RevenueCat | Revenue events not attributed to campaigns | Call `getSuperwallAttributes()`/`getRevenueCatAttributes()` after SDK init |
+| Not passing attributes to Superwall/RevenueCat | Revenue events not attributed to campaigns | Register `syncSuperwallAttributes`/`syncRevenueCatAttributes` before the paywall |
+| Calling DATALYR `reset()` before `Purchases.logOut()` / `Superwall.reset()` | New `datalyr_id` lands on the logged-out provider user | Log out of the provider first, then `reset()` |
 | Server-side redirects for landing pages | Web SDK never loads, attribution data lost | Must use JavaScript-based page |
 | Wrong API key format | Auth errors | Must start with `dk_`, from **Settings → API** |
 | Not setting up conversion rules | Events tracked but never sent to ad platforms | Create a rule under **Conversions** |
@@ -1090,7 +1111,7 @@ Reset packages: **File > Packages > Reset Package Caches**
 ### User Identity
 | Method | Description |
 |---|---|
-| `DatalyrSDK.shared.identify(_:properties:)` | Identify a user |
+| `DatalyrSDK.shared.identify(_:properties:provisional:)` | Identify a user (`provisional: true` for a pre-login ID) |
 | `DatalyrSDK.shared.alias(_:previousId:)` | Associate new user ID with previous |
 | `DatalyrSDK.shared.reset()` | Clear user data, rotate anonymous and visitor IDs, start a new session |
 | `DatalyrSDK.shared.getAnonymousId()` | Get persistent anonymous device ID |
@@ -1107,6 +1128,8 @@ Reset packages: **File > Packages > Reset Package Caches**
 ### Integrations
 | Method | Description |
 |---|---|
+| `DatalyrSDK.shared.syncSuperwallAttributes(_:)` | Keep Superwall attributes in step (re-pushed after reset/identify/ATT) |
+| `DatalyrSDK.shared.syncRevenueCatAttributes(_:)` | Keep RevenueCat attributes in step (re-pushed after reset/identify/ATT) |
 | `DatalyrSDK.shared.getSuperwallAttributes()` | Get attrs formatted for Superwall |
 | `DatalyrSDK.shared.getRevenueCatAttributes()` | Get attrs formatted for RevenueCat |
 

@@ -445,6 +445,9 @@ internal enum StorageKeys {
     static let sessionTimestamp = "datalyr_session_timestamp"
     static let deviceId = "datalyr_device_id"
     static let userId = "datalyr_user_id"
+    /// Present (true) while the stored userId is a provisional (pre-login) id set with
+    /// identify(_:properties:provisional: true). Removed by reset() and by a real identify.
+    static let userIdProvisional = "datalyr_user_id_provisional"
     static let userProperties = "datalyr_user_properties"
     static let eventQueue = "datalyr_event_queue"
     static let deadLetterQueue = "datalyr_dead_letter_queue"

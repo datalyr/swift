@@ -2,7 +2,7 @@
 
 Server-side attribution, event tracking, SKAdNetwork conversion values, and Apple Search Ads attribution for iOS.
 
-Current release: **2.1.18**. Every event posts to `https://ingest.datalyr.com/track`.
+Current release: **2.1.19**. Every event posts to `https://ingest.datalyr.com/track`.
 
 Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sdk-reference/ios).
 
@@ -38,7 +38,7 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 |---|---|
 | Minimum iOS | 13.0 |
 | Swift tools version | 5.7 |
-| Current release | 2.1.18 |
+| Current release | 2.1.19 |
 | Frameworks linked | `Foundation`, `UIKit`, `StoreKit`, `AdServices` (weak) |
 
 ---
@@ -49,19 +49,19 @@ Full reference: [docs.datalyr.com/sdk-reference/ios](https://docs.datalyr.com/sd
 
 1. In Xcode, open **File > Add Package Dependencies**.
 2. Enter `https://github.com/datalyr/swift`.
-3. Select version 2.1.18.
+3. Select version 2.1.19.
 4. Add the `DatalyrSDK` product to your app target.
 
 In `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/datalyr/swift", from: "2.1.18")
+.package(url: "https://github.com/datalyr/swift", from: "2.1.19")
 ```
 
 ### CocoaPods
 
 ```ruby
-pod 'DatalyrSDK', '~> 2.1.18'
+pod 'DatalyrSDK', '~> 2.1.19'
 ```
 
 Run `pod install`. Open the generated `.xcworkspace`.
@@ -357,6 +357,24 @@ await DatalyrSDK.shared.identify("user_123", properties: [
 
 A repeat call with an unchanged ID and unchanged traits sends no `$identify` event. When `properties` carries an `email`, or the user ID is an email address, the SDK fetches and merges web attribution for that address.
 
+### Pre-login (provisional) ID
+
+If your app gives each user its own ID before they sign in (a guest or device ID), send it with `provisional: true`:
+
+```swift
+// Before sign-in
+await DatalyrSDK.shared.identify(guestId, provisional: true)
+
+// After sign-in: no reset runs, the guest ID converts into this account once
+await DatalyrSDK.shared.identify(account.uid, properties: ["email": account.email])
+```
+
+- A provisional ID is ignored while a signed-in (non-provisional) user is identified. Re-sending the guest ID on every launch is safe.
+- Replacing a provisional ID with the real account ID, or with another provisional ID, does not run `reset()`.
+- Every event sent while the provisional ID is current carries `properties.$provisional_user_id = true`.
+- The flag survives relaunch. `reset()` clears it.
+- No `$alias` is sent. DATALYR converts the provisional ID on the server when the workspace has provisional conversion turned on.
+
 ### Identity on the wire
 
 | Wire field | Value |
@@ -364,11 +382,12 @@ A repeat call with an unchanged ID and unchanged traits sends no `$identify` eve
 | `anonymousId` | Top-level. Format `anon_<UUID>`. |
 | `properties.anonymous_id` | The same value, repeated. |
 | `userId` | Your ID from `identify()`. The key is absent until then. |
+| `properties.$provisional_user_id` | `true` while the current user ID was set with `provisional: true`. Absent otherwise. |
 | `properties.sessionId` | A bare UUID. No prefix. |
 | `context.session_id` | The same session UUID. This is the field Datalyr reads. |
 | `properties.device_context.deviceId` | A bare UUID for the install. Sent as `properties.fingerprint` before 2.1.18. |
 
-This SDK sends no `distinct_id` and no top-level `visitor_id`. Only the Web SDK sends `distinct_id`. To pass identity to RevenueCat or Superwall, use `getRevenueCatAttributes()` or `getSuperwallAttributes()`.
+This SDK sends no `distinct_id` and no top-level `visitor_id`. Only the Web SDK sends `distinct_id`. To pass identity to RevenueCat or Superwall, use `syncRevenueCatAttributes(_:)` or `syncSuperwallAttributes(_:)`.
 
 ### Anonymous ID
 
@@ -395,6 +414,16 @@ await DatalyrSDK.shared.reset()
 ```
 
 `reset()` rotates the anonymous ID, the visitor ID, and the session ID. It clears the user ID, user properties, attribution, the journey, and SKAdNetwork state. Call it on logout.
+
+With RevenueCat or Superwall, log out of those SDKs FIRST, then call `reset()`:
+
+```swift
+_ = try? await Purchases.shared.logOut()
+Superwall.shared.reset()
+await DatalyrSDK.shared.reset()   // pushes the new datalyr_id through the sync handlers
+```
+
+In the other order the new `datalyr_id` lands on the provider user that is being logged out.
 
 ---
 
@@ -595,20 +624,29 @@ ATT governs the advertising identifier. It is not an analytics consent system. Y
 
 ## Superwall and RevenueCat
 
-Call both methods after the two SDKs initialize, and again after the ATT prompt resolves.
+Register a sync handler for each provider once, after configuring it:
 
 ```swift
-Superwall.shared.setUserAttributes(DatalyrSDK.shared.getSuperwallAttributes())
-Purchases.shared.attribution.setAttributes(DatalyrSDK.shared.getRevenueCatAttributes())
+DatalyrSDK.shared.syncRevenueCatAttributes { attrs in
+    Purchases.shared.attribution.setAttributes(attrs)
+}
+DatalyrSDK.shared.syncSuperwallAttributes { attrs in
+    Superwall.shared.setUserAttributes(attrs)
+}
 ```
 
-Both methods return `[String: String]` and omit every empty value.
+The handler runs on the main thread: right away (or when `initialize()` finishes), and again after every `reset()` (including the reset inside `identify()` on an account switch), after an `identify()` that changed the identity, after `bindProviderIdentity()`, after `updateTrackingAuthorization(status:)`, and after a web→app attribution match. `reset()` rotates `datalyr_id`, and `Superwall.shared.reset()` wipes user attributes, so setting them once at launch goes stale. A new registration replaces the previous handler.
+
+- Register the handlers and call `identify()` BEFORE showing the paywall, so the purchase carries the current `datalyr_id` and attribution.
+- On logout, call `Purchases.shared.logOut()` / `Superwall.shared.reset()` FIRST, then `DatalyrSDK.shared.reset()`. Otherwise the new `datalyr_id` lands on the logged-out provider user.
+
+`getSuperwallAttributes()` and `getRevenueCatAttributes()` return the same dictionaries for a one-off read. Both return `[String: String]` and omit every empty value.
 
 ### getSuperwallAttributes
 
 | Key | Value |
 |---|---|
-| `datalyr_id` | The visitor ID |
+| `datalyr_id` | The anonymous ID (`getAnonymousId()`) |
 | `media_source` | `utm_source` |
 | `campaign` | `utm_campaign` |
 | `adgroup` | `adset_id`, or `utm_content` when `adset_id` is empty |
@@ -627,7 +665,6 @@ Reserved keys:
 
 | Key | Value |
 |---|---|
-| `$datalyrId` | The visitor ID |
 | `$mediaSource` | `utm_source` |
 | `$campaign` | `utm_campaign` |
 | `$adGroup` | `adset_id` |
@@ -640,8 +677,9 @@ Custom keys:
 
 | Key | Value |
 |---|---|
+| `datalyr_id` | The anonymous ID (`getAnonymousId()`). Un-prefixed: RevenueCat drops unknown `$` keys. |
 | `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content` | UTM parameters |
-| `lyr` | Datalyr tracking link ID |
+| `lyr` | DATALYR tracking link ID |
 | `fbclid`, `gclid`, `ttclid`, `wbraid`, `gbraid` | Ad click IDs |
 | `network` | Ad network |
 | `creative_id` | Ad creative ID |
@@ -787,7 +825,7 @@ Each free function calls through to `DatalyrSDK.shared`.
 |---|---|
 | `datalyrTrack(_:properties:)` | `track(_:eventData:)` |
 | `datalyrScreen(_:properties:)` | `screen(_:properties:)` |
-| `datalyrIdentify(_:properties:)` | `identify(_:properties:)` |
+| `datalyrIdentify(_:properties:provisional:)` | `identify(_:properties:provisional:)` |
 | `datalyrAlias(_:previousId:)` | `alias(_:previousId:)` |
 | `datalyrReset()` | `reset()` |
 | `datalyrFlush()` | `flush()` |
