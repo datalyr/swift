@@ -102,9 +102,20 @@ internal class DatalyrHTTPClient {
         sessionConfig.timeoutIntervalForResource = config.timeout * 2
         sessionConfig.waitsForConnectivity = true
         sessionConfig.allowsCellularAccess = true
-        
+        #if DEBUG
+        if let stubs = Self.protocolClassesForTesting {
+            sessionConfig.protocolClasses = stubs + (sessionConfig.protocolClasses ?? [])
+        }
+        #endif
+
         self.session = URLSession(configuration: sessionConfig)
     }
+
+    #if DEBUG
+    /// Test support: URLProtocol stubs for clients created after this is set (this
+    /// client's own session does not consult URLProtocol.registerClass).
+    static var protocolClassesForTesting: [AnyClass]?
+    #endif
     
     // MARK: - Event Sending
     

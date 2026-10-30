@@ -70,6 +70,11 @@ public class DatalyrSDK {
     private var currentUserSnapshot: (id: String?, provisional: Bool) {
         identityStateLock.withLock { (_currentUserId, _currentUserIsProvisional) }
     }
+    /// Bumped by every reset (incl. the account-switch reset inside identify). Async work
+    /// started for one identity (the identify(email) web lookup) checks it before applying
+    /// its result, so a reply that lands after a logout/switch is dropped.
+    private var _identityGeneration = 0
+    private var identityGeneration: Int { identityStateLock.withLock { _identityGeneration } }
     private func setCurrentUser(_ id: String?, provisional: Bool) {
         identityStateLock.withLock {
             _currentUserId = id
@@ -434,16 +439,26 @@ public class DatalyrSDK {
         }
         if shouldBuffer { return }
 
+        guard let payload = await prepareEvent(eventName, eventData: eventData) else { return }
+        await eventQueue?.enqueue(payload)
+    }
+
+    /// Validate an (already normalized) event and build its payload, without enqueueing it.
+    /// Split from track() so identify/alias can build `$identify`/`$alias` under the
+    /// identity lock (capturing the ids, user and provisional flag of that moment) and
+    /// enqueue after releasing it: enqueue awaits the queue flush, i.e. network I/O with
+    /// timeouts and retries, which must never hold up a logout reset().
+    private func prepareEvent(_ eventName: String, eventData: EventData?) async -> EventPayload? {
         guard validateEventName(eventName) else {
             errorLog("Invalid event name: \(eventName)")
-            return
+            return nil
         }
-        
+
         guard validateEventData(eventData) else {
             errorLog("Invalid event data provided")
-            return
+            return nil
         }
-        
+
         debugLog("Tracking event: \(eventName)", data: eventData)
 
         // FSR-36: last-activity is the session-timeout anchor. Bump the stored session
@@ -457,7 +472,7 @@ public class DatalyrSDK {
         trackObserverForTesting?(eventName, eventData)
         payloadObserverForTesting?(payload)
         #endif
-        await eventQueue?.enqueue(payload)
+        return payload
     }
 
     #if DEBUG
@@ -548,6 +563,11 @@ public class DatalyrSDK {
     private struct IdentifyOutcome {
         var didReset = false
         var emailForLookup: String?
+        /// `$identify`, built under the lock; enqueued after it is released.
+        var identifyPayload: EventPayload?
+        /// identityGeneration when the lock was released: a reset after that makes the
+        /// web-attribution answer belong to a previous identity.
+        var generation = 0
     }
 
     /// identify() body. Caller holds identityMutex. Returns nil when the call was ignored.
@@ -632,10 +652,11 @@ public class DatalyrSDK {
             debugLog("Skipping redundant identify (unchanged identity) for \(userId)")
         } else {
             await DatalyrStorage.shared.setString(StorageKeys.lastIdentityKey, value: identityKey)
-            await track("$identify", eventData: identifyData)
+            outcome.identifyPayload = await prepareEvent("$identify", eventData: identifyData)
         }
 
         outcome.emailForLookup = email ?? (userId.contains("@") ? userId : nil)
+        outcome.generation = identityGeneration
         return outcome
     }
 
@@ -643,6 +664,9 @@ public class DatalyrSDK {
     /// lookup (network, up to 10 s) and the RevenueCat / Superwall push.
     private func finishIdentify(_ outcome: IdentifyOutcome?) async {
         guard let outcome = outcome else { return }
+        if let payload = outcome.identifyPayload {
+            await eventQueue?.enqueue(payload)
+        }
         // Fetch and merge web attribution if email is provided.
         //
         // IOS-19: this runs on EVERY identify — redundant or not — and must stay
@@ -662,7 +686,7 @@ public class DatalyrSDK {
         // (the request itself) stays removed.
         var mergedWebAttribution = false
         if let emailForLookup = outcome.emailForLookup {
-            mergedWebAttribution = await fetchAndMergeWebAttribution(email: emailForLookup)
+            mergedWebAttribution = await fetchAndMergeWebAttribution(email: emailForLookup, generation: outcome.generation)
         }
 
         // Re-push to RevenueCat / Superwall only when what they hold changed: the
@@ -708,7 +732,7 @@ public class DatalyrSDK {
     /// Called automatically during identify() if email is provided
     /// - Returns: true when web attribution was merged into this install.
     @discardableResult
-    private func fetchAndMergeWebAttribution(email: String) async -> Bool {
+    private func fetchAndMergeWebAttribution(email: String, generation: Int) async -> Bool {
         // Web→app attribution is a one-time, install-time fact: a user either had a
         // web touch before installing or didn't, and that doesn't change. So resolve
         // it AT MOST ONCE per email per install. Without this, every identify(email)
@@ -773,6 +797,14 @@ public class DatalyrSDK {
             // throws without marking, and only a definitively parsed 200 marks —
             // so every failure mode retries on the next identify.
             let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+            // The answer belongs to the identity that asked. If reset() ran meanwhile
+            // (logout / account switch), drop it: no checked-marker (reset cleared the set),
+            // no merge into the new user's attribution, no bridge event on the new id.
+            guard identityGeneration == generation else {
+                debugLog("Web attribution answer arrived after a reset — dropped")
+                return false
+            }
 
             // Definitive 200 answer (found or not). Record it so repeated identify(email)
             // calls don't re-run this immutable, install-time lookup.
@@ -845,6 +877,11 @@ public class DatalyrSDK {
             if let utmContent = attribution["utm_content"] { mergedData["utm_content"] = utmContent }
             if let utmTerm = attribution["utm_term"] { mergedData["utm_term"] = utmTerm }
             if let timestamp = attribution["timestamp"] { mergedData["web_timestamp"] = timestamp }
+
+            guard identityGeneration == generation else {
+                debugLog("Web attribution answer arrived after a reset — dropped")
+                return false
+            }
 
             // Canonical web→app bridge event — email and IP paths both fire
             // $web_attribution_matched, distinguished by match_method, so server
@@ -1240,7 +1277,8 @@ public class DatalyrSDK {
         // `alias` (no `$`) with snake_case keys, so NO visitor_user_link was ever
         // written for an alias (alias-based identity merges were silently dropped).
         // Emit the canonical name + both casings + anonymous_id. (Matches Node/RN.)
-        await track("$alias", eventData: [
+        // Built under the lock, enqueued after it (see prepareEvent).
+        let aliasPayload = await prepareEvent("$alias", eventData: [
             "userId": newUserId,
             "previousId": previousUserId,
             "user_id": newUserId,
@@ -1253,6 +1291,9 @@ public class DatalyrSDK {
         setCurrentUser(newUserId, provisional: false)
         await persistUserData()
         await identityMutex.unlock()
+        if let aliasPayload = aliasPayload {
+            await eventQueue?.enqueue(aliasPayload)
+        }
     }
     
     /// Route a deep link to the attribution parser, buffering it if init hasn't finished.
@@ -1315,6 +1356,7 @@ public class DatalyrSDK {
         // Clear user data and rotate the ids BEFORE the first await, so nothing built
         // while this suspends (a track() on another task) pairs the old ids with no user.
         setCurrentUser(nil, provisional: false)
+        identityStateLock.withLock { _identityGeneration += 1 }
         userProperties.removeAll()
         visitorId = generateUUID()
         anonymousId = "anon_\(generateUUID())"

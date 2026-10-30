@@ -7,10 +7,15 @@ final class EmailLookupStub: URLProtocol {
     private static let lock = NSLock()
     private static var _responses: [[String: Any]] = []
     private static var _count = 0
+    private static var _delay: TimeInterval = 0
 
     static var count: Int { lock.withLock { _count } }
+    static var delay: TimeInterval {
+        get { lock.withLock { _delay } }
+        set { lock.withLock { _delay = newValue } }
+    }
     static func enqueue(_ body: [String: Any]) { lock.withLock { _responses.append(body) } }
-    static func reset() { lock.withLock { _responses = []; _count = 0 } }
+    static func reset() { lock.withLock { _responses = []; _count = 0; _delay = 0 } }
 
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.path == "/attribution/lookup"
@@ -21,11 +26,49 @@ final class EmailLookupStub: URLProtocol {
             Self._count += 1
             return Self._responses.isEmpty ? ["found": false] : Self._responses.removeFirst()
         }
-        let http = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
-                                   headerFields: ["Content-Type": "application/json"])!
-        client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: body)) ?? Data())
-        client?.urlProtocolDidFinishLoading(self)
+        let respond = { [self] in
+            let http = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: body)) ?? Data())
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        let delay = Self.delay
+        if delay > 0 {
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: respond)
+        } else {
+            respond()
+        }
+    }
+    override func stopLoading() {}
+}
+
+/// Ingest (`/track`) that answers 200 after `delay` seconds: an event send in flight.
+final class SlowIngestStub: URLProtocol {
+    private static let lock = NSLock()
+    private static var _delay: TimeInterval = 0
+    private static var _started = 0
+
+    static var started: Int { lock.withLock { _started } }
+    static var delay: TimeInterval {
+        get { lock.withLock { _delay } }
+        set { lock.withLock { _delay = newValue } }
+    }
+    static func reset() { lock.withLock { _delay = 0; _started = 0 } }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "slow-ingest.test"
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let delay: TimeInterval = Self.lock.withLock { Self._started += 1; return Self._delay }
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [self] in
+            let http = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(#"{"success":true}"#.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        }
     }
     override func stopLoading() {}
 }
@@ -640,5 +683,85 @@ final class IdentityProvisionalTests: XCTestCase {
         await drainMain()
         XCTAssertEqual(rc.value.count, 2, "web match re-pushes")
         XCTAssertEqual(rc.value.last?["fbclid"], "FB_WEB")
+    }
+
+    // MARK: - The identity lock is never held across network I/O
+
+    /// identify() enqueues `$identify` after releasing the identity lock: enqueue awaits the
+    /// queue flush (an HTTP send that can take seconds), and a logout reset() must not wait
+    /// behind it.
+    func testResetDoesNotWaitForIdentifyEventSend() async throws {
+        DatalyrHTTPClient.protocolClassesForTesting = [SlowIngestStub.self]
+        SlowIngestStub.reset()
+        defer {
+            DatalyrHTTPClient.protocolClassesForTesting = nil
+            SlowIngestStub.reset()
+        }
+        await DatalyrStorage.shared.removeValue(StorageKeys.eventQueue)  // no backlog from other tests
+        let sdk = DatalyrSDK()
+        observe(sdk)
+        let config = DatalyrConfig(
+            apiKey: "dk_test",
+            endpoint: "https://slow-ingest.test/track",
+            maxRetries: 0,
+            retryDelay: 0.01,
+            timeout: 10,
+            flushInterval: 3600,
+            enableAutoEvents: false,
+            enableAttribution: false
+        )
+        try await sdk.initialize(config: config)
+        await sdk.flush()
+        let sendsBefore = SlowIngestStub.started
+
+        SlowIngestStub.delay = 3
+        let identifyTask = Task { await sdk.identify("account-A") }
+        let deadline = Date().addingTimeInterval(5)
+        while SlowIngestStub.started == sendsBefore && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertGreaterThan(SlowIngestStub.started, sendsBefore, "the $identify send is in flight")
+
+        let start = Date()
+        await sdk.reset()
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 1.0, "reset() waited \(elapsed)s behind an event send")
+        XCTAssertNil(sdk.getStatus().currentUserId)
+        SlowIngestStub.delay = 0
+        await identifyTask.value
+        await DatalyrStorage.shared.removeValue(StorageKeys.eventQueue)
+    }
+
+    // MARK: - A web-attribution answer for a previous identity is dropped
+
+    func testEmailLookupAnsweredAfterResetIsDropped() async {
+        let sdk = await launch()
+        let rc = Box<[[String: String]]>([])
+        sdk.syncRevenueCatAttributes { rc.value.append($0) }
+        await drainMain()
+        EmailLookupStub.delay = 1
+        EmailLookupStub.enqueue([
+            "found": true,
+            "attribution": ["visitor_id": "web-visitor-old", "fbclid": "FB_OLD_USER"],
+        ])
+        let identifyTask = Task { await sdk.identify("user-old", properties: ["email": "old@example.com"]) }
+        let deadline = Date().addingTimeInterval(5)
+        while EmailLookupStub.count == 0 && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(EmailLookupStub.count, 1, "lookup in flight")
+
+        await sdk.reset()                       // logout while the lookup is pending
+        let anonAfterReset = sdk.getAnonymousId()
+        await identifyTask.value                // lookup answers now
+        await drainMain()
+
+        XCTAssertFalse(events.value.contains { $0.0 == "$web_attribution_matched" },
+                       "no bridge event on the new identity")
+        XCTAssertNil(sdk.getAttributionData().fbclid, "old user's click id not merged into the new state")
+        let checked = await DatalyrStorage.shared.getString("datalyr_web_attribution_checked")
+        XCTAssertNil(checked, "checked-marker not rewritten after reset cleared it")
+        XCTAssertFalse(rc.value.contains { $0["fbclid"] == "FB_OLD_USER" }, "old click id never pushed")
+        XCTAssertEqual(rc.value.last?["datalyr_id"], anonAfterReset)
     }
 }
