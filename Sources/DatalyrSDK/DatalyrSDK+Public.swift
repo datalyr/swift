@@ -105,8 +105,9 @@ public func datalyrScreen(_ screenName: String, properties: [String: Any]? = nil
 /// - Parameters:
 ///   - userId: User identifier
 ///   - properties: Optional user properties
-public func datalyrIdentify(_ userId: String, properties: [String: Any]? = nil) async {
-    await DatalyrSDK.shared.identify(userId, properties: properties)
+///   - provisional: `true` for the app's own pre-login id (see `DatalyrSDK.identify`)
+public func datalyrIdentify(_ userId: String, properties: [String: Any]? = nil, provisional: Bool = false) async {
+    await DatalyrSDK.shared.identify(userId, properties: properties, provisional: provisional)
 }
 
 /// Global convenience function to create user aliases
