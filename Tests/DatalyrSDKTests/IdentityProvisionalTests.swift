@@ -1,9 +1,37 @@
 import XCTest
 @testable import DatalyrSDK
 
-/// 2.1.19 identity fixes, driven through the real SDK on an isolated instance (no event
-/// queue): provisional (pre-login) ids, RevenueCat/Superwall attribute re-push, and the
-/// web-attribution self-match guard.
+/// Stubs POST /attribution/lookup (the identify(email) web-attribution lookup) for
+/// URLSession.shared.
+final class EmailLookupStub: URLProtocol {
+    private static let lock = NSLock()
+    private static var _responses: [[String: Any]] = []
+    private static var _count = 0
+
+    static var count: Int { lock.withLock { _count } }
+    static func enqueue(_ body: [String: Any]) { lock.withLock { _responses.append(body) } }
+    static func reset() { lock.withLock { _responses = []; _count = 0 } }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.path == "/attribution/lookup"
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let body: [String: Any] = Self.lock.withLock {
+            Self._count += 1
+            return Self._responses.isEmpty ? ["found": false] : Self._responses.removeFirst()
+        }
+        let http = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                   headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: body)) ?? Data())
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+/// 2.1.19 identity fixes, driven through the real SDK: provisional (pre-login) ids,
+/// RevenueCat/Superwall attribute re-push, and the web-attribution self-match guard.
 final class IdentityProvisionalTests: XCTestCase {
 
     private final class Box<T> {
@@ -22,6 +50,7 @@ final class IdentityProvisionalTests: XCTestCase {
     private static let identityKeys = [
         StorageKeys.userId, StorageKeys.userIdProvisional, StorageKeys.userProperties,
         StorageKeys.lastIdentityKey, StorageKeys.anonymousId, StorageKeys.visitorId,
+        StorageKeys.attributionData, "datalyr_web_attribution_checked",
     ]
 
     private static func clearIdentityStorage() async {
@@ -31,36 +60,35 @@ final class IdentityProvisionalTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
         URLProtocol.registerClass(DeferredLookupStub.self)
+        URLProtocol.registerClass(EmailLookupStub.self)
         DeferredLookupStub.reset()
+        EmailLookupStub.reset()
         payloads = Box([])
         events = Box([])
         await Self.clearIdentityStorage()
         await ATTDeferredLookupTests.clearLookupStorage()
         await DatalyrStorage.shared.removeValue(StorageKeys.firstLaunchTime)
-        await DatalyrStorage.shared.removeValue(StorageKeys.attributionData)
     }
 
     override func tearDown() async throws {
         URLProtocol.unregisterClass(DeferredLookupStub.self)
+        URLProtocol.unregisterClass(EmailLookupStub.self)
         DeferredLookupStub.reset()
+        EmailLookupStub.reset()
         await Self.clearIdentityStorage()
         await ATTDeferredLookupTests.clearLookupStorage()
-        await DatalyrStorage.shared.removeValue(StorageKeys.attributionData)
         try await super.tearDown()
     }
 
     /// A "launch": fresh SDK over the persisted storage, ids and user state loaded as
-    /// initialize() loads them.
+    /// initialize() loads them (no event queue, no network besides stubbed lookups).
     private func launch() async -> DatalyrSDK {
         let manager = AttributionManager()
         await manager.initialize()
         let platform = PlatformIntegrationManager()
         platform.attStatusProvider = { 3 }
         let sdk = DatalyrSDK()
-        let payloads = self.payloads
-        let events = self.events
-        sdk.payloadObserverForTesting = { payloads.value.append($0) }
-        sdk.trackObserverForTesting = { name, data in events.value.append((name, data)) }
+        observe(sdk)
         sdk.configureForDeferredLookupTesting(
             config: DatalyrConfig(apiKey: "dk_test"),
             attributionManager: manager,
@@ -69,6 +97,26 @@ final class IdentityProvisionalTests: XCTestCase {
         await sdk.loadIdentityForTesting()
         return sdk
     }
+
+    private func observe(_ sdk: DatalyrSDK) {
+        let payloads = self.payloads
+        let events = self.events
+        sdk.payloadObserverForTesting = { payloads.value.append($0) }
+        sdk.trackObserverForTesting = { name, data in events.value.append((name, data)) }
+    }
+
+    /// The real initialize(): queue pointed at a closed local port, no auto events, no
+    /// attribution lookups.
+    private static let initConfig = DatalyrConfig(
+        apiKey: "dk_test",
+        endpoint: "http://127.0.0.1:9/track",
+        maxRetries: 0,
+        retryDelay: 0.01,
+        timeout: 1,
+        flushInterval: 3600,
+        enableAutoEvents: false,
+        enableAttribution: false
+    )
 
     private func sent(_ name: String) -> [EventPayload] { payloads.value.filter { $0.eventName == name } }
     private let wireClient = DatalyrHTTPClient(
@@ -79,6 +127,14 @@ final class IdentityProvisionalTests: XCTestCase {
         wireClient.transformForServerAPI(p)["properties"] as? [String: Any] ?? [:]
     }
     private func isMarked(_ p: EventPayload) -> Bool { (wireProps(p)["$provisional_user_id"] as? Bool) == true }
+    private func hasMarkerKey(_ p: EventPayload) -> Bool { wireProps(p)["$provisional_user_id"] != nil }
+
+    /// Waits until everything queued on the main queue so far has run.
+    private func drainMain() async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            DispatchQueue.main.async { c.resume() }
+        }
+    }
 
     // MARK: - Provisional marker
 
@@ -89,7 +145,7 @@ final class IdentityProvisionalTests: XCTestCase {
         await sdk.track("onboarding_step")
         await sdk.screen("Home")
 
-        XCTAssertFalse(isMarked(sent("before_identify")[0]), "no user yet → no marker")
+        XCTAssertFalse(hasMarkerKey(sent("before_identify")[0]), "no user yet → no marker")
         let identify = sent("$identify")
         XCTAssertEqual(identify.count, 1)
         XCTAssertTrue(isMarked(identify[0]), "$identify of a provisional id carries the marker")
@@ -99,9 +155,29 @@ final class IdentityProvisionalTests: XCTestCase {
         XCTAssertTrue(sdk.currentUserIsProvisionalForTesting)
     }
 
+    func testCallerSuppliedMarkerIsStripped() async {
+        let sdk = await launch()
+        await sdk.track("anon_claim", eventData: ["$provisional_user_id": true])
+        await sdk.identify("account-B")
+        await sdk.track("real_claim", eventData: ["$provisional_user_id": true, "keep": 1])
+        XCTAssertFalse(hasMarkerKey(sent("anon_claim")[0]), "caller cannot set the marker with no user")
+        XCTAssertFalse(hasMarkerKey(sent("real_claim")[0]), "caller cannot mark a signed-in user provisional")
+        XCTAssertEqual(wireProps(sent("real_claim")[0])["keep"] as? Int, 1)
+
+        // While provisional the SDK's own value wins (a caller false does not unmark it).
+        await sdk.reset()
+        await sdk.identify("guest-uuid-1", provisional: true)
+        await sdk.track("guest_event", eventData: ["$provisional_user_id": false])
+        XCTAssertTrue(isMarked(sent("guest_event")[0]))
+    }
+
     func testProvisionalStateSurvivesRelaunch() async {
         let first = await launch()
         await first.identify("guest-uuid-1", provisional: true)
+        let flag = await DatalyrStorage.shared.getString(StorageKeys.userIdProvisional)
+        XCTAssertEqual(flag, DatalyrSDK.provisionalFlag(for: "guest-uuid-1"))
+        XCTAssertTrue(flag?.hasPrefix("provisional:") == true)
+        XCTAssertFalse(flag?.contains("guest-uuid-1") == true, "flag stores a hash, not the id")
 
         let second = await launch()
         XCTAssertEqual(second.getStatus().currentUserId, "guest-uuid-1")
@@ -110,11 +186,62 @@ final class IdentityProvisionalTests: XCTestCase {
         XCTAssertTrue(isMarked(sent("relaunch_event")[0]))
     }
 
+    /// Downgrade to ≤ 2.1.18, which signs in B without touching the flag: the flag left for
+    /// the guest id must not make B provisional on the next 2.1.19 launch.
+    func testFlagForAnotherUserIdIsIgnored() async {
+        await DatalyrStorage.shared.setString(StorageKeys.userIdProvisional, value: DatalyrSDK.provisionalFlag(for: "guest-uuid-1"))
+        await DatalyrStorage.shared.setString(StorageKeys.userId, value: "account-B")
+        let sdk = await launch()
+        XCTAssertEqual(sdk.getStatus().currentUserId, "account-B")
+        XCTAssertFalse(sdk.currentUserIsProvisionalForTesting)
+        await sdk.identify("guest-uuid-1", provisional: true)
+        XCTAssertEqual(sdk.getStatus().currentUserId, "account-B", "signed-in B is not overridden")
+    }
+
+    /// A bare boolean (the unreleased first 2.1.19 cut) is not a flag for any id.
+    func testLegacyBooleanFlagIsNotProvisional() async {
+        await DatalyrStorage.shared.setBool(StorageKeys.userIdProvisional, value: true)
+        await DatalyrStorage.shared.setString(StorageKeys.userId, value: "account-B")
+        let sdk = await launch()
+        XCTAssertFalse(sdk.currentUserIsProvisionalForTesting)
+    }
+
     func testRepeatedProvisionalIdentifyIsRedundant() async {
         let sdk = await launch()
         await sdk.identify("guest-uuid-1", provisional: true)
         await sdk.identify("guest-uuid-1", provisional: true)
         XCTAssertEqual(sent("$identify").count, 1)
+    }
+
+    // MARK: - Real initialize(): pre-init provisional replay, restore, init-end push
+
+    func testInitializeReplaysBufferedProvisionalIdentifyAndPushesAttributes() async throws {
+        let sdk = DatalyrSDK()
+        observe(sdk)
+        let rc = Box<[[String: String]]>([])
+        sdk.syncRevenueCatAttributes { rc.value.append($0) }
+        await sdk.identify("guest-uuid-1", provisional: true)   // buffered
+        await sdk.track("pre_init_event")                       // buffered
+        await drainMain()
+        XCTAssertTrue(rc.value.isEmpty, "a handler registered before init is not called before init")
+        XCTAssertTrue(payloads.value.isEmpty)
+
+        try await sdk.initialize(config: Self.initConfig)
+        await drainMain()
+
+        XCTAssertEqual(sent("$identify").count, 1)
+        XCTAssertTrue(isMarked(sent("$identify")[0]), "buffered provisional identify replays with the flag")
+        XCTAssertTrue(isMarked(sent("pre_init_event")[0]))
+        XCTAssertTrue(sdk.currentUserIsProvisionalForTesting)
+        XCTAssertEqual(rc.value.count, 1, "initialize() pushes once to a pre-init handler")
+        XCTAssertEqual(rc.value.last?["datalyr_id"], sdk.getAnonymousId())
+
+        // Relaunch through initialize(): the persisted flag is restored.
+        let relaunched = DatalyrSDK()
+        try await relaunched.initialize(config: Self.initConfig)
+        XCTAssertEqual(relaunched.getStatus().currentUserId, "guest-uuid-1")
+        XCTAssertTrue(relaunched.currentUserIsProvisionalForTesting)
+        await DatalyrStorage.shared.removeValue(StorageKeys.eventQueue)
     }
 
     // MARK: - Provisional → real: no reset
@@ -132,12 +259,12 @@ final class IdentityProvisionalTests: XCTestCase {
         let identify = sent("$identify")
         XCTAssertEqual(identify.count, 2)
         XCTAssertEqual(identify[1].userId, "firebase-uid-B")
-        XCTAssertFalse(isMarked(identify[1]), "the real $identify carries no marker")
+        XCTAssertFalse(hasMarkerKey(identify[1]), "the real $identify carries no marker")
         XCTAssertEqual(wireProps(identify[1])["anonymous_id"] as? String, anonBefore)
         XCTAssertTrue(sent("$alias").isEmpty, "no $alias is sent for a provisional conversion")
 
         await sdk.track("after_login")
-        XCTAssertFalse(isMarked(sent("after_login")[0]))
+        XCTAssertFalse(hasMarkerKey(sent("after_login")[0]))
 
         let relaunched = await launch()
         XCTAssertFalse(relaunched.currentUserIsProvisionalForTesting, "real identify clears the persisted flag")
@@ -169,7 +296,7 @@ final class IdentityProvisionalTests: XCTestCase {
         XCTAssertFalse(sdk.currentUserIsProvisionalForTesting)
         XCTAssertEqual(sent("$identify").count, 1, "no $identify for the ignored provisional id")
         await sdk.track("still_real")
-        XCTAssertFalse(isMarked(sent("still_real")[0]))
+        XCTAssertFalse(hasMarkerKey(sent("still_real")[0]))
     }
 
     func testRealToDifferentRealStillResets() async {
@@ -181,7 +308,43 @@ final class IdentityProvisionalTests: XCTestCase {
 
         XCTAssertNotEqual(sdk.getAnonymousId(), anonBefore, "account switch rotates the anonymous id")
         XCTAssertEqual(sdk.getStatus().currentUserId, "account-B")
-        XCTAssertEqual(sent("$identify").count, 2)
+        let identify = sent("$identify")
+        XCTAssertEqual(identify.count, 2)
+        XCTAssertEqual(wireProps(identify[1])["anonymous_id"] as? String, sdk.getAnonymousId())
+    }
+
+    /// identify(guest, provisional) and identify(account) racing: whatever the order, the
+    /// signed-in account wins (guest first → converted; account first → guest ignored).
+    func testConcurrentProvisionalAndRealIdentifyNeverLeavesGuest() async {
+        for i in 0..<40 {
+            await Self.clearIdentityStorage()
+            let sdk = await launch()
+            async let guest: Void = sdk.identify("guest-\(i)", provisional: true)
+            async let account: Void = sdk.identify("account-\(i)")
+            _ = await (guest, account)
+            XCTAssertEqual(sdk.getStatus().currentUserId, "account-\(i)", "iteration \(i)")
+            XCTAssertFalse(sdk.currentUserIsProvisionalForTesting, "iteration \(i)")
+        }
+    }
+
+    /// reset() racing an account identify: every $identify pairs the user with the
+    /// anonymous id that was current when it was built (never a pre-reset id).
+    func testConcurrentResetAndIdentifyKeepIdsConsistent() async {
+        for i in 0..<20 {
+            await Self.clearIdentityStorage()
+            payloads = Box([])
+            let sdk = await launch()
+            await sdk.identify("account-A-\(i)")
+            async let r: Void = sdk.reset()
+            async let b: Void = sdk.identify("account-B-\(i)")
+            _ = await (r, b)
+            let last = sent("$identify").last
+            XCTAssertEqual(last?.userId, sdk.getStatus().currentUserId ?? last?.userId)
+            if sdk.getStatus().currentUserId != nil {
+                XCTAssertEqual(last?.anonymousId, sdk.getAnonymousId(), "iteration \(i)")
+                XCTAssertEqual(wireProps(last!)["anonymous_id"] as? String, sdk.getAnonymousId(), "iteration \(i)")
+            }
+        }
     }
 
     func testResetClearsProvisional() async {
@@ -192,34 +355,44 @@ final class IdentityProvisionalTests: XCTestCase {
         XCTAssertNil(sdk.getStatus().currentUserId)
         XCTAssertFalse(sdk.currentUserIsProvisionalForTesting)
         await sdk.track("after_reset")
-        XCTAssertFalse(isMarked(sent("after_reset")[0]))
-        let stored = await DatalyrStorage.shared.getBool(StorageKeys.userIdProvisional)
+        XCTAssertFalse(hasMarkerKey(sent("after_reset")[0]))
+        let stored = await DatalyrStorage.shared.getString(StorageKeys.userIdProvisional)
         XCTAssertNil(stored)
 
-        // After reset a real identify is a plain identify; a provisional one is accepted again.
         await sdk.identify("guest-uuid-2", provisional: true)
         XCTAssertTrue(sdk.currentUserIsProvisionalForTesting)
     }
 
-    func testAliasEndsProvisionalState() async {
+    // MARK: - alias() while provisional
+
+    func testAliasWhileProvisionalActsAsIdentify() async {
         let sdk = await launch()
         await sdk.identify("guest-uuid-1", provisional: true)
+        let anonBefore = sdk.getAnonymousId()
         await sdk.alias("account-B")
+
+        XCTAssertTrue(sent("$alias").isEmpty, "no unguarded $alias from the guest id")
+        XCTAssertEqual(sent("$identify").last?.userId, "account-B")
+        XCTAssertFalse(hasMarkerKey(sent("$identify").last!))
+        XCTAssertEqual(sdk.getAnonymousId(), anonBefore, "no reset")
+        XCTAssertEqual(sdk.getStatus().currentUserId, "account-B")
+        XCTAssertFalse(sdk.currentUserIsProvisionalForTesting)
+    }
+
+    func testAliasWithExplicitPreviousIdStillAliases() async {
+        let sdk = await launch()
+        await sdk.identify("guest-uuid-1", provisional: true)
+        await sdk.alias("account-B", previousId: "legacy-id")
+        XCTAssertEqual(sent("$alias").count, 1)
+        XCTAssertEqual(sent("$alias")[0].eventData?["previous_id"]?.value as? String, "legacy-id")
         XCTAssertFalse(sdk.currentUserIsProvisionalForTesting)
         await sdk.track("after_alias")
-        XCTAssertFalse(isMarked(sent("after_alias")[0]))
+        XCTAssertFalse(hasMarkerKey(sent("after_alias")[0]))
     }
 
     // MARK: - RevenueCat / Superwall attribute sync
 
-    private func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 2) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition() && Date() < deadline {
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
-    }
-
-    func testSyncHandlersFireOnRegisterResetIdentifyAndBind() async {
+    func testSyncHandlersFireOnRegisterResetBindAndATT() async {
         let sdk = await launch()
         let rc = Box<[[String: String]]>([])
         let sw = Box<[[String: String]]>([])
@@ -233,64 +406,181 @@ final class IdentityProvisionalTests: XCTestCase {
             if !Thread.isMainThread { offMain.value = true }
             sw.value.append(attrs)
         }
-        await waitUntil { rc.value.count == 1 && sw.value.count == 1 }
-        XCTAssertEqual(rc.value.count, 1, "called on registration")
+        await drainMain()
+        XCTAssertEqual(rc.value.count, 1, "called once after registration")
         XCTAssertEqual(sw.value.count, 1)
         XCTAssertEqual(rc.value[0]["datalyr_id"], sdk.getAnonymousId())
         XCTAssertEqual(sw.value[0]["datalyr_id"], sdk.getAnonymousId())
 
-        // reset() → new datalyr_id pushed before reset returns.
         let oldAnon = sdk.getAnonymousId()
         await sdk.reset()
+        await drainMain()
         XCTAssertEqual(rc.value.count, 2)
         XCTAssertEqual(rc.value.last?["datalyr_id"], sdk.getAnonymousId())
         XCTAssertNotEqual(rc.value.last?["datalyr_id"], oldAnon)
         XCTAssertEqual(sw.value.last?["datalyr_id"], sdk.getAnonymousId())
 
-        // Non-redundant identify → pushed; redundant → not.
+        // A plain identify changes nothing the providers hold → no push.
         await sdk.identify("account-A")
-        XCTAssertEqual(rc.value.count, 3)
         await sdk.identify("account-A")
-        XCTAssertEqual(rc.value.count, 3, "a redundant identify does not re-push")
+        await drainMain()
+        XCTAssertEqual(rc.value.count, 2)
 
-        // Account switch: the reset inside identify pushes the new id, then identify pushes again.
-        await sdk.identify("account-B")
-        XCTAssertEqual(rc.value.count, 5)
-        XCTAssertEqual(rc.value.last?["datalyr_id"], sdk.getAnonymousId())
-
-        // bindProviderIdentity → pushed.
         await sdk.bindProviderIdentity(namespace: "revenuecat", providerUserId: "rc-user-1")
-        XCTAssertEqual(rc.value.count, 6)
-        XCTAssertEqual(sw.value.count, 6)
+        await drainMain()
+        XCTAssertEqual(rc.value.count, 3)
+        XCTAssertEqual(sw.value.count, 3)
 
-        // ATT answer → idfa / att_status re-pushed.
         await sdk.updateTrackingAuthorization(status: 3)
-        XCTAssertEqual(rc.value.count, 7)
+        await drainMain()
+        XCTAssertEqual(rc.value.count, 4)
         XCTAssertEqual(sw.value.last?["att_status"], "authorized")
 
         XCTAssertFalse(offMain.value, "handlers run on the main thread")
     }
 
-    func testNewSyncHandlerReplacesPrevious() async {
+    /// An account switch pushes ONCE (not from the nested reset and again from identify),
+    /// with the new id.
+    func testAccountSwitchPushesOnce() async {
+        let sdk = await launch()
+        await sdk.identify("account-A")
+        let rc = Box<[[String: String]]>([])
+        sdk.syncRevenueCatAttributes { rc.value.append($0) }
+        await drainMain()
+        XCTAssertEqual(rc.value.count, 1)
+
+        await sdk.identify("account-B")
+        await drainMain()
+        XCTAssertEqual(rc.value.count, 2, "one push for the switch")
+        XCTAssertEqual(rc.value.last?["datalyr_id"], sdk.getAnonymousId())
+    }
+
+    /// After a reset, RevenueCat gets "" for the previous user's attribution keys so its
+    /// merging setAttributes deletes them.
+    func testResetPushClearsPreviousAttributionForRevenueCat() async {
+        let sdk = await launch()
+        var data = AttributionData()
+        data.utmSource = "facebook"
+        data.fbclid = "FB_OLD"
+        data.campaignId = "C1"
+        await sdk.setAttributionData(data)
+        let rc = Box<[[String: String]]>([])
+        let sw = Box<[[String: String]]>([])
+        sdk.syncRevenueCatAttributes { rc.value.append($0) }
+        sdk.syncSuperwallAttributes { sw.value.append($0) }
+        await drainMain()
+        XCTAssertEqual(rc.value.last?["fbclid"], "FB_OLD")
+
+        await sdk.reset()
+        await drainMain()
+        let after = rc.value.last ?? [:]
+        XCTAssertEqual(after["fbclid"], "")
+        XCTAssertEqual(after["utm_source"], "")
+        XCTAssertEqual(after["$mediaSource"], "")
+        XCTAssertEqual(after["campaign_id"], "")
+        XCTAssertEqual(after["datalyr_id"], sdk.getAnonymousId())
+        XCTAssertNil(sw.value.last?["fbclid"], "Superwall gets no empty values")
+    }
+
+    /// Every acquisition key getRevenueCatAttributes can emit is in the clear list.
+    func testRevenueCatClearableKeysCoverAllAttributionKeys() async {
+        let sdk = await launch()
+        var a = AttributionData()
+        a.utmSource = "s"; a.utmMedium = "m"; a.utmCampaign = "c"; a.utmTerm = "t"; a.utmContent = "ct"
+        a.lyr = "l"; a.fbclid = "f"; a.gclid = "g"; a.ttclid = "tt"; a.wbraid = "w"; a.gbraid = "gb"
+        a.network = "n"; a.creativeId = "cr"; a.campaignId = "ci"; a.adsetId = "as"; a.adId = "ad"
+        a.placement = "p"; a.siteSourceName = "ss"; a.keyword = "k"
+        await sdk.setAttributionData(a)
+        let keys = Set(sdk.getRevenueCatAttributes().keys).subtracting(["datalyr_id", "$idfa", "$attConsentStatus"])
+        XCTAssertTrue(keys.isSubset(of: Set(DatalyrSDK.revenueCatClearableKeys)),
+                      "missing: \(keys.subtracting(DatalyrSDK.revenueCatClearableKeys))")
+    }
+
+    func testNewSyncHandlerReplacesPreviousAndNilUnregisters() async {
         let sdk = await launch()
         let first = Box<Int>(0)
         let second = Box<Int>(0)
         sdk.syncRevenueCatAttributes { _ in first.value += 1 }
         sdk.syncRevenueCatAttributes { _ in second.value += 1 }
-        await waitUntil { first.value == 1 && second.value == 1 }
+        await drainMain()
         await sdk.reset()
-        XCTAssertEqual(first.value, 1, "replaced handler is not called again")
-        XCTAssertEqual(second.value, 2)
+        await drainMain()
+        XCTAssertEqual(first.value, 0, "the handler is resolved at delivery time: a replaced one is never called")
+        XCTAssertEqual(second.value, 3)
+
+        sdk.syncRevenueCatAttributes(nil)
+        await sdk.reset()
+        await drainMain()
+        XCTAssertEqual(second.value, 3, "nil unregisters")
+    }
+
+    /// Registration never calls the handler inline, even on the main thread.
+    func testRegistrationDeliversAsynchronously() async {
+        let sdk = await launch()
+        let calls = Box<Int>(0)
+        let inline: Int = await MainActor.run {
+            sdk.syncSuperwallAttributes { _ in calls.value += 1 }
+            return calls.value
+        }
+        XCTAssertEqual(inline, 0)
+        await drainMain()
+        XCTAssertEqual(calls.value, 1)
+    }
+
+    /// Deliveries are built when they run: queued pushes (ATT, then reset) all carry the
+    /// CURRENT datalyr_id, never the pre-reset one.
+    func testQueuedDeliveriesNeverCarryStaleId() async {
+        let sdk = await launch()
+        let rc = Box<[[String: String]]>([])
+        sdk.syncRevenueCatAttributes { rc.value.append($0) }
+        await drainMain()
+        let before = rc.value.count
+        let blocker = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async { _ = blocker.wait(timeout: .now() + 3) } // hold main
+        await sdk.updateTrackingAuthorization(status: 3)  // push queued with the old id state
+        await sdk.reset()                                 // id rotates, second push queued
+        blocker.signal()
+        await drainMain()
+        let delivered = rc.value.dropFirst(before)
+        XCTAssertEqual(delivered.count, 2)
+        for attrs in delivered {
+            XCTAssertEqual(attrs["datalyr_id"], sdk.getAnonymousId())
+        }
+    }
+
+    /// An app that blocks the main thread waiting on identify/reset/bind/ATT must not
+    /// deadlock: none of them waits for the main thread.
+    func testIdentityCallsDoNotWaitForMainThread() async {
+        let sdk = await launch()
+        sdk.syncRevenueCatAttributes { _ in }
+        sdk.syncSuperwallAttributes { _ in }
+        await drainMain()
+
+        let mainBlocked = Box<Bool>(false)
+        let finished = DispatchSemaphore(value: 0)
+        let completedWhileBlocked = Box<Bool>(false)
+        DispatchQueue.main.async {
+            mainBlocked.value = true
+            completedWhileBlocked.value = finished.wait(timeout: .now() + 3) == .success
+        }
+        while !mainBlocked.value { try? await Task.sleep(nanoseconds: 5_000_000) }
+
+        await sdk.identify("account-A")
+        await sdk.identify("account-B")      // account switch → nested reset
+        await sdk.reset()
+        await sdk.bindProviderIdentity(namespace: "superwall", providerUserId: "sw-1")
+        await sdk.updateTrackingAuthorization(status: 3)
+        finished.signal()
+        await drainMain()
+        XCTAssertTrue(completedWhileBlocked.value, "identity calls completed while main was blocked")
     }
 
     func testSyncHandlerRegisteredBeforeInitIsDeferred() async {
         let sdk = DatalyrSDK()  // not initialized
         let calls = Box<Int>(0)
         sdk.syncRevenueCatAttributes { _ in calls.value += 1 }
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await drainMain()
         XCTAssertEqual(calls.value, 0, "not called before init")
-        await sdk.notifyAttributeSyncHandlers()
-        XCTAssertEqual(calls.value, 0, "notify is a no-op before init")
     }
 
     // MARK: - Self-match guard (compares the WIRE id, anonymousId)
@@ -322,5 +612,33 @@ final class IdentityProvisionalTests: XCTestCase {
         XCTAssertTrue(events.value.contains { $0.0 == "$web_attribution_matched" })
         let outcome = events.value.first { $0.0 == "$attribution_match" }
         XCTAssertEqual(outcome?.1?["reason"] as? String, "matched")
+    }
+
+    func testEmailLookupOnOwnAnonymousIdIsSkipped() async {
+        let sdk = await launch()
+        EmailLookupStub.enqueue([
+            "found": true,
+            "attribution": ["visitor_id": sdk.getAnonymousId(), "fbclid": "FB_SELF"],
+        ])
+        await sdk.identify("user-1", properties: ["email": "self@example.com"])
+        XCTAssertEqual(EmailLookupStub.count, 1)
+        XCTAssertFalse(events.value.contains { $0.0 == "$web_attribution_matched" })
+        XCTAssertNil(sdk.getAttributionData().fbclid)
+    }
+
+    func testEmailLookupOnOtherVisitorMergesAndPushes() async {
+        let sdk = await launch()
+        let rc = Box<[[String: String]]>([])
+        sdk.syncRevenueCatAttributes { rc.value.append($0) }
+        await drainMain()
+        EmailLookupStub.enqueue([
+            "found": true,
+            "attribution": ["visitor_id": "web-visitor-9", "fbclid": "FB_WEB"],
+        ])
+        await sdk.identify("user-1", properties: ["email": "web@example.com"])
+        XCTAssertTrue(events.value.contains { $0.0 == "$web_attribution_matched" })
+        await drainMain()
+        XCTAssertEqual(rc.value.count, 2, "web match re-pushes")
+        XCTAssertEqual(rc.value.last?["fbclid"], "FB_WEB")
     }
 }

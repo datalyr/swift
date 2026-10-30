@@ -57,11 +57,30 @@ public class DatalyrSDK {
     private var visitorId: String = ""
     private var anonymousId: String = ""  // Persistent anonymous identifier
     private var sessionId: String = ""
-    private var currentUserId: String?
-    /// True while `currentUserId` is the app's own pre-login (provisional) id, set by
-    /// `identify(_:properties:provisional: true)`. Persisted next to the user id. Every
-    /// event sent while it is true carries `$provisional_user_id: true` (identity §2.10).
-    private var currentUserIsProvisional = false
+    // Current user, behind identityStateLock: every track() (any thread) reads it, and
+    // identify/alias/reset write it. `_currentUserIsProvisional` is true while the user id
+    // is the app's own pre-login id, set by `identify(_:properties:provisional: true)`;
+    // every event sent then carries `$provisional_user_id: true` (identity §2.10).
+    private let identityStateLock = NSLock()
+    private var _currentUserId: String?
+    private var _currentUserIsProvisional = false
+    private var currentUserId: String? { identityStateLock.withLock { _currentUserId } }
+    private var currentUserIsProvisional: Bool { identityStateLock.withLock { _currentUserIsProvisional } }
+    /// One consistent read of (user id, provisional).
+    private var currentUserSnapshot: (id: String?, provisional: Bool) {
+        identityStateLock.withLock { (_currentUserId, _currentUserIsProvisional) }
+    }
+    private func setCurrentUser(_ id: String?, provisional: Bool) {
+        identityStateLock.withLock {
+            _currentUserId = id
+            _currentUserIsProvisional = id != nil && provisional
+        }
+    }
+    /// Serialises identify / alias / reset. DatalyrSDK is not an actor, and each of them
+    /// suspends on storage; without this an identify(guest, provisional) that passed the
+    /// "no signed-in user" check could overwrite an identify(account) that ran while it
+    /// was suspended, and a reset could rotate ids under a half-built $identify.
+    private let identityMutex = AsyncMutex()
     private var userProperties: UserProperties = [:]
 
     /// Handlers registered with syncRevenueCatAttributes / syncSuperwallAttributes. One
@@ -327,7 +346,7 @@ public class DatalyrSDK {
 
         // Handlers registered before init were stored, not called: hand them the
         // attributes now that the ids and the persisted attribution are loaded.
-        await notifyAttributeSyncHandlers()
+        scheduleAttributeSync()
 
         if !queued.isEmpty {
             debugLog("Flushing \(queued.count) pre-init event(s)")
@@ -495,7 +514,11 @@ public class DatalyrSDK {
     ///     - is replaced by the real account id on sign-in WITHOUT the account-switch
     ///       reset (same person, same install), so the server can convert it once;
     ///     - marks every event sent while it is current with `$provisional_user_id: true`.
-    ///     Persisted across launches; cleared by `reset()`.
+    ///     Persisted across launches (bound to this id); cleared by `reset()`.
+    ///
+    /// With RevenueCat / Superwall: on login call `Purchases.shared.logIn(userId)` /
+    /// `Superwall.shared.identify(userId:)` FIRST, then this, so an account-switch push of
+    /// the new `datalyr_id` lands on the new provider user.
     public func identify(_ userId: String, properties: UserProperties? = nil, provisional: Bool = false) async {
         // FSR-33: buffer pre-init identify (like track() does) instead of dropping it.
         // Apps commonly call identify(userId) at launch concurrently with initialize();
@@ -515,11 +538,26 @@ public class DatalyrSDK {
         }
         if shouldBuffer { return }
 
+        await identityMutex.lock()
+        let outcome = await identifyLocked(userId, properties: properties, provisional: provisional)
+        await identityMutex.unlock()
+        await finishIdentify(outcome)
+    }
+
+    /// What identifyLocked did, for the steps that run after the identity lock is released.
+    private struct IdentifyOutcome {
+        var didReset = false
+        var emailForLookup: String?
+    }
+
+    /// identify() body. Caller holds identityMutex. Returns nil when the call was ignored.
+    private func identifyLocked(_ userId: String, properties: UserProperties?, provisional: Bool) async -> IdentifyOutcome? {
         // A pre-login id never overrides a signed-in account (and never triggers the
         // account-switch reset below): apps commonly re-send their guest id on every launch.
-        if provisional, currentUserId != nil, !currentUserIsProvisional {
+        let current = currentUserSnapshot
+        if provisional, current.id != nil, !current.provisional {
             debugLog("Ignoring provisional identify \(userId): a signed-in user is current")
-            return
+            return nil
         }
 
         debugLog("Identifying user: \(userId)" + (provisional ? " (provisional)" : ""), data: properties)
@@ -530,8 +568,10 @@ public class DatalyrSDK {
         // Not when the current user is provisional: provisional → real is the same
         // person signing in on the same install (identity §2.10), and provisional →
         // provisional is the app replacing its own guest id.
-        if let existingUserId = currentUserId, existingUserId != userId, !currentUserIsProvisional {
-            await reset()
+        var outcome = IdentifyOutcome()
+        if let existingUserId = current.id, existingUserId != userId, !current.provisional {
+            await resetLocked()
+            outcome.didReset = true
         }
 
         // ── Redundant-identify suppression ────────────────────────────────
@@ -552,13 +592,13 @@ public class DatalyrSDK {
             "\(visitorId)|\(userId)|" + (provisional ? "provisional|" : "") + Self.stableTraitsString(properties)
         )
         let previousIdentityKey = await DatalyrStorage.shared.getString(StorageKeys.lastIdentityKey)
+        let beforeUpdate = currentUserSnapshot
         let isRedundantIdentify = (previousIdentityKey == identityKey)
-            && currentUserId == userId
-            && currentUserIsProvisional == provisional
+            && beforeUpdate.id == userId
+            && beforeUpdate.provisional == provisional
 
         // Update current user
-        currentUserId = userId
-        currentUserIsProvisional = provisional
+        setCurrentUser(userId, provisional: provisional)
 
         if let properties = properties {
             userProperties.merge(properties) { (_, new) in new }
@@ -595,6 +635,14 @@ public class DatalyrSDK {
             await track("$identify", eventData: identifyData)
         }
 
+        outcome.emailForLookup = email ?? (userId.contains("@") ? userId : nil)
+        return outcome
+    }
+
+    /// The part of identify() that runs outside the identity lock: the web-attribution
+    /// lookup (network, up to 10 s) and the RevenueCat / Superwall push.
+    private func finishIdentify(_ outcome: IdentifyOutcome?) async {
+        guard let outcome = outcome else { return }
         // Fetch and merge web attribution if email is provided.
         //
         // IOS-19: this runs on EVERY identify — redundant or not — and must stay
@@ -612,16 +660,17 @@ public class DatalyrSDK {
         // short-circuits it before any network I/O — one UserDefaults read per
         // identify, never a request. The waste that 2.1.10 set out to remove
         // (the request itself) stays removed.
-        let emailForAttribution = email ?? (userId.contains("@") ? userId : nil)
         var mergedWebAttribution = false
-        if let emailForLookup = emailForAttribution {
+        if let emailForLookup = outcome.emailForLookup {
             mergedWebAttribution = await fetchAndMergeWebAttribution(email: emailForLookup)
         }
 
-        // Re-push datalyr_id + attribution to RevenueCat / Superwall when the identity
-        // changed (or a web match just added click ids).
-        if !isRedundantIdentify || mergedWebAttribution {
-            await notifyAttributeSyncHandlers()
+        // Re-push to RevenueCat / Superwall only when what they hold changed: the
+        // account-switch reset rotated datalyr_id (and cleared attribution), or a web match
+        // added click ids. One push, after the merge, so an account switch is not pushed
+        // twice. A plain identify changes neither.
+        if outcome.didReset || mergedWebAttribution {
+            scheduleAttributeSync(clearStale: outcome.didReset)
         }
     }
 
@@ -1091,7 +1140,7 @@ public class DatalyrSDK {
 
             debugLog("Successfully merged deferred web attribution")
             // The match added click ids / UTMs: re-push them to RevenueCat / Superwall.
-            await notifyAttributeSyncHandlers()
+            scheduleAttributeSync()
 
         } catch {
             // Transport-level failure (offline, captive portal, timeout) — the common case
@@ -1138,6 +1187,9 @@ public class DatalyrSDK {
     }
 
     /// Create an alias for the current user
+    ///
+    /// While the current user id is provisional (pre-login) and `previousId` is nil, this is
+    /// handled as `identify(newUserId)`: no reset and no `$alias` from the guest id.
     /// - Parameters:
     ///   - newUserId: New user identifier
     ///   - previousId: Previous user identifier (optional)
@@ -1157,13 +1209,28 @@ public class DatalyrSDK {
         }
         if shouldBuffer { return }
 
+        await identityMutex.lock()
+        let current = currentUserSnapshot
+        // While the current user id is provisional (pre-login), alias(newId) without an
+        // explicit previousId is the sign-in: handle it exactly like identify(newId) — no
+        // reset, no $alias. Defaulting previousId to the guest id would send the unguarded
+        // $alias that the server merges unconditionally (identity §2.2), which is what the
+        // provisional path exists to avoid.
+        if previousId == nil, current.id != nil, current.provisional {
+            debugLog("alias(\(newUserId)) while provisional — handled as identify")
+            let outcome = await identifyLocked(newUserId, properties: nil, provisional: false)
+            await identityMutex.unlock()
+            await finishIdentify(outcome)
+            return
+        }
+
         // FSR-32: default previousId to the id the SERVER actually keys anonymous events on.
         // Anonymous iOS events are written with visitor_id/anonymous_id = anonymousId (ingest
         // index.js:2318-2320); the alias link builder keys the visitor_user_links row on
         // anonymous_id = previousId (user-properties-updater.js:434-440). visitorId never lands
         // in those columns, so the old `?? visitorId` default produced a link matching ZERO
         // pre-alias anonymous events. Use anonymousId so an alias-first integration resolves.
-        let previousUserId = previousId ?? currentUserId ?? anonymousId
+        let previousUserId = previousId ?? current.id ?? anonymousId
         
         debugLog("Creating alias: \(newUserId) for \(previousUserId)")
         
@@ -1183,9 +1250,9 @@ public class DatalyrSDK {
         
         // Update current user. alias() asserts a real account id, so a provisional
         // (pre-login) state ends here.
-        currentUserId = newUserId
-        currentUserIsProvisional = false
+        setCurrentUser(newUserId, provisional: false)
         await persistUserData()
+        await identityMutex.unlock()
     }
     
     /// Route a deep link to the attribution parser, buffering it if init hasn't finished.
@@ -1225,31 +1292,43 @@ public class DatalyrSDK {
     }
 
     /// Reset the current user session
+    ///
+    /// With RevenueCat / Superwall: on logout call `Purchases.shared.logOut()` /
+    /// `Superwall.shared.reset()` FIRST, then this. The sync handlers receive the new
+    /// `datalyr_id` just after this returns.
     public func reset() async {
-        guard initialized else {
+        guard initializedLocked else {
             errorLog("SDK not initialized. Call initialize() first.")
             return
         }
-        
+        await identityMutex.lock()
+        await resetLocked()
+        await identityMutex.unlock()
+        // New datalyr_id, previous user's attribution gone: push, clearing stale keys.
+        scheduleAttributeSync(clearStale: true)
+    }
+
+    /// reset() body. Caller holds identityMutex.
+    private func resetLocked() async {
         debugLog("Resetting user session")
-        
-        // Clear user data
-        currentUserId = nil
-        currentUserIsProvisional = false
+
+        // Clear user data and rotate the ids BEFORE the first await, so nothing built
+        // while this suspends (a track() on another task) pairs the old ids with no user.
+        setCurrentUser(nil, provisional: false)
         userProperties.removeAll()
-        
-        // Generate new visitor and session IDs
         visitorId = generateUUID()
+        anonymousId = "anon_\(generateUUID())"
+
+        // Generate a new session ID
         sessionId = await refreshSessionId()
         autoEventsManager?.updateSessionId(sessionId)  // keep auto-events session in lockstep (IOS-14)
 
-        // FSR-6: regenerate the anonymousId too. It — not visitorId — is the SERVER's visitor
+        // FSR-6: the anonymousId (rotated above) is regenerated too. It — not visitorId — is the SERVER's visitor
         // key: ingest writes visitor_id = anonymousId||distinctId (index.js:2320) and $identify
         // links anonymous_id = anonymousId (index.js:2534). Leaving it intact across
         // logout→reset→login-as-B re-linked B's $identify to the SAME anon id already linked to
         // A, merging two users' identities/attribution server-side. Rotating visitorId alone was
         // cosmetic. (Mirrors Segment/Mixpanel reset + the Node SDK NODE-6 fix.)
-        anonymousId = "anon_\(generateUUID())"
 
         // Clear stored user data
         await DatalyrStorage.shared.removeValue(StorageKeys.userId)
@@ -1279,9 +1358,6 @@ public class DatalyrSDK {
         UnifiedAttributionTracker.shared.resetConversionState()
 
         debugLog("User session reset complete")
-
-        // New anonymousId → push the new datalyr_id to RevenueCat / Superwall.
-        await notifyAttributeSyncHandlers()
     }
     
     /// Manually flush the event queue
@@ -1411,7 +1487,7 @@ public class DatalyrSDK {
         debugLog("ATT status updated: \(statusName) (\(attStatus))")
 
         // idfa / att_status attributes changed: re-push them to RevenueCat / Superwall.
-        await notifyAttributeSyncHandlers()
+        scheduleAttributeSync()
 
         // Tracking was just allowed: if the server declined the lookup for lack of ATT, it
         // can answer now. Not awaited, so the caller (and requestTrackingAuthorization's
@@ -1498,8 +1574,7 @@ public class DatalyrSDK {
         visitorId = await getOrCreateVisitorId()
         anonymousId = await getOrCreateAnonymousId()
         sessionId = await getOrCreateSessionId()
-        currentUserId = nil
-        currentUserIsProvisional = false
+        setCurrentUser(nil, provisional: false)
         userProperties = [:]
         await loadPersistedUserData()
     }
@@ -1600,20 +1675,22 @@ public class DatalyrSDK {
             "external_ids": [ns: id],
             "provider_namespace": ns,
         ])
-        await notifyAttributeSyncHandlers()
+        scheduleAttributeSync()
     }
 
     // MARK: - RevenueCat / Superwall attribute sync
 
-    /// Keep RevenueCat's subscriber attributes in step with DATALYR: `handler` is called
-    /// now (or when `initialize()` finishes, if it has not yet), and again with fresh
-    /// attributes after every `reset()` (including the reset inside `identify()` on an
-    /// account switch), after an `identify()` that changed the identity, after
-    /// `bindProviderIdentity()`, after `updateTrackingAuthorization(status:)`, and after a
-    /// web→app attribution match. Without this the provider keeps the `datalyr_id` from before `reset()` rotated it, and RevenueCat
-    /// events stop matching this install.
+    /// Keep RevenueCat's subscriber attributes in step with DATALYR. `handler` receives
+    /// `getRevenueCatAttributes()` on the main thread, asynchronously: once after this call
+    /// (or when `initialize()` finishes, if it has not yet), and again just after each of:
+    /// `reset()` (including the reset inside `identify()` on an account switch), a web→app
+    /// attribution match, `bindProviderIdentity()`, `updateTrackingAuthorization(status:)`.
+    /// The attributes are built on the main thread at delivery time, so the handler always
+    /// gets the current values. Pass `nil` to stop. One handler: a new call replaces the
+    /// previous one.
     ///
-    /// Always called on the main thread. One handler: a new call replaces the previous one.
+    /// After a reset the dictionary also carries every attribution key the previous user
+    /// had and the new one does not, set to `""`, which RevenueCat treats as a delete.
     ///
     /// ```swift
     /// DatalyrSDK.shared.syncRevenueCatAttributes { attrs in
@@ -1621,26 +1698,24 @@ public class DatalyrSDK {
     /// }
     /// ```
     ///
-    /// **Logout ordering:** call `Purchases.shared.logOut()` FIRST, then
-    /// `DatalyrSDK.shared.reset()`. In the other order the new `datalyr_id` is written to
-    /// the subscriber that is about to be logged out, and the new anonymous RevenueCat
-    /// user never gets it.
-    public func syncRevenueCatAttributes(_ handler: @escaping ([String: String]) -> Void) {
+    /// **Order:** register and `identify()` BEFORE showing the paywall.
+    /// On login call `Purchases.shared.logIn(userId)` FIRST, then `identify(userId)`.
+    /// On logout call `Purchases.shared.logOut()` FIRST, then `DatalyrSDK.shared.reset()`.
+    /// In the other order the new `datalyr_id` lands on the RevenueCat user that is about
+    /// to be logged out.
+    public func syncRevenueCatAttributes(_ handler: (([String: String]) -> Void)?) {
         attributeSyncLock.withLock { revenueCatSyncHandler = handler }
-        guard initializedLocked else { return } // called at the end of initialize()
-        let attrs = getRevenueCatAttributes()
-        Self.onMainThread { handler(attrs) }
+        if handler != nil { scheduleAttributeSync(superwall: false) }
     }
 
-    /// Keep Superwall's user attributes in step with DATALYR: `handler` is called now (or
-    /// when `initialize()` finishes, if it has not yet), and again with fresh attributes
-    /// after every `reset()` (including the reset inside `identify()` on an account switch),
-    /// after an `identify()` that changed the identity, after `bindProviderIdentity()`, after
-    /// `updateTrackingAuthorization(status:)`, and after a web→app attribution match.
-    /// `Superwall.shared.reset()` wipes user attributes,
-    /// and DATALYR's `reset()` rotates `datalyr_id`, so a one-time set goes stale.
-    ///
-    /// Always called on the main thread. One handler: a new call replaces the previous one.
+    /// Keep Superwall's user attributes in step with DATALYR. `handler` receives
+    /// `getSuperwallAttributes()` on the main thread, asynchronously: once after this call
+    /// (or when `initialize()` finishes, if it has not yet), and again just after each of:
+    /// `reset()` (including the reset inside `identify()` on an account switch), a web→app
+    /// attribution match, `bindProviderIdentity()`, `updateTrackingAuthorization(status:)`.
+    /// The attributes are built on the main thread at delivery time, so the handler always
+    /// gets the current values. Pass `nil` to stop. One handler: a new call replaces the
+    /// previous one.
     ///
     /// ```swift
     /// DatalyrSDK.shared.syncSuperwallAttributes { attrs in
@@ -1648,46 +1723,62 @@ public class DatalyrSDK {
     /// }
     /// ```
     ///
-    /// **Logout ordering:** call `Superwall.shared.reset()` FIRST, then
-    /// `DatalyrSDK.shared.reset()`. In the other order Superwall's reset wipes the
-    /// attributes DATALYR just pushed, including the new `datalyr_id`.
-    public func syncSuperwallAttributes(_ handler: @escaping ([String: String]) -> Void) {
+    /// **Order:** register and `identify()` BEFORE showing the paywall.
+    /// On login call `Superwall.shared.identify(userId:)` FIRST, then `identify(userId)`.
+    /// On logout call `Superwall.shared.reset()` FIRST, then `DatalyrSDK.shared.reset()`.
+    /// In the other order Superwall's reset wipes the attributes DATALYR just pushed,
+    /// including the new `datalyr_id`. (A previous user's attribution keys are not cleared
+    /// by DATALYR for Superwall; `Superwall.shared.reset()` clears them.)
+    public func syncSuperwallAttributes(_ handler: (([String: String]) -> Void)?) {
         attributeSyncLock.withLock { superwallSyncHandler = handler }
-        guard initializedLocked else { return } // called at the end of initialize()
-        let attrs = getSuperwallAttributes()
-        Self.onMainThread { handler(attrs) }
+        if handler != nil { scheduleAttributeSync(revenueCat: false) }
     }
 
     /// Static convenience for `syncRevenueCatAttributes(_:)`.
-    public static func syncRevenueCatAttributes(_ handler: @escaping ([String: String]) -> Void) {
+    public static func syncRevenueCatAttributes(_ handler: (([String: String]) -> Void)?) {
         shared.syncRevenueCatAttributes(handler)
     }
 
     /// Static convenience for `syncSuperwallAttributes(_:)`.
-    public static func syncSuperwallAttributes(_ handler: @escaping ([String: String]) -> Void) {
+    public static func syncSuperwallAttributes(_ handler: (([String: String]) -> Void)?) {
         shared.syncSuperwallAttributes(handler)
     }
 
-    /// Call the registered sync handlers with the current attributes, on the main thread.
-    /// Awaited, so when reset()/identify() return the providers already have the new id.
-    /// No-op before init (initialize() calls it once it finishes).
-    internal func notifyAttributeSyncHandlers() async {
+    /// RevenueCat keys that describe the user's acquisition (not the device). After a reset
+    /// a key the new attributes lack is sent as "" so RevenueCat deletes the previous
+    /// user's value (setAttributes merges). `datalyr_id`, `$idfa` and `$attConsentStatus`
+    /// are always current, so they are not listed.
+    internal static let revenueCatClearableKeys: [String] = [
+        "$mediaSource", "$campaign", "$adGroup", "$ad", "$keyword",
+        "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+        "lyr", "fbclid", "gclid", "ttclid", "wbraid", "gbraid", "network", "creative_id",
+        "campaign_id", "adset_id", "ad_id", "placement", "site_source_name",
+    ]
+
+    /// Deliver the current attributes to the registered handlers, fire-and-forget on the
+    /// main queue. Never awaited, so an app that blocks the main thread waiting on
+    /// reset()/identify() cannot deadlock. The attributes are built on the main thread when
+    /// the delivery runs (not when it is scheduled), and the main queue is FIFO, so a
+    /// delivery can never hand a provider an older datalyr_id than one before it.
+    /// No-op before init: initialize() schedules one when it finishes.
+    internal func scheduleAttributeSync(revenueCat: Bool = true, superwall: Bool = true, clearStale: Bool = false) {
         guard initializedLocked else { return }
-        let (rc, sw) = attributeSyncLock.withLock { (revenueCatSyncHandler, superwallSyncHandler) }
-        guard rc != nil || sw != nil else { return }
-        let rcAttrs = rc != nil ? getRevenueCatAttributes() : [:]
-        let swAttrs = sw != nil ? getSuperwallAttributes() : [:]
-        await MainActor.run {
-            rc?(rcAttrs)
-            sw?(swAttrs)
+        DispatchQueue.main.async { [weak self] in
+            self?.deliverAttributeSync(revenueCat: revenueCat, superwall: superwall, clearStale: clearStale)
         }
     }
 
-    private static func onMainThread(_ work: @escaping () -> Void) {
-        if Thread.isMainThread {
-            work()
-        } else {
-            DispatchQueue.main.async(execute: work)
+    private func deliverAttributeSync(revenueCat: Bool, superwall: Bool, clearStale: Bool) {
+        let (rc, sw) = attributeSyncLock.withLock { (revenueCatSyncHandler, superwallSyncHandler) }
+        if revenueCat, let rc = rc {
+            var attrs = getRevenueCatAttributes()
+            if clearStale {
+                for key in Self.revenueCatClearableKeys where attrs[key] == nil { attrs[key] = "" }
+            }
+            rc(attrs)
+        }
+        if superwall, let sw = sw {
+            sw(getSuperwallAttributes())
         }
     }
 
@@ -2211,8 +2302,12 @@ public class DatalyrSDK {
         enrichedEventData["schema_version"] = 1  // A3-25: versioned-envelope stamp (see web SDK)
         // Identity §2.10: every event sent while the current user id is the app's
         // pre-login id says so, so the server can convert it once into the real account.
-        if currentUserIsProvisional, currentUserId != nil {
-            enrichedEventData["$provisional_user_id"] = true
+        // The SDK alone sets this key: a caller-supplied value is always dropped (it would
+        // let any track() claim a signed-in user is a guest).
+        let user = currentUserSnapshot
+        enrichedEventData.removeValue(forKey: Self.provisionalMarkerKey)
+        if user.provisional, user.id != nil {
+            enrichedEventData[Self.provisionalMarkerKey] = true
         }
 
         // App info from Bundle
@@ -2316,16 +2411,31 @@ public class DatalyrSDK {
             deviceContext: deviceContext,
             source: "mobile_app",
             timestamp: timestamp,
-            userId: currentUserId,
+            userId: user.id,
             userProperties: userProperties.isEmpty ? nil : userProperties
         )
     }
     
+    /// Wire key of the provisional marker (identity §2.10).
+    internal static let provisionalMarkerKey = "$provisional_user_id"
+
+    /// Persisted provisional flag, bound to the user id it was written for:
+    /// `provisional:<first 16 hex of SHA-256(exact user id)>`. No raw id at rest twice.
+    internal static func provisionalFlag(for userId: String) -> String {
+        let digest = SHA256.hash(data: Data(userId.utf8))
+        return "provisional:" + digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Load persisted user data
     private func loadPersistedUserData() async {
         if let userId = await DatalyrStorage.shared.getString(StorageKeys.userId) {
-            currentUserId = userId
-            currentUserIsProvisional = await DatalyrStorage.shared.getBool(StorageKeys.userIdProvisional) ?? false
+            // The flag counts only when it was written for THIS user id. A build without
+            // the flag (downgrade to ≤ 2.1.18) that signs in a real user rewrites userId and
+            // leaves the flag behind; a kill between the two writes can do the same. Both
+            // leave a flag for another id → signed in, never provisional. A bare boolean
+            // (no build writes one) is not a match either.
+            let flag = await DatalyrStorage.shared.getString(StorageKeys.userIdProvisional)
+            setCurrentUser(userId, provisional: flag == Self.provisionalFlag(for: userId))
         }
         
         if let properties = await DatalyrStorage.shared.getData(StorageKeys.userProperties) {
@@ -2341,11 +2451,17 @@ public class DatalyrSDK {
     
     /// Persist user data
     private func persistUserData() async {
-        if let userId = currentUserId {
-            await DatalyrStorage.shared.setString(StorageKeys.userId, value: userId)
-            if currentUserIsProvisional {
-                await DatalyrStorage.shared.setBool(StorageKeys.userIdProvisional, value: true)
+        let user = currentUserSnapshot
+        if let userId = user.id {
+            if user.provisional {
+                // Flag first: a kill between the writes leaves a flag bound to the new id
+                // next to the old id, which then reads as signed in (the safe side).
+                await DatalyrStorage.shared.setString(StorageKeys.userIdProvisional, value: Self.provisionalFlag(for: userId))
+                await DatalyrStorage.shared.setString(StorageKeys.userId, value: userId)
             } else {
+                // Id first: a kill between the writes leaves a flag for the previous id,
+                // which does not match the new one.
+                await DatalyrStorage.shared.setString(StorageKeys.userId, value: userId)
                 await DatalyrStorage.shared.removeValue(StorageKeys.userIdProvisional)
             }
         }

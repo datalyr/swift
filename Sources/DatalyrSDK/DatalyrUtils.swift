@@ -445,8 +445,9 @@ internal enum StorageKeys {
     static let sessionTimestamp = "datalyr_session_timestamp"
     static let deviceId = "datalyr_device_id"
     static let userId = "datalyr_user_id"
-    /// Present (true) while the stored userId is a provisional (pre-login) id set with
-    /// identify(_:properties:provisional: true). Removed by reset() and by a real identify.
+    /// `provisional:<hash of the user id>` while the stored userId is a provisional
+    /// (pre-login) id set with identify(_:properties:provisional: true). Honoured only
+    /// when the hash matches the stored userId. Removed by reset() and by a real identify.
     static let userIdProvisional = "datalyr_user_id_provisional"
     static let userProperties = "datalyr_user_properties"
     static let eventQueue = "datalyr_event_queue"
@@ -474,3 +475,30 @@ internal enum StorageKeys {
     /// is unchanged from earlier releases so existing installs keep their dedup state.
     static let lastIdentityKey = "datalyr_last_identity_fingerprint"
 } 
+// MARK: - Async mutex
+
+/// FIFO async lock: `await lock()` suspends (never blocks a thread) until the holder calls
+/// `unlock()`. Used to serialise identify / alias / reset.
+internal actor AsyncMutex {
+    private var locked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func lock() async {
+        if !locked {
+            locked = true
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            waiters.append(continuation)
+        }
+    }
+
+    /// Hands the lock to the next waiter (it stays locked) or releases it.
+    func unlock() {
+        if waiters.isEmpty {
+            locked = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}

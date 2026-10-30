@@ -365,15 +365,16 @@ If your app gives each user its own ID before they sign in (a guest or device ID
 // Before sign-in
 await DatalyrSDK.shared.identify(guestId, provisional: true)
 
-// After sign-in: no reset runs, the guest ID converts into this account once
+// After sign-in: no reset runs
 await DatalyrSDK.shared.identify(account.uid, properties: ["email": account.email])
 ```
 
 - A provisional ID is ignored while a signed-in (non-provisional) user is identified. Re-sending the guest ID on every launch is safe.
 - Replacing a provisional ID with the real account ID, or with another provisional ID, does not run `reset()`.
-- Every event sent while the provisional ID is current carries `properties.$provisional_user_id = true`.
-- The flag survives relaunch. `reset()` clears it.
-- No `$alias` is sent. DATALYR converts the provisional ID on the server when the workspace has provisional conversion turned on.
+- Every event sent while the provisional ID is current carries `properties.$provisional_user_id = true`. Only the SDK sets this key; a value you pass in `track()` properties is dropped.
+- The flag survives relaunch, bound to that user ID. `reset()` clears it.
+- `alias(newId)` without `previousId` while the provisional ID is current is treated as `identify(newId)`: no `$alias` is sent from the guest ID.
+- No `$alias` is sent. The server does not read the marker yet: until a later DATALYR release does, the guest ID is joined to the account only for workspaces where DATALYR has turned provisional conversion on.
 
 ### Identity on the wire
 
@@ -405,7 +406,7 @@ await DatalyrSDK.shared.alias("new_user_id", previousId: "old_user_id")
 await DatalyrSDK.shared.alias("new_user_id")
 ```
 
-`alias()` links two IDs for one person. It does not run `reset()`.
+`alias()` links two IDs for one person. It does not run `reset()`. While a provisional ID is current, `alias(newId)` without `previousId` is handled as `identify(newId)` (no `$alias`).
 
 ### Reset
 
@@ -420,10 +421,10 @@ With RevenueCat or Superwall, log out of those SDKs FIRST, then call `reset()`:
 ```swift
 _ = try? await Purchases.shared.logOut()
 Superwall.shared.reset()
-await DatalyrSDK.shared.reset()   // pushes the new datalyr_id through the sync handlers
+await DatalyrSDK.shared.reset()   // the sync handlers get the new datalyr_id just after this returns
 ```
 
-In the other order the new `datalyr_id` lands on the provider user that is being logged out.
+In the other order the new `datalyr_id` lands on the provider user that is being logged out. On login it is the same: `Purchases.shared.logIn(userId)` / `Superwall.shared.identify(userId:)` FIRST, then `identify(userId)`.
 
 ---
 
@@ -635,9 +636,12 @@ DatalyrSDK.shared.syncSuperwallAttributes { attrs in
 }
 ```
 
-The handler runs on the main thread: right away (or when `initialize()` finishes), and again after every `reset()` (including the reset inside `identify()` on an account switch), after an `identify()` that changed the identity, after `bindProviderIdentity()`, after `updateTrackingAuthorization(status:)`, and after a web→app attribution match. `reset()` rotates `datalyr_id`, and `Superwall.shared.reset()` wipes user attributes, so setting them once at launch goes stale. A new registration replaces the previous handler.
+The handler runs asynchronously on the main thread, right after you register (or when `initialize()` finishes, if it has not yet), and again just after each `reset()` (including the one inside `identify()` on an account switch), web→app attribution match, `bindProviderIdentity()` and `updateTrackingAuthorization(status:)`. The attributes are built when the handler runs, so it always gets the current values. `reset()` rotates `datalyr_id`, and `Superwall.shared.reset()` wipes user attributes, so setting them once at launch goes stale. A new registration replaces the previous handler; pass `nil` to stop.
+
+After a reset, the RevenueCat dictionary also sets the previous user's attribution keys (UTMs, click IDs, campaign IDs) to `""`, which RevenueCat treats as a delete. Superwall gets no empty values; `Superwall.shared.reset()` clears its attributes.
 
 - Register the handlers and call `identify()` BEFORE showing the paywall, so the purchase carries the current `datalyr_id` and attribution.
+- On login, call `Purchases.shared.logIn(userId)` / `Superwall.shared.identify(userId:)` FIRST, then `DatalyrSDK.shared.identify(userId)`.
 - On logout, call `Purchases.shared.logOut()` / `Superwall.shared.reset()` FIRST, then `DatalyrSDK.shared.reset()`. Otherwise the new `datalyr_id` lands on the logged-out provider user.
 
 `getSuperwallAttributes()` and `getRevenueCatAttributes()` return the same dictionaries for a one-off read. Both return `[String: String]` and omit every empty value.
