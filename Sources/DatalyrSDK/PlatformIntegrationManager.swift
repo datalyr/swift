@@ -62,12 +62,20 @@ internal class PlatformIntegrationManager {
     /// Get IDFA (Identifier for Advertisers) if authorized
     /// Returns nil if ATT not authorized or IDFA not available
     func getIDFA() -> String? {
-        #if canImport(AdSupport)
-        guard isTrackingAuthorized() else { return nil }
-        let idfa = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+        guard isTrackingAuthorized(), let idfa = idfaProvider() else { return nil }
         // All zeros means tracking is not available
         if idfa == "00000000-0000-0000-0000-000000000000" { return nil }
         return idfa
+    }
+
+    /// Source of the raw IDFA. Always the live system value in the SDK; replaceable in
+    /// tests, where the live read goes through TCC and can take seconds on a CI simulator.
+    var idfaProvider: () -> String? = PlatformIntegrationManager.liveAdvertisingIdentifier
+
+    /// The live IDFA string (all zeros when unavailable); nil without AdSupport.
+    static func liveAdvertisingIdentifier() -> String? {
+        #if canImport(AdSupport)
+        return ASIdentifierManager.shared().advertisingIdentifier.uuidString
         #else
         return nil
         #endif
