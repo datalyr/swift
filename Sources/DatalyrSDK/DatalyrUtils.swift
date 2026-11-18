@@ -202,8 +202,10 @@ internal struct UIKitDeviceValues {
 /// UIKit read) in a synchronous, non-async function: UIKit marks these properties
 /// @MainActor, and inside an `async` function the compiler hops to the main actor to read
 /// them (Swift 5 mode only warns). That made every event wait for the main thread, so an
-/// app that blocked main waiting on identify()/reset() deadlocked. getDeviceInfo() reads
-/// the same properties the same way.
+/// app that blocked main waiting on track()/identify()/bindProviderIdentity()/
+/// updateTrackingAuthorization() deadlocked. getDeviceInfo() reads the same properties the
+/// same way. Do not "fix" a Swift 6 isolation error here with @MainActor or MainActor.run:
+/// that brings the wait back (IdentityProvisionalTests.testIdentityCallsDoNotWaitForMainThread).
 internal func readUIKitDeviceValues() -> UIKitDeviceValues {
     let device = UIDevice.current
     let screen = UIScreen.main
