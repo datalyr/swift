@@ -1,0 +1,28 @@
+name: CI
+
+# Public repo: GitHub-hosted runners are free here, and fork PRs never run on
+# paid (Blacksmith) machines. Fork PRs get a read-only token and no secrets.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer commit on the same PR cancels the older run; each push to main keeps
+# its own run.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Version match + iOS Simulator build
+        run: ./scripts/validate.sh
+      - name: Unit tests (macOS host)
+        run: swift test
