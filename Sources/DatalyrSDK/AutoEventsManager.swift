@@ -83,7 +83,7 @@ internal class AutoEventsManager {
         let sessionId = await getOrCreateSessionId()
         let appVersion = getAppVersion()
         #if canImport(UIKit)
-        let osVersion = UIDevice.current.systemVersion
+        let osVersion = readUIKitDeviceValues().osVersion  // sync read: no main-thread wait
         #else
         let osVersion = ProcessInfo.processInfo.operatingSystemVersionString
         #endif
