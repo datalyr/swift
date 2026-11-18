@@ -130,7 +130,6 @@ final class IdentityProvisionalTests: XCTestCase {
         await manager.initialize()
         let platform = PlatformIntegrationManager()
         platform.attStatusProvider = { 3 }
-        platform.idfaProvider = { nil }  // the live read hits TCC: seconds on a CI simulator
         let sdk = DatalyrSDK()
         observe(sdk)
         sdk.configureForDeferredLookupTesting(
