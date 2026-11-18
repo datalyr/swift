@@ -102,15 +102,21 @@ xcodebuild -resolvePackageDependencies -scheme DatalyrSDK -skipPackagePluginVali
 
 # Step 2: Build for iOS Simulator
 echo "[3/3] Building for iOS Simulator (this may take a minute)..."
+# Capture xcodebuild's own exit code. The old `xcodebuild | grep || true`
+# read PIPESTATUS after `|| true` had already reset it, so a failed build
+# still printed PASSED.
+BUILD_LOG=$(mktemp)
+set +e
 xcodebuild build \
   -scheme DatalyrSDK \
   -destination "generic/platform=iOS Simulator" \
   -skipPackagePluginValidation \
   -quiet \
-  2>&1 | grep -E "error:|BUILD FAILED" || true
-
-# Check exit code of xcodebuild (not grep)
-BUILD_EXIT=${PIPESTATUS[0]}
+  >"$BUILD_LOG" 2>&1
+BUILD_EXIT=$?
+set -e
+grep -E "error:|BUILD FAILED" "$BUILD_LOG" || true
+rm -f "$BUILD_LOG"
 
 if [ "$BUILD_EXIT" -eq 0 ]; then
   echo ""
