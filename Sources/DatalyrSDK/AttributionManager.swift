@@ -395,7 +395,13 @@ internal class AttributionManager {
         return true
     }
 
-    /// ATT status of the last `att_not_authorized` answer, or nil when the last answer was
+    /// False once the server has answered definitively. Gates the timeout retry, which
+    /// belongs to an attempt already counted and so skips the attempt cap.
+    func isDeferredLookupOpen() async -> Bool {
+        await storage.getBool(StorageKeys.deferredLookupResolved) != true
+    }
+
+        /// ATT status of the last `att_not_authorized` answer, or nil when the last answer was
     /// anything else (or there was none). Gates only the re-run on ATT grant.
     func deferredLookupRefusedATTStatus() async -> UInt? {
         guard let v = await storage.getDouble(StorageKeys.deferredLookupRefusedATTStatus), v >= 0 else { return nil }
@@ -674,8 +680,9 @@ internal enum DeferredLookup {
     /// server stops its own matching at 8 s, so 10 s leaves about 2 s for the network.
     static let requestTimeout: TimeInterval = 10
 
-    /// A timed-out lookup is sent once more, at once, only in the first hour after
-    /// install: the window in which a click is fresh and the user is still in the app.
+    /// A timed-out lookup is sent once more only in the first hour after install: the
+    /// window in which a click is fresh and the user is still in the app. At launch the
+    /// retry runs in the background after `app_install`, so it never lengthens initialize().
     /// Safe because the request carries `anonymous_id`, so the server's click claim
     /// treats the second request as the same device (identity.js takeIpMatchedClick:
     /// same `device:` holder → ok).
@@ -707,7 +714,12 @@ internal enum DeferredLookup {
         ["error_class": "http_\(statusCode / 100)xx", "http_status": statusCode]
     }
 
-    /// A 200 whose body is not a JSON object.
+    /// A response that is not HTTP at all.
+    static func failureFieldsForNonHTTPResponse() -> [String: Any] {
+        ["error_class": "network"]
+    }
+
+        /// A 200 whose body is not a JSON object.
     static func failureFieldsForUnreadableBody() -> [String: Any] {
         ["error_class": "decode"]
     }

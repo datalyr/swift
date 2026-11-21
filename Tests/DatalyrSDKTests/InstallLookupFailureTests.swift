@@ -113,13 +113,23 @@ final class InstallLookupFailureTests: XCTestCase {
     func testTimeoutIsReportedAsTimeoutWithElapsedTime() async {
         let sdk = await launch()
         DeferredLookupStub.enqueueFailure(.timedOut)
-        DeferredLookupStub.enqueueFailure(.timedOut) // the one retry times out too
         await sdk.runDeferredLookupIfEligible()
-        XCTAssertEqual(failures.count, 1, "one failure event per lookup run")
+        XCTAssertEqual(DeferredLookupStub.bodies.count, 1, "the lookup itself never retries in line")
+        XCTAssertEqual(failures.count, 1)
         assertFailure(failures.first, errorClass: "timeout")
         XCTAssertEqual(failures.first?["error_code"] as? Int, URLError.Code.timedOut.rawValue)
         let isResolved = await resolved()
         XCTAssertFalse(isResolved, "a timeout stays eligible for a later launch")
+    }
+
+    func testNonHTTPResponseIsReportedAsNetwork() async {
+        let sdk = await launch()
+        DeferredLookupStub.enqueueNonHTTP()
+        await sdk.runDeferredLookupIfEligible()
+        XCTAssertEqual(failures.count, 1, "a non-HTTP answer used to send no event")
+        assertFailure(failures.first, errorClass: "network")
+        let isResolved = await resolved()
+        XCTAssertFalse(isResolved)
     }
 
     func testTransportErrorIsReportedAsNetwork() async {
@@ -171,7 +181,7 @@ final class InstallLookupFailureTests: XCTestCase {
         XCTAssertNil(outcome?["elapsed_ms"])
     }
 
-    // MARK: - one retry on a timeout, first hour after install
+    // MARK: - one retry on a timeout, first hour after install, after app_install
 
     func testTimeoutInFirstHourIsRetriedOnceAndTheAnswerIsUsed() async {
         let sdk = await launch()
@@ -180,6 +190,7 @@ final class InstallLookupFailureTests: XCTestCase {
             "visitor_id": "web_vis_1", "fbclid": "fb_test_1", "utm_source": "facebook",
         ]])
         await sdk.runDeferredLookupIfEligible()
+        await sdk.startOwedTimeoutRetry()?.value
 
         let bodies = DeferredLookupStub.bodies
         XCTAssertEqual(bodies.count, 2, "exactly one retry")
@@ -187,14 +198,57 @@ final class InstallLookupFailureTests: XCTestCase {
                        "the retry carries the same anonymous_id, so the server's click claim sees the same device")
         XCTAssertEqual(bodies[0] as NSDictionary, bodies[1] as NSDictionary, "the retry sends the same body")
         XCTAssertTrue(events.value.contains { $0.0 == "$web_attribution_matched" })
-        XCTAssertTrue(failures.isEmpty, "a lookup rescued by the retry is not a failure")
-        let matched = events.value.first { $0.0 == "$attribution_match" }?.1
-        XCTAssertEqual(matched?["matched"] as? Bool, true)
+        XCTAssertEqual(failures.count, 1, "the first attempt's timeout is still reported")
+        let matched = events.value.first { $0.0 == "$attribution_match" && ($0.1?["matched"] as? Bool) == true }?.1
         XCTAssertEqual(matched?["timeout_retry"] as? Bool, true, "the outcome says a retry was needed")
         let spent = await attempts()
         XCTAssertEqual(spent, 1, "the retry is part of the same attempt")
         let isResolved = await resolved()
         XCTAssertTrue(isResolved)
+        XCTAssertNil(sdk.startOwedTimeoutRetry(), "only one retry")
+    }
+
+    func testRetryThatTimesOutToo() async {
+        let sdk = await launch()
+        DeferredLookupStub.enqueueFailure(.timedOut)
+        DeferredLookupStub.enqueueFailure(.timedOut)
+        await sdk.runDeferredLookupIfEligible()
+        await sdk.startOwedTimeoutRetry()?.value
+        XCTAssertEqual(DeferredLookupStub.bodies.count, 2)
+        XCTAssertEqual(failures.count, 2)
+        XCTAssertEqual(failures.last?["timeout_retry"] as? Bool, true)
+        XCTAssertNil(sdk.startOwedTimeoutRetry(), "a retry's timeout owes nothing more")
+        let spent = await attempts()
+        XCTAssertEqual(spent, 1)
+    }
+
+    /// Review fix: the retry must not lengthen the launch. initialize() runs
+    /// runLaunchLookupAndInstall(); with the first lookup timing out, it returns after one
+    /// lookup and app_install, and the retry happens afterwards in the background.
+    func testLaunchDoesNotWaitForTheTimeoutRetry() async {
+        await DatalyrStorage.shared.removeValue("datalyr_app_install_tracked")
+        defer { Task { await DatalyrStorage.shared.removeValue("datalyr_app_install_tracked") } }
+        let sdk = await launch()
+        DeferredLookupStub.enqueueFailure(.timedOut)
+        DeferredLookupStub.enqueue(["found": true, "attribution": ["visitor_id": "web_vis_2", "fbclid": "fb_test_2"]])
+        DeferredLookupStub.setDelay(forRequest: 1, 1.5) // the retry's answer is slow
+
+        let started = Date()
+        let retry = await sdk.runLaunchLookupAndInstall()
+        let launchSeconds = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(launchSeconds, 1.0, "the launch did not wait for the retry")
+        XCTAssertTrue(events.value.contains { $0.0 == "app_install" }, "app_install is sent before the retry")
+        XCTAssertFalse(events.value.contains { $0.0 == "$web_attribution_matched" })
+        XCTAssertNotNil(retry)
+
+        await retry?.value
+        let names = events.value.map { $0.0 }
+        guard let install = names.firstIndex(of: "app_install"),
+              let match = names.firstIndex(of: "$web_attribution_matched") else {
+            return XCTFail("expected app_install then the match")
+        }
+        XCTAssertLessThan(install, match, "the retry's match arrives after app_install")
     }
 
     func testOtherTransportErrorsAreNotRetriedInTheSameRun() async {
@@ -202,6 +256,7 @@ final class InstallLookupFailureTests: XCTestCase {
         DeferredLookupStub.enqueueFailure(.notConnectedToInternet)
         DeferredLookupStub.enqueue(["found": false, "reason": "no_web_traffic"]) // must not be used
         await sdk.runDeferredLookupIfEligible()
+        XCTAssertNil(sdk.startOwedTimeoutRetry(), "no retry owed")
         XCTAssertEqual(failures.count, 1)
         XCTAssertEqual(DeferredLookupStub.bodies.count, 1, "no second request")
         XCTAssertFalse(events.value.contains { ($0.1?["reason"] as? String) == "no_web_traffic" })
@@ -214,6 +269,7 @@ final class InstallLookupFailureTests: XCTestCase {
         DeferredLookupStub.enqueueFailure(.timedOut)
         DeferredLookupStub.enqueue(["found": false, "reason": "no_web_traffic"]) // must not be used
         await sdk.runDeferredLookupIfEligible()
+        XCTAssertNil(sdk.startOwedTimeoutRetry(), "no retry after the first hour")
         XCTAssertEqual(failures.count, 1)
         assertFailure(failures.first, errorClass: "timeout")
         XCTAssertFalse(events.value.contains { ($0.1?["reason"] as? String) == "no_web_traffic" })

@@ -21,12 +21,21 @@ final class DeferredLookupStub: URLProtocol {
     static func enqueueFailure(_ code: URLError.Code) {
         lock.withLock { _responses.append((-1, ["__url_error": code.rawValue])) }
     }
+    /// The next request gets a response that is not HTTP at all.
+    static func enqueueNonHTTP() {
+        lock.withLock { _responses.append((-3, [:])) }
+    }
+    private static var _requestDelays: [Int: TimeInterval] = [:]
+    /// Delay before the answer to the request with this 0-based index (overrides `delay`).
+    static func setDelay(forRequest index: Int, _ seconds: TimeInterval) {
+        lock.withLock { _requestDelays[index] = seconds }
+    }
     /// The next request answers 200 with a body that is not JSON.
     static func enqueueUnparseable() {
         lock.withLock { _responses.append((-2, [:])) }
     }
     static func reset() {
-        lock.withLock { _bodies = []; _responses = []; _delay = 0 }
+        lock.withLock { _bodies = []; _responses = []; _delay = 0; _requestDelays = [:] }
     }
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -47,7 +56,9 @@ final class DeferredLookupStub: URLProtocol {
             stream.close()
         }
         let body = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        var requestDelay: TimeInterval? = nil
         let response: (status: Int, body: [String: Any]) = Self.lock.withLock {
+            requestDelay = Self._requestDelays[Self._bodies.count]
             Self._bodies.append(body)
             return Self._responses.isEmpty
                 ? (200, ["found": false, "reason": "no_web_traffic"])
@@ -56,6 +67,14 @@ final class DeferredLookupStub: URLProtocol {
         let respond = { [self] in
             if response.status == -1, let raw = response.body["__url_error"] as? Int {
                 client?.urlProtocol(self, didFailWithError: URLError(URLError.Code(rawValue: raw)))
+                return
+            }
+            if response.status == -3 {
+                let plain = URLResponse(url: request.url!, mimeType: "application/json",
+                                        expectedContentLength: 2, textEncodingName: nil)
+                client?.urlProtocol(self, didReceive: plain, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data("{}".utf8))
+                client?.urlProtocolDidFinishLoading(self)
                 return
             }
             let unparseable = response.status == -2
@@ -68,7 +87,7 @@ final class DeferredLookupStub: URLProtocol {
             client?.urlProtocol(self, didLoad: payload)
             client?.urlProtocolDidFinishLoading(self)
         }
-        let delay = Self.delay
+        let delay = requestDelay ?? Self.delay
         if delay > 0 {
             DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: respond)
         } else {

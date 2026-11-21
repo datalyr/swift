@@ -705,7 +705,7 @@ Workspaces that match without ATT never get `att_not_authorized`, and for them a
 
 Every lookup outcome is reported as `$attribution_match` with a `reason` (`matched`, `no_candidates`, `att_not_authorized`, `request_failed`, ...). `att_not_authorized` is reported once per install per ATT status.
 
-Each lookup also sends the SDK's `anonymous_id` (the same id every event carries), so the server can tell a repeat lookup from this install apart from a different install on the same network. A lookup that gets no usable answer is reported with `reason: request_failed`, an `error_class` (`timeout`, `network`, `http_4xx`, `http_5xx`, `decode`), the `error_code` (URL error) or `http_status`, and `elapsed_ms`. The request waits up to 10 seconds for an answer; in the first hour after install a timed-out lookup is sent once more straight away (same attempt), and the outcome then carries `timeout_retry: true`.
+Each lookup also sends the SDK's `anonymous_id` (the same id every event carries), so the server can tell a repeat lookup from this install apart from a different install on the same network. A lookup that gets no usable answer is reported with `reason: request_failed`, an `error_class` (`timeout`, `network`, `http_4xx`, `http_5xx`, `decode`), the `error_code` (URL error) or `http_status`, and `elapsed_ms`. The request waits up to 10 seconds for an answer, and `initialize()` waits for at most that one request before sending `app_install`. In the first hour after install a timed-out lookup is sent once more (same attempt) in the background after `app_install`, so it never lengthens `initialize()`; its outcome carries `timeout_retry: true`, and a match it finds is sent as `$web_attribution_matched` after `app_install`. A response that is not HTTP is reported as `error_class: network`.
 
 After a match the SDK merges the web click IDs (`fbclid`, `gclid`, `ttclid`, `gbraid`, `wbraid`, `twclid`, `li_fat_id`, `sclid`, `aleid`), UTM parameters, and cookies into the mobile session, sends `$web_attribution_matched`, and stamps the merged attribution on every later event.
 
@@ -958,7 +958,7 @@ class AppCoordinator: DatalyrSDKDelegate {
 | Event data payload | 32,768 bytes of serialized JSON |
 | Event name | 100 characters |
 | Journey | 30 touchpoints over 90 days |
-| Attribution lookup timeout | 10 seconds |
+| Attribution lookup timeout | 10 seconds; `initialize()` waits for one lookup at most. A first-hour timeout is retried once in the background after `app_install`. |
 
 | Response | Behavior |
 |---|---|
