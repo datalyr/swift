@@ -118,7 +118,7 @@ final class EventDeliveryRetryTests: XCTestCase {
         let client = DatalyrHTTPClient(endpoint: "https://ingest.example.invalid/track",
                                        config: HTTPClientConfig(apiKey: "dk_fake_test_key"))
         let queue = DatalyrEventQueue(httpClient: client, config: QueueConfig(
-            maxQueueSize: maxQueueSize, batchSize: 10, flushInterval: 3600, maxRetryCount: maxRetryCount))
+            maxQueueSize: maxQueueSize, batchSize: 10, flushInterval: 3600, maxRetryCount: maxRetryCount), startsNetworkMonitor: false)
         let clock = self.clock
         queue.now = { clock.now }
         queue.scheduleRetry = { _ in }   // the test drives every retry
@@ -351,6 +351,18 @@ final class EventDeliveryRetryTests: XCTestCase {
         }
     }
 
+    func test404IsNotReportedAsAnAuthenticationFailure() async {
+        IngestStub.script([.status(404), .status(401)])
+        let client = DatalyrHTTPClient(endpoint: "https://ingest.example.invalid/track",
+                                       config: HTTPClientConfig(apiKey: "dk_fake_test_key"))
+        let notFound = await client.sendEvent(payload(id: "evt_404_msg"))
+        XCTAssertEqual(notFound.disposition, .refused)
+        XCTAssertFalse(notFound.error is HTTPError && notFound.error?.localizedDescription == HTTPError.authenticationFailed.localizedDescription)
+        XCTAssertTrue(notFound.error?.localizedDescription.contains("404") == true)
+        let unauthorized = await client.sendEvent(payload(id: "evt_401_msg"))
+        XCTAssertEqual(unauthorized.error?.localizedDescription, HTTPError.authenticationFailed.localizedDescription)
+    }
+
     func testRefusedKeyThatIsFixedDeliversTheEvent() async {
         IngestStub.script([.status(401), .status(200)])
         let queue = await makeQueue()
@@ -518,7 +530,7 @@ final class EventDeliveryRetryTests: XCTestCase {
         var inDeadLetterAtHook = false
         // The hook must be set before initializeQueue runs, so build the queue offline and
         // set it straight away; initializeQueue starts on a Task after init returns.
-        let queue = DatalyrEventQueue(httpClient: client, config: QueueConfig(flushInterval: 3600))
+        let queue = DatalyrEventQueue(httpClient: client, config: QueueConfig(flushInterval: 3600), startsNetworkMonitor: false)
         queue.afterReplayPersistForTesting = {
             let q = DatalyrStorage.shared.getCodableArraySync(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
             let d = DatalyrStorage.shared.getCodableArraySync(StorageKeys.deadLetterQueue, type: QueuedEvent.self) ?? []

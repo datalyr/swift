@@ -154,6 +154,11 @@ internal class DatalyrHTTPClient {
             case .delivered:
                 debugLog("Event sent successfully: \(payload.eventName)")
                 return HTTPResponse(success: true, statusCode: status, data: data, disposition: .delivered)
+            case .refused where status == 404:
+                // Ingest never answers 404: something in front of it sent this request elsewhere.
+                errorLog("HTTP 404: the event endpoint was not found (a misroute in front of DATALYR ingest). Kept and retried.")
+                return HTTPResponse(success: false, statusCode: status, data: data,
+                                    error: HTTPError.httpError(status, "Endpoint not found"), disposition: disposition)
             case .refused:
                 errorLog("HTTP \(status): Authentication failed. Check your API key and workspace ID.")
                 return HTTPResponse(success: false, statusCode: status, data: data,

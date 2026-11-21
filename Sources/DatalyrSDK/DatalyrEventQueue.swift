@@ -114,7 +114,12 @@ internal class DatalyrEventQueue {
         set { queueLock.withLock { _isOnline = newValue } }
     }
     
-    init(httpClient: DatalyrHTTPClient, config: QueueConfig = QueueConfig()) {
+    /// Whether this queue follows real network reachability (NWPathMonitor). Always true in
+    /// the SDK; unit tests pass false and drive online/offline with setOnlineStatus().
+    private let startsNetworkMonitor: Bool
+
+    init(httpClient: DatalyrHTTPClient, config: QueueConfig = QueueConfig(), startsNetworkMonitor: Bool = true) {
+        self.startsNetworkMonitor = startsNetworkMonitor
         self.httpClient = httpClient
         self.config = config
         
@@ -341,10 +346,10 @@ internal class DatalyrEventQueue {
         // Don't run a live reachability monitor under XCTest — tests drive online/offline
         // explicitly via setOnlineStatus(), and a monitor flipping the flag back to online
         // would non-deterministically trigger real network sends mid-test.
-        // `swift test` on macOS does not set XCTestConfigurationFilePath, so also check
-        // whether XCTest is loaded (never the case in an app).
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || NSClassFromString("XCTestCase") != nil { return }
+        // `swift test` on macOS does not set XCTestConfigurationFilePath, so unit tests also
+        // construct the queue with startsNetworkMonitor: false.
+        if !startsNetworkMonitor { return }
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
 
         pathMonitor.pathUpdateHandler = { [weak self] path in
             self?.setOnlineStatus(path.status == .satisfied)
