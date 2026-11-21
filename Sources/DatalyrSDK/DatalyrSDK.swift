@@ -203,7 +203,10 @@ public class DatalyrSDK {
             maxQueueSize: config.maxQueueSize,
             batchSize: config.batchSize,
             flushInterval: config.flushInterval,
-            maxRetryCount: config.maxRetries
+            // FX-047: maxRetries can raise the attempts before dead-letter, never lower them
+            // below the floor that rides out a short outage.
+            maxRetryCount: max(config.maxRetries, QueueConfig.minTransientAttempts),
+            retryBaseDelay: config.retryDelay
         )
         self.eventQueue = DatalyrEventQueue(httpClient: httpClient!, config: queueConfig)
         // Surface retry-exhausted / evicted events to the host app's delegate

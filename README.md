@@ -944,14 +944,14 @@ class AppCoordinator: DatalyrSDKDelegate {
 | Events drained per pass | 10, from `batchSize` |
 | HTTP requests per drain | One per event |
 | Flush interval | 10 seconds |
-| Retries per event | 3 |
-| Retry backoff | `min(2^n × retryDelay + random(0…1), 30)` seconds |
-| `Retry-After` honored | Clamped to 0 to 30 seconds |
-| Extra waits on 429 and 408 | 5, outside the retry budget |
+| Failed attempts per event before the dead-letter queue | 10, or `maxRetries` if higher |
+| Retry backoff | `min(2^(n-1) × retryDelay, 300)` seconds plus up to 25% jitter, n = consecutive failures |
+| `Retry-After` honored | Exactly, clamped to 0 to 300 seconds |
+| Key refused (`401`, `403`) | Kept and retried for 10 minutes |
 | Request timeout | 15 seconds. Resource timeout 30 seconds. |
 | Client rate limit | 100 requests per 60 seconds. The SDK waits, up to 120 seconds. |
 | Queue | 1000 events |
-| Dead-letter queue | 100 events |
+| Dead-letter queue | 100 events; when full, the oldest event that is not a purchase or install is dropped and counted |
 | Pre-init buffers | 50 events, 50 identity calls, 50 deep links |
 | Event data payload | 32,768 bytes of serialized JSON |
 | Event name | 100 characters |
@@ -960,9 +960,13 @@ class AppCoordinator: DatalyrSDKDelegate {
 
 | Response | Behavior |
 |---|---|
-| `429`, `408` | Waits for `Retry-After`, then retries, on a separate budget of 5 waits |
-| Other `4xx` | Dropped. A wrong API key produces this. |
-| `5xx`, network failure | Retried with backoff up to `maxRetries`, then moved to the dead-letter queue |
+| Any `2xx` | Stored. Never sent again. |
+| `429`, `408` | Kept. Waits for `Retry-After` (or the backoff), then retries. Does not use up attempts. |
+| `5xx`, `503`, timeout, offline, DNS, TLS, cancelled request | Kept. Retried with the same event id after `Retry-After` or the backoff; after the attempts above, moved to the dead-letter queue, which is replayed on the next launch. |
+| `401`, `403` | Kept and retried for 10 minutes, then dropped and counted. A wrong API key produces this. |
+| Other `4xx` (`400`, `413`, …) | Dropped at once and counted: the server will never accept that request. |
+
+A request that does not deliver pauses sending until its wait is over, so an outage is probed with one request at a time, not one per event. Dropped events are counted in `queueStats.droppedEvents` and `queueStats.droppedEventsByReason` (`rejected`, `auth_refused`, `dead_letter_full`, `dead_letter_expired`), kept across launches.
 
 Events persist across app launches and send when connectivity returns.
 
@@ -974,6 +978,7 @@ print(status.queueStats.queueSize)       // Events waiting
 print(status.queueStats.isProcessing)    // Currently sending
 print(status.queueStats.isOnline)        // Network available
 print(status.queueStats.oldestEventAge as Any)  // TimeInterval?
+print(status.queueStats.droppedEvents)   // Events dropped for good since install
 
 let ready = DatalyrSDK.shared.isInitialized  // Bool
 ```
