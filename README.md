@@ -946,8 +946,8 @@ class AppCoordinator: DatalyrSDKDelegate {
 | Flush interval | 10 seconds |
 | Failed attempts per event before the dead-letter queue | 10, or `maxRetries` if higher |
 | Retry backoff | `min(2^(n-1) × retryDelay, 300)` seconds plus up to 25% jitter, n = consecutive failures |
-| `Retry-After` honored | Exactly, clamped to 0 to 300 seconds |
-| Key refused (`401`, `403`) | Kept and retried for 10 minutes |
+| `Retry-After` honored | As a minimum, plus 0 to 25% jitter, capped at 300 seconds |
+| `401`, `403`, `404` | Kept and retried for 10 minutes |
 | Request timeout | 15 seconds. Resource timeout 30 seconds. |
 | Client rate limit | 100 requests per 60 seconds. The SDK waits, up to 120 seconds. |
 | Queue | 1000 events |
@@ -963,10 +963,12 @@ class AppCoordinator: DatalyrSDKDelegate {
 | Any `2xx` | Stored. Never sent again. |
 | `429`, `408` | Kept. Waits for `Retry-After` (or the backoff), then retries. Does not use up attempts. |
 | `5xx`, `503`, timeout, offline, DNS, TLS, cancelled request | Kept. Retried with the same event id after `Retry-After` or the backoff; after the attempts above, moved to the dead-letter queue, which is replayed on the next launch. |
-| `401`, `403` | Kept and retried for 10 minutes, then dropped and counted. A wrong API key produces this. |
+| `401`, `403`, `404` | Kept and retried for 10 minutes, then dropped and counted. A wrong API key produces 401; DATALYR's ingest never answers 404, so a 404 means a misroute in front of it. |
 | Other `4xx` (`400`, `413`, …) | Dropped at once and counted: the server will never accept that request. |
 
-A request that does not deliver pauses sending until its wait is over, so an outage is probed with one request at a time, not one per event. Dropped events are counted in `queueStats.droppedEvents` and `queueStats.droppedEventsByReason` (`rejected`, `auth_refused`, `dead_letter_full`, `dead_letter_expired`), kept across launches.
+Do not re-track an event from `datalyrDidFailToSendEvent`: a final refusal would be refused again, in a loop.
+
+A request that does not deliver pauses sending until its wait is over, so an outage is probed with one request at a time, not one per event. Dropped events are counted in `queueStats.droppedEvents` and `queueStats.droppedEventsByReason` (`rejected`, `refused`, `dead_letter_full`, `dead_letter_expired`), kept across launches.
 
 Events persist across app launches and send when connectivity returns.
 

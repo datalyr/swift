@@ -190,7 +190,7 @@ final class DatalyrEventQueueTests: XCTestCase {
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
         let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(flushInterval: 60.0))
         queue.setOnlineStatus(false)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await queue.waitForInitialization()
 
         XCTAssertEqual(queue.getStats().queueSize, 1, "dead-letter entry should be replayed into the queue")
         let persisted = await DatalyrStorage.shared.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
@@ -213,7 +213,7 @@ final class DatalyrEventQueueTests: XCTestCase {
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
         let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(flushInterval: 60.0))
         queue.setOnlineStatus(false)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await queue.waitForInitialization()
 
         XCTAssertEqual(queue.getStats().queueSize, 1, "only the fresh, under-cap entry is replayed")
         let persisted = await DatalyrStorage.shared.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []

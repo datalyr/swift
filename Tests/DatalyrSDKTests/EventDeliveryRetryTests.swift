@@ -123,7 +123,7 @@ final class EventDeliveryRetryTests: XCTestCase {
         queue.now = { clock.now }
         queue.scheduleRetry = { _ in }   // the test drives every retry
         queues.append(queue)
-        try? await Task.sleep(nanoseconds: 150_000_000) // initializeQueue
+        await queue.waitForInitialization()
         return queue
     }
 
@@ -212,13 +212,14 @@ final class EventDeliveryRetryTests: XCTestCase {
         IngestStub.script([.status(503, headers: ["Retry-After": "5"]), .status(200)])
         let queue = await makeQueue()
         await queue.enqueue(payload(id: "evt_503"))
-        XCTAssertEqual(queue.retryNotBefore - clock.now, 5, accuracy: 0.01, "waits exactly Retry-After")
+        let wait = queue.retryNotBefore - clock.now
+        XCTAssertGreaterThanOrEqual(wait, 5 - 0.001, "never earlier than Retry-After")
+        XCTAssertLessThanOrEqual(wait, 5 * 1.25 + 0.001, "at most 25% jitter")
 
         clock.advance(4.9)
         await queue.flush()
         XCTAssertEqual(IngestStub.eventIds.count, 1, "not before Retry-After")
-        clock.advance(0.2)
-        await queue.flush()
+        await retryNow(queue)
         XCTAssertEqual(IngestStub.eventIds, ["evt_503", "evt_503"])
         XCTAssertEqual(queue.getStats().queueSize, 0)
     }
@@ -229,7 +230,9 @@ final class EventDeliveryRetryTests: XCTestCase {
         let queue = await makeQueue(maxRetryCount: maxRetry)
         await queue.enqueue(payload(id: "evt_429"))
         for _ in 0..<(maxRetry + 1) {
-            XCTAssertEqual(queue.retryNotBefore - clock.now, 60, accuracy: 0.01)
+            let wait = queue.retryNotBefore - clock.now
+            XCTAssertGreaterThanOrEqual(wait, 60 - 0.001)
+            XCTAssertLessThanOrEqual(wait, 75 + 0.001)
             await retryNow(queue)
         }
         await retryNow(queue)
@@ -308,7 +311,7 @@ final class EventDeliveryRetryTests: XCTestCase {
     // MARK: - only a final 4xx drops
 
     func testFinal4xxIsDroppedAtOnceAndCounted() async {
-        for code in [400, 404, 405, 413, 415, 422] {
+        for code in [400, 405, 413, 415, 422] {
             IngestStub.reset()
             await clearStorage()
             IngestStub.script([.status(code)])
@@ -328,8 +331,9 @@ final class EventDeliveryRetryTests: XCTestCase {
         }
     }
 
-    func testRefusedKeyIsRetriedForTenMinutesThenDroppedAndCounted() async {
-        for code in [401, 403] {
+    func testRefusedKeyOr404IsRetriedForTenMinutesThenDroppedAndCounted() async {
+        // 404: ingest never answers it; an edge misroute must not wipe events on every phone.
+        for code in [401, 403, 404] {
             IngestStub.reset()
             await clearStorage()
             IngestStub.handler = { _ in .status(code) }
@@ -342,7 +346,7 @@ final class EventDeliveryRetryTests: XCTestCase {
             clock.advance(5 * 60)
             await queue.flush()
             XCTAssertEqual(queue.getStats().queueSize, 0, "dropped after 10 minutes of refusals")
-            XCTAssertEqual(queue.getStats().droppedEventsByReason["auth_refused"], 1)
+            XCTAssertEqual(queue.getStats().droppedEventsByReason["refused"], 1)
             XCTAssertEqual(Set(IngestStub.eventIds), ["evt_auth_\(code)"])
         }
     }
@@ -405,8 +409,9 @@ final class EventDeliveryRetryTests: XCTestCase {
         XCTAssertEqual(C.disposition(forStatus: 500, retryAfter: nil), .retry(after: nil))
         XCTAssertEqual(C.disposition(forStatus: 429, retryAfter: 1), .throttled(after: 1))
         XCTAssertEqual(C.disposition(forStatus: 408, retryAfter: nil), .throttled(after: nil))
-        XCTAssertEqual(C.disposition(forStatus: 401, retryAfter: nil), .authRefused)
-        XCTAssertEqual(C.disposition(forStatus: 403, retryAfter: nil), .authRefused)
+        XCTAssertEqual(C.disposition(forStatus: 401, retryAfter: nil), .refused)
+        XCTAssertEqual(C.disposition(forStatus: 403, retryAfter: nil), .refused)
+        XCTAssertEqual(C.disposition(forStatus: 404, retryAfter: nil), .refused)
         XCTAssertEqual(C.disposition(forStatus: 400, retryAfter: nil), .rejected)
         XCTAssertEqual(C.disposition(forStatus: 413, retryAfter: nil), .rejected)
         XCTAssertEqual(C.disposition(forError: URLError(.timedOut)), .retry(after: nil))
@@ -421,6 +426,126 @@ final class EventDeliveryRetryTests: XCTestCase {
         let queue = await makeQueue()
         await queue.enqueue(payload(id: "evt_clamp"))
         XCTAssertEqual(queue.retryNotBefore - clock.now, DatalyrEventQueue.maxBackoff, accuracy: 0.01)
+    }
+
+    func testRetryAfterGetsZeroTo25PercentJitterCappedAt300() {
+        var waits: [TimeInterval] = []
+        for _ in 0..<500 { waits.append(DatalyrEventQueue.retryAfterWait(60)) }
+        XCTAssertGreaterThanOrEqual(waits.min() ?? 0, 60)
+        XCTAssertLessThanOrEqual(waits.max() ?? 0, 75)
+        XCTAssertGreaterThan(Set(waits).count, 1, "jittered, not a fixed value")
+        for _ in 0..<200 {
+            let w = DatalyrEventQueue.retryAfterWait(280)
+            XCTAssertGreaterThanOrEqual(w, 280)
+            XCTAssertLessThanOrEqual(w, DatalyrEventQueue.maxBackoff)
+        }
+    }
+
+    func testBatchThatDeliversSomeThenFailsKeepsOnlyTheUndelivered() async {
+        IngestStub.script([.status(200), .status(200), .status(503)])
+        let queue = await makeQueue()
+        queue.setOnlineStatus(false)
+        let ids = (0..<5).map { "evt_part_\($0)" }
+        for id in ids { await queue.enqueue(payload(id: id)) }
+        queue.setOnlineStatus(true)
+        await queue.flush()
+        XCTAssertEqual(IngestStub.eventIds, Array(ids.prefix(3)), "two delivered, the third failed, the batch stopped")
+        let persisted = await DatalyrStorage.shared.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
+        XCTAssertEqual(queue.getStats().queueSize, 3)
+        XCTAssertEqual(persisted.map { $0.payload.eventId }, Array(ids.suffix(3)), "delivered events are not re-queued")
+        XCTAssertEqual(persisted.first?.retryCount, 1, "the failed event keeps its own record, not a new one")
+
+        await retryNow(queue)
+        XCTAssertEqual(queue.getStats().queueSize, 0)
+        var sends: [String: Int] = [:]
+        for id in IngestStub.eventIds { sends[id, default: 0] += 1 }
+        XCTAssertEqual(sends, ["evt_part_0": 1, "evt_part_1": 1, "evt_part_2": 2, "evt_part_3": 1, "evt_part_4": 1])
+    }
+
+    // MARK: - ledger: one lock for the dead-letter store and the counts
+
+    func testConcurrentDeadLetterWritesLoseNothing() async {
+        let ledger = QueueLedger()
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<60 {
+                group.addTask {
+                    ledger.appendDeadLetter(QueuedEvent(payload: self.payload(id: "evt_conc_\(i)")),
+                                            capacity: 100, isCritical: { _ in false })
+                }
+            }
+        }
+        let ids = Set(ledger.deadLetterEntries().map { $0.payload.eventId })
+        XCTAssertEqual(ids, Set((0..<60).map { "evt_conc_\($0)" }), "every concurrent write is kept")
+    }
+
+    func testConcurrentOverflowIsCountedExactly() async {
+        let ledger = QueueLedger()
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<150 {
+                group.addTask {
+                    ledger.appendDeadLetter(QueuedEvent(payload: self.payload(id: "evt_ovf_\(i)")),
+                                            capacity: 100, isCritical: { _ in false })
+                }
+            }
+        }
+        XCTAssertEqual(ledger.deadLetterEntries().count, 100)
+        XCTAssertEqual(ledger.dropCounts()["dead_letter_full"], 50, "every overflow drop counted once")
+    }
+
+    func testConcurrentCountsNeverGoDown() async {
+        let ledger = QueueLedger()
+        let totals: [Int] = await withTaskGroup(of: Int.self) { group in
+            for _ in 0..<300 { group.addTask { ledger.countDrop(.rejected) } }
+            var all: [Int] = []
+            for await t in group { all.append(t) }
+            return all
+        }
+        XCTAssertEqual(Set(totals).count, 300, "each count saw its own new total")
+        XCTAssertEqual(totals.max(), 300)
+        XCTAssertEqual(ledger.dropCounts()["rejected"], 300, "the stored total is the last, highest one")
+    }
+
+    // MARK: - launch order
+
+    func testReplayedDeadLettersAreSavedBeforeTheStoreIsCleared() async {
+        await DatalyrStorage.shared.setCodableArray(StorageKeys.deadLetterQueue, value: [
+            QueuedEvent(payload: payload("purchase", id: "evt_replay_order"), retryCount: 3),
+        ])
+        let client = DatalyrHTTPClient(endpoint: "https://ingest.example.invalid/track",
+                                       config: HTTPClientConfig(apiKey: "dk_fake_test_key"))
+        let seen = NSLock()
+        var inQueueAtHook = false
+        var inDeadLetterAtHook = false
+        // The hook must be set before initializeQueue runs, so build the queue offline and
+        // set it straight away; initializeQueue starts on a Task after init returns.
+        let queue = DatalyrEventQueue(httpClient: client, config: QueueConfig(flushInterval: 3600))
+        queue.afterReplayPersistForTesting = {
+            let q = DatalyrStorage.shared.getCodableArraySync(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
+            let d = DatalyrStorage.shared.getCodableArraySync(StorageKeys.deadLetterQueue, type: QueuedEvent.self) ?? []
+            seen.withLock {
+                inQueueAtHook = q.contains { $0.payload.eventId == "evt_replay_order" }
+                inDeadLetterAtHook = d.contains { $0.payload.eventId == "evt_replay_order" }
+            }
+        }
+        queue.setOnlineStatus(false)
+        queues.append(queue)
+        await queue.waitForInitialization()
+        seen.withLock {
+            XCTAssertTrue(inQueueAtHook, "saved in the queue first")
+            XCTAssertTrue(inDeadLetterAtHook, "still in the dead-letter store at that moment: a kill here loses nothing")
+        }
+        let dead = await deadLetter()
+        XCTAssertFalse(dead.contains { $0.payload.eventId == "evt_replay_order" }, "removed afterwards")
+    }
+
+    func testDeadLetterAlreadyInTheQueueIsNotReplayedTwice() async {
+        let event = QueuedEvent(payload: payload("purchase", id: "evt_both"), retryCount: 3)
+        await DatalyrStorage.shared.setCodableArray(StorageKeys.eventQueue, value: [event])
+        await DatalyrStorage.shared.setCodableArray(StorageKeys.deadLetterQueue, value: [event])
+        let queue = await makeQueue()
+        queue.setOnlineStatus(false)
+        let persisted = await DatalyrStorage.shared.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
+        XCTAssertEqual(persisted.filter { $0.payload.eventId == "evt_both" }.count, 1)
     }
 
     func testQueuedEventDecodesWithoutAuthRefusedSince() throws {

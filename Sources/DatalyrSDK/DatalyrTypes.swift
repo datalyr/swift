@@ -523,7 +523,7 @@ public struct QueuedEvent: Codable {
     /// replay loop so a permanently-rejected payload (400/413) is dropped after a few launches
     /// instead of cycling forever. Decodes as 0 for entries persisted before the field existed.
     public var replayCount: Int
-    /// When the server first refused this event's key (401/403), seconds since 1970; nil
+    /// When the server first refused this event with 401, 403 or 404, seconds since 1970; nil
     /// while it has not. The queue keeps a refused event for a window from this time, then
     /// drops it (counted). Decodes as nil for entries persisted before the field existed.
     public var authRefusedSince: TimeInterval?
@@ -609,9 +609,9 @@ internal enum DeliveryDisposition: Equatable {
     case retry(after: TimeInterval?)
     /// 429 / 408: backpressure. Kept and retried after `after`; spends no attempt.
     case throttled(after: TimeInterval?)
-    /// 401 / 403: the key was refused. Kept for DatalyrEventQueue.authRefusalWindow, then
-    /// dropped and counted.
-    case authRefused
+    /// 401 / 403 (key refused) or 404 (ingest never answers 404, so it is a misroute in
+    /// front of it): kept for DatalyrEventQueue.refusalWindow, then dropped and counted.
+    case refused
     /// Any other 4xx, or a payload that cannot be encoded: final. Dropped and counted.
     case rejected
 }

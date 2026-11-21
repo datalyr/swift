@@ -66,23 +66,28 @@ internal class DatalyrEventQueue {
     // by any delivered event. Both under queueLock.
     private var _retryNotBefore: TimeInterval = 0
     private var _consecutiveFailures = 0
-    /// Events dropped for good, by reason (persisted; see QueueStats.droppedEvents).
-    private var _dropCounts: [String: Int] = [:]
+    /// Dead-letter store and drop counts, serialized process-wide (see QueueLedger).
+    var ledger = QueueLedger.shared
 
     /// Longest wait between attempts.
     static let maxBackoff: TimeInterval = 300
-    /// How long an event whose key the server refuses (401/403) is kept and retried.
-    static let authRefusalWindow: TimeInterval = 600
+    /// How long an event refused with 401, 403 or 404 is kept and retried (a revoked key
+    /// being fixed, or a 404 from an edge misroute: ingest itself never answers 404).
+    static let refusalWindow: TimeInterval = 600
     /// Dead-letter store capacity.
     static let maxDeadLetter = 100
 
     /// Drop reasons (keys of QueueStats.droppedEventsByReason).
     enum DropReason: String, CaseIterable {
         case rejected            // final 4xx or an unencodable payload
-        case authRefused = "auth_refused"           // 401/403 for longer than authRefusalWindow
+        case refused = "refused"                    // 401/403/404 for longer than refusalWindow
         case deadLetterFull = "dead_letter_full"    // dead-letter store over maxDeadLetter
         case deadLetterExpired = "dead_letter_expired" // replayed maxDeadLetterReplays times or older than 7 days
     }
+
+    /// Test hook: runs after the replayed dead letters are saved in the queue and before
+    /// they are removed from the dead-letter store.
+    var afterReplayPersistForTesting: (() -> Void)?
 
     /// Clock (seconds since 1970). Tests replace it to move time without waiting.
     var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
@@ -113,12 +118,20 @@ internal class DatalyrEventQueue {
         self.httpClient = httpClient
         self.config = config
         
-        Task {
-            await initializeQueue()
+        initTask = Task { [weak self] in
+            await self?.initializeQueue()
         }
     }
     
-    // MARK: - Public Methods
+    /// The load of the persisted queue and dead-letter replay started by init.
+    private var initTask: Task<Void, Never>?
+
+    /// Waits until init's load and replay have finished (tests wait on this instead of sleeping).
+    func waitForInitialization() async {
+        await initTask?.value
+    }
+
+        // MARK: - Public Methods
     
     /// Add an event to the queue
     func enqueue(_ payload: EventPayload) async {
@@ -217,7 +230,7 @@ internal class DatalyrEventQueue {
                 isProcessing: _isProcessing,
                 isOnline: _isOnline,
                 oldestEventAge: oldestEventAge,
-                droppedEventsByReason: _dropCounts
+                droppedEventsByReason: ledger.dropCounts()
             )
         }
     }
@@ -264,14 +277,6 @@ internal class DatalyrEventQueue {
 
     /// Initialize the queue by loading persisted events
     private func initializeQueue() async {
-        var loaded: [String: Int] = [:]
-        for reason in DropReason.allCases {
-            if let n = await storage.getDouble(Self.dropCountKey(reason)), n > 0 { loaded[reason.rawValue] = Int(n) }
-        }
-        queueLock.withLock {
-            for (k, v) in loaded { _dropCounts[k, default: 0] += v }
-        }
-
         if let persistedQueue = await storage.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) {
             let count = queueLock.withLock {
                 // FSR-84: PREPEND the persisted backlog instead of overwriting `queue`. The
@@ -294,11 +299,18 @@ internal class DatalyrEventQueue {
         // entries that already replayed maxDeadLetterReplays times or are older than
         // maxDeadLetterAge are dropped for good — a permanently-rejected payload (400/413)
         // would otherwise loop through dead-letter → replay → dead-letter on every launch.
-        if let dead = await storage.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self), !dead.isEmpty {
+        //
+        // Order (FX-047 review): the replayed events are saved in the queue FIRST and only
+        // then removed from the dead-letter store, so a kill in between leaves them in both
+        // places (sent once more, deduplicated by event id on the server), never in neither.
+        let dead = ledger.deadLetterEntries()
+        if !dead.isEmpty {
             let now = Date().timeIntervalSince1970
             var replays: [QueuedEvent] = []
             var dropped = 0
+            let queuedIds: Set<String> = queueLock.withLock { Set(queue.map { $0.payload.eventId }) }
             for event in dead {
+                if queuedIds.contains(event.payload.eventId) { continue } // already queued (earlier kill)
                 let age = now - event.timestamp
                 if event.replayCount >= Self.maxDeadLetterReplays || age > Self.maxDeadLetterAge {
                     dropped += 1
@@ -310,12 +322,13 @@ internal class DatalyrEventQueue {
             if !replays.isEmpty {
                 queueLock.withLock { queue = replays + queue }
             }
-            await storage.removeValue(StorageKeys.deadLetterQueue)
             await persistQueue()
+            afterReplayPersistForTesting?()
             if dropped > 0 {
-                await countDrop(.deadLetterExpired, dropped)
+                ledger.countDrop(.deadLetterExpired, dropped)
                 errorLog("Dropped \(dropped) undeliverable dead-letter event(s) (replayed \(Self.maxDeadLetterReplays)× or older than 7 days)")
             }
+            ledger.removeDeadLetters(eventIds: Set(dead.map { $0.payload.eventId }))
             debugLog("Replayed \(replays.count) dead-letter event(s) for one more delivery attempt")
         }
 
@@ -328,7 +341,10 @@ internal class DatalyrEventQueue {
         // Don't run a live reachability monitor under XCTest — tests drive online/offline
         // explicitly via setOnlineStatus(), and a monitor flipping the flag back to online
         // would non-deterministically trigger real network sends mid-test.
-        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
+        // `swift test` on macOS does not set XCTestConfigurationFilePath, so also check
+        // whether XCTest is loaded (never the case in an app).
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil { return }
 
         pathMonitor.pathUpdateHandler = { [weak self] path in
             self?.setOnlineStatus(path.status == .satisfied)
@@ -373,8 +389,8 @@ internal class DatalyrEventQueue {
     /// by this batch (delivered, dropped or dead-lettered).
     ///
     /// FX-047: an event leaves the queue only when the server stored it (2xx), refused it
-    /// as final (4xx other than 401/403/408/429: dropped and counted), kept refusing its key
-    /// past authRefusalWindow (dropped and counted), or failed maxRetryCount attempts
+    /// as final (4xx other than 401/403/408/429: dropped and counted), kept answering 401/403/404
+    /// past refusalWindow (dropped and counted), or failed maxRetryCount attempts
     /// (moved to the dead-letter store, replayed next launch). The first attempt that does
     /// not deliver ends the batch and closes the gate until the backoff or Retry-After has
     /// passed: one probe per wait while the server is down, never a burst. Every retry
@@ -405,18 +421,18 @@ internal class DatalyrEventQueue {
 
             case .rejected:
                 errorLog("Event refused by the server (HTTP \(response.statusCode)); dropped: \(queuedEvent.payload.eventName)")
-                await countDrop(.rejected)
+                ledger.countDrop(.rejected)
                 removed.append(queuedEvent)
                 onDeadLetter?(queuedEvent, response.error ?? DatalyrQueueError.maxRetriesExceeded(statusCode: response.statusCode, retries: queuedEvent.retryCount + 1))
                 continue
 
-            case .authRefused:
+            case .refused:
                 var event = queuedEvent
                 let since = event.authRefusedSince ?? now()
                 event.authRefusedSince = since
-                if now() - since >= Self.authRefusalWindow {
-                    errorLog("Event key refused (HTTP \(response.statusCode)) for \(Int(Self.authRefusalWindow / 60)) minutes; dropped: \(queuedEvent.payload.eventName)")
-                    await countDrop(.authRefused)
+                if now() - since >= Self.refusalWindow {
+                    errorLog("Event refused (HTTP \(response.statusCode)) for \(Int(Self.refusalWindow / 60)) minutes; dropped: \(queuedEvent.payload.eventName)")
+                    ledger.countDrop(.refused)
                     removed.append(queuedEvent)
                     onDeadLetter?(queuedEvent, response.error ?? HTTPError.authenticationFailed)
                     continue
@@ -457,7 +473,7 @@ internal class DatalyrEventQueue {
             if !ids.isEmpty { queue.removeAll { ids.contains($0.payload.eventId) } }
             guard paused else { return nil }
             if countsAsFailure { _consecutiveFailures += 1 }
-            let wait = waitHint.map { min(max($0, 0), Self.maxBackoff) }
+            let wait = waitHint.map { Self.retryAfterWait($0) }
                 ?? Self.backoff(failures: max(_consecutiveFailures, 1), base: config.retryBaseDelay)
             _retryNotBefore = now() + wait
             return wait
@@ -481,20 +497,17 @@ internal class DatalyrEventQueue {
         return min(raw * (1 + Double.random(in: 0...0.25)), maxBackoff)
     }
 
+    /// Retry-After honoured as a minimum: the server's wait plus 0–25% jitter (so phones
+    /// told the same Retry-After do not return in step), capped at maxBackoff.
+    static func retryAfterWait(_ retryAfter: TimeInterval) -> TimeInterval {
+        let base = min(max(retryAfter, 0), maxBackoff)
+        return min(base * (1 + Double.random(in: 0...0.25)), maxBackoff)
+    }
+
     /// Earliest time the next attempt may go out (seconds since 1970). Tests read it.
     var retryNotBefore: TimeInterval { queueLock.withLock { _retryNotBefore } }
 
-    static func dropCountKey(_ reason: DropReason) -> String { "dropped_events_\(reason.rawValue)" }
-
-    /// Count events dropped for good, in memory and in storage.
-    private func countDrop(_ reason: DropReason, _ n: Int = 1) async {
-        guard n > 0 else { return }
-        let total: Int = queueLock.withLock {
-            _dropCounts[reason.rawValue, default: 0] += n
-            return _dropCounts[reason.rawValue] ?? n
-        }
-        await storage.setDouble(Self.dropCountKey(reason), value: Double(total))
-    }
+    static func dropCountKey(_ reason: DropReason) -> String { QueueLedger.dropCountKey(reason) }
 
     /// Persist queue to storage
     private func persistQueue() async {
@@ -507,20 +520,11 @@ internal class DatalyrEventQueue {
     /// initializeQueue() (FSR-88), so a transient outage that beats the retry budget gets
     /// another delivery attempt rather than being lost.
     private func deadLetter(_ event: QueuedEvent, reason: Error) async {
-        var dl = (await storage.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self)) ?? []
-        dl.append(event)
-        // Over capacity: drop the oldest non-critical entry first (a purchase or install
-        // outlives analytics events), and count every drop (FX-047).
-        var overflow = 0
-        while dl.count > Self.maxDeadLetter {
-            let idx = dl.firstIndex(where: { !Self.isCriticalEvent($0) }) ?? 0
-            dl.remove(at: idx)
-            overflow += 1
-        }
-        await storage.setCodableArray(StorageKeys.deadLetterQueue, value: dl)
+        // Over capacity: the oldest non-critical entry goes first (a purchase or install
+        // outlives analytics events), and every drop is counted — all under the ledger lock.
+        let overflow = ledger.appendDeadLetter(event, capacity: Self.maxDeadLetter, isCritical: Self.isCriticalEvent)
         if overflow > 0 {
             errorLog("Dead-letter store full (\(Self.maxDeadLetter)); dropped \(overflow) event(s)")
-            await countDrop(.deadLetterFull, overflow)
         }
         onDeadLetter?(event, reason)
     }

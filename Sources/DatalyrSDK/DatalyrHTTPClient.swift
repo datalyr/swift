@@ -154,7 +154,7 @@ internal class DatalyrHTTPClient {
             case .delivered:
                 debugLog("Event sent successfully: \(payload.eventName)")
                 return HTTPResponse(success: true, statusCode: status, data: data, disposition: .delivered)
-            case .authRefused:
+            case .refused:
                 errorLog("HTTP \(status): Authentication failed. Check your API key and workspace ID.")
                 return HTTPResponse(success: false, statusCode: status, data: data,
                                     error: HTTPError.authenticationFailed, disposition: disposition)
@@ -175,15 +175,17 @@ internal class DatalyrHTTPClient {
     /// - any 2xx: stored (a duplicate event id also answers 200), never sent again;
     /// - 429 (Retry-After 1 or 60) and 408: backpressure, retried without spending an attempt;
     /// - 5xx, 503 (Retry-After 5 when the fault is the server's own): retried;
-    /// - 401/403: the key was refused; retried for a while (DatalyrEventQueue.authRefusalWindow)
-    ///   in case it is a passing misconfiguration, then dropped and counted;
+    /// - 401/403 (key refused) and 404 (never sent by ingest: a misroute): retried for
+    ///   DatalyrEventQueue.refusalWindow, then dropped and counted;
     /// - any other 4xx (400 bad body or missing name/identity, 413 too large, 405, 415): this
     ///   exact request can never succeed, so the event is dropped at once and counted.
     static func disposition(forStatus status: Int, retryAfter: TimeInterval?) -> DeliveryDisposition {
         switch status {
         case 200..<300: return .delivered
         case 429, 408: return .throttled(after: retryAfter)
-        case 401, 403: return .authRefused
+        // 404: ingest never answers it, so it comes from a misroute in front of ingest and
+        // would otherwise wipe events on every phone at once.
+        case 401, 403, 404: return .refused
         case 400..<500: return .rejected
         default: return .retry(after: retryAfter) // 5xx and anything unexpected (1xx/3xx)
         }
