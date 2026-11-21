@@ -17,6 +17,14 @@ final class DeferredLookupStub: URLProtocol {
     static func enqueue(status: Int = 200, _ body: [String: Any]) {
         lock.withLock { _responses.append((status, body)) }
     }
+    /// The next request fails in transport with this URLError code (no HTTP answer).
+    static func enqueueFailure(_ code: URLError.Code) {
+        lock.withLock { _responses.append((-1, ["__url_error": code.rawValue])) }
+    }
+    /// The next request answers 200 with a body that is not JSON.
+    static func enqueueUnparseable() {
+        lock.withLock { _responses.append((-2, [:])) }
+    }
     static func reset() {
         lock.withLock { _bodies = []; _responses = []; _delay = 0 }
     }
@@ -46,10 +54,18 @@ final class DeferredLookupStub: URLProtocol {
                 : Self._responses.removeFirst()
         }
         let respond = { [self] in
-            let http = HTTPURLResponse(url: request.url!, statusCode: response.status,
+            if response.status == -1, let raw = response.body["__url_error"] as? Int {
+                client?.urlProtocol(self, didFailWithError: URLError(URLError.Code(rawValue: raw)))
+                return
+            }
+            let unparseable = response.status == -2
+            let http = HTTPURLResponse(url: request.url!, statusCode: unparseable ? 200 : response.status,
                                        httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
             client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: response.body)) ?? Data())
+            let payload = unparseable
+                ? Data("<html>bad gateway</html>".utf8)
+                : (try? JSONSerialization.data(withJSONObject: response.body)) ?? Data()
+            client?.urlProtocol(self, didLoad: payload)
             client?.urlProtocolDidFinishLoading(self)
         }
         let delay = Self.delay

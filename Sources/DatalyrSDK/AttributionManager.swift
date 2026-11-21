@@ -640,12 +640,19 @@ internal enum DeferredLookup {
     /// The JSON body for POST /attribution/deferred-lookup. `att_status` is the live ATT
     /// status (0 notDetermined, 1 restricted, 2 denied, 3 authorized) as a plain Int — the
     /// server compares it numerically.
+    ///
+    /// `anonymous_id` (FX-052) is the SDK's own anonymous id, the one every event already
+    /// carries. The server keys its one-click-one-install claim on it (`device:<id>`), so a
+    /// repeat lookup from the same install is recognised as the same device instead of
+    /// being refused as a second install. The server ignores ids over 128 characters, so
+    /// those are not sent.
     static func requestBody(
         osVersion: String,
         deviceModel: String,
         timezone: String,
         language: String?,
-        attStatus: UInt
+        attStatus: UInt,
+        anonymousId: String? = nil
     ) -> [String: Any] {
         var body: [String: Any] = [
             "platform": "ios",
@@ -657,7 +664,52 @@ internal enum DeferredLookup {
         if let language = language, !language.isEmpty {
             body["language"] = language
         }
+        if let anonymousId = anonymousId, !anonymousId.isEmpty, anonymousId.count <= 128 {
+            body["anonymous_id"] = anonymousId
+        }
         return body
+    }
+
+    /// Seconds the device waits for the lookup answer (URLRequest.timeoutInterval). The
+    /// server stops its own matching at 8 s, so 10 s leaves about 2 s for the network.
+    static let requestTimeout: TimeInterval = 10
+
+    /// A timed-out lookup is sent once more, at once, only in the first hour after
+    /// install: the window in which a click is fresh and the user is still in the app.
+    /// Safe because the request carries `anonymous_id`, so the server's click claim
+    /// treats the second request as the same device (identity.js takeIpMatchedClick:
+    /// same `device:` holder → ok).
+    static let timeoutRetryMaxInstallAgeMinutes: Double = 60
+
+    static func shouldRetryAfterTimeout(_ error: Error, installAgeMinutes: Double?) -> Bool {
+        guard let urlError = error as? URLError, urlError.code == .timedOut else { return false }
+        guard let age = installAgeMinutes else { return false }
+        return age < timeoutRetryMaxInstallAgeMinutes
+    }
+
+    // MARK: Failure fields (INST-01)
+    //
+    // What the `request_failed` outcome event says about a lookup that got no usable
+    // answer: an error class, plus the URLError code or the HTTP status. Never a URL, a
+    // header, or any identifier.
+
+    /// A transport failure (no HTTP answer): `timeout` for URLError.timedOut, else `network`.
+    static func failureFields(forTransportError error: Error) -> [String: Any] {
+        guard let urlError = error as? URLError else { return ["error_class": "network"] }
+        return [
+            "error_class": urlError.code == .timedOut ? "timeout" : "network",
+            "error_code": urlError.code.rawValue,
+        ]
+    }
+
+    /// An HTTP answer other than 200: `http_4xx`, `http_5xx`, … plus the status.
+    static func failureFields(forHTTPStatus statusCode: Int) -> [String: Any] {
+        ["error_class": "http_\(statusCode / 100)xx", "http_status": statusCode]
+    }
+
+    /// A 200 whose body is not a JSON object.
+    static func failureFieldsForUnreadableBody() -> [String: Any] {
+        ["error_class": "decode"]
     }
 
     /// Disposition of a non-200 response. 5xx/408/429 are transient; anything else is

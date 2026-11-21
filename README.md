@@ -705,6 +705,8 @@ Workspaces that match without ATT never get `att_not_authorized`, and for them a
 
 Every lookup outcome is reported as `$attribution_match` with a `reason` (`matched`, `no_candidates`, `att_not_authorized`, `request_failed`, ...). `att_not_authorized` is reported once per install per ATT status.
 
+Each lookup also sends the SDK's `anonymous_id` (the same id every event carries), so the server can tell a repeat lookup from this install apart from a different install on the same network. A lookup that gets no usable answer is reported with `reason: request_failed`, an `error_class` (`timeout`, `network`, `http_4xx`, `http_5xx`, `decode`), the `error_code` (URL error) or `http_status`, and `elapsed_ms`. The request waits up to 10 seconds for an answer; in the first hour after install a timed-out lookup is sent once more straight away (same attempt), and the outcome then carries `timeout_retry: true`.
+
 After a match the SDK merges the web click IDs (`fbclid`, `gclid`, `ttclid`, `gbraid`, `wbraid`, `twclid`, `li_fat_id`, `sclid`, `aleid`), UTM parameters, and cookies into the mobile session, sends `$web_attribution_matched`, and stamps the merged attribution on every later event.
 
 When IP matching misses — a VPN toggle during install, for example — call `identify()` with the user's email. The SDK then recovers attribution by email.

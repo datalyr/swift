@@ -1004,7 +1004,7 @@ public class DatalyrSDK {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-Datalyr-API-Key")
-        request.timeoutInterval = 10
+        request.timeoutInterval = DeferredLookup.requestTimeout
 
         // Device context — the exact values the click-side fp_* capture approximates
         // from the redirect request's headers. This is what opens the server's tier-2
@@ -1021,7 +1021,8 @@ public class DatalyrSDK {
             deviceModel: deviceInfo.model,
             timezone: deviceInfo.timezone,
             language: Locale.preferredLanguages.first,
-            attStatus: attStatus
+            attStatus: attStatus,
+            anonymousId: anonymousId
         )
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
@@ -1029,8 +1030,25 @@ public class DatalyrSDK {
         // (app killed mid-flight, hung connection) must still count against the bound.
         await attributionManager?.recordDeferredLookupAttempt()
 
+        // INST-01: every lookup that gets no usable answer is reported with how long it took.
+        let startedAt = Date()
+        let elapsedMs = { Int((Date().timeIntervalSince(startedAt) * 1000).rounded()) }
+        var timeoutRetried = false
+
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await URLSession.shared.data(for: request)
+            } catch where DeferredLookup.shouldRetryAfterTimeout(
+                error, installAgeMinutes: attributionManager?.installAgeMinutes()
+            ) {
+                // A slow answer used to be a failure that waited for the next launch. In the
+                // first hour, ask once more now — same body, same anonymous_id, same attempt.
+                debugLog("Deferred attribution lookup timed out — trying once more")
+                timeoutRetried = true
+                (data, response) = try await URLSession.shared.data(for: request)
+            }
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 errorLog("Deferred attribution lookup got a non-HTTP response — retrying on a later launch")
@@ -1047,6 +1065,11 @@ public class DatalyrSDK {
                 }
                 errorLog("Deferred attribution lookup failed with status \(httpResponse.statusCode)"
                     + (retryable ? " — retrying on a later launch" : " — not retryable"))
+                await trackAttributionMatchOutcome(
+                    matched: false, reason: "request_failed", windowMinutes: nil,
+                    extra: DeferredLookup.failureFields(forHTTPStatus: httpResponse.statusCode)
+                        .merging(["elapsed_ms": elapsedMs()]) { a, _ in a }
+                )
                 return
             }
 
@@ -1055,6 +1078,11 @@ public class DatalyrSDK {
             // the install's one shot at the bridge.
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 errorLog("Deferred attribution lookup returned an unparseable body — retrying on a later launch")
+                await trackAttributionMatchOutcome(
+                    matched: false, reason: "request_failed", windowMinutes: nil,
+                    extra: DeferredLookup.failureFieldsForUnreadableBody()
+                        .merging(["elapsed_ms": elapsedMs()]) { a, _ in a }
+                )
                 return
             }
 
@@ -1115,7 +1143,7 @@ public class DatalyrSDK {
                     matched: false,
                     reason: json["reason"] as? String ?? "no_candidates",
                     windowMinutes: json["window_minutes"],
-                    extra: [:]
+                    extra: timeoutRetried ? ["timeout_retry": true] : [:]
                 )
                 return
             }
@@ -1213,6 +1241,7 @@ public class DatalyrSDK {
             if let v = attribution["match_candidates"] { matchStats["match_candidates"] = v }
             if let v = attribution["match_score"] { matchStats["match_score"] = v }
             if let v = attribution["match_confidence"] { matchStats["match_confidence"] = v }
+            if timeoutRetried { matchStats["timeout_retry"] = true }
             await trackAttributionMatchOutcome(
                 matched: true,
                 reason: "matched",
@@ -1232,8 +1261,12 @@ public class DatalyrSDK {
             // Still reported: a workspace whose misses are overwhelmingly `request_failed`
             // has a connectivity/timeout problem, not an attribution problem, and those
             // two need completely different fixes. The lookup stays eligible regardless.
+            // INST-01: which kind of failure (timeout vs other network) and how long it took.
+            var failure = DeferredLookup.failureFields(forTransportError: error)
+            failure["elapsed_ms"] = elapsedMs()
+            if timeoutRetried { failure["timeout_retry"] = true }
             await trackAttributionMatchOutcome(
-                matched: false, reason: "request_failed", windowMinutes: nil, extra: [:]
+                matched: false, reason: "request_failed", windowMinutes: nil, extra: failure
             )
         }
     }
