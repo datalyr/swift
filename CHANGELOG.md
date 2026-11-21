@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+Release as **2.2.1** on its own (2.3.0 if shipped with the event-retry change in #9). Version number not bumped yet.
+
+### Changed
+- The deferred web-to-app lookup (`POST /attribution/deferred-lookup`) sends the SDK's `anonymous_id` (the id every event already carries), so the server can tell a repeat lookup from this install apart from another install on the same network.
+- A lookup that gets no usable answer is reported as `$attribution_match` with `reason: request_failed` plus `error_class` (`timeout`, `network`, `http_4xx`, `http_5xx`, `decode`), `error_code` or `http_status`, and `elapsed_ms`. HTTP errors, unreadable answers and non-HTTP responses, which sent no event before, now send this one.
+- A lookup that times out in the first hour after install is sent once more (same counted attempt) in the background after `app_install`. `initialize()` still waits for at most one lookup (10 s), as in 2.2.0. The retry's outcome carries `timeout_retry: true`, and a match it finds is sent as `$web_attribution_matched` after `app_install`.
+
+### Release note
+- Do not re-track an event from `datalyrDidFailToSendEvent`. With the event-retry change (#9), an app that does so would loop on a final refusal: each re-tracked copy is refused again and reported again.
+
 ## [2.2.0] - 2026-10-30
 
 ### Changed
