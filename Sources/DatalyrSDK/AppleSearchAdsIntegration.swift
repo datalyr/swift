@@ -289,12 +289,15 @@ public class AppleSearchAdsIntegration {
 
     private func log(_ message: String) {
         if debug {
-            print("[Datalyr/AppleSearchAds] \(message)")
+            DatalyrLogOutput.write("[Datalyr/AppleSearchAds] \(message)")
         }
     }
 
-    private func logError(_ message: String) {
-        print("[Datalyr/AppleSearchAds] ERROR: \(message)")
+    /// Debug only: a missing Search Ads token is the normal case for most installs.
+    internal func logError(_ message: String) {
+        if debug {
+            DatalyrLogOutput.write("[Datalyr/AppleSearchAds] ERROR: \(message)")
+        }
     }
 }
 

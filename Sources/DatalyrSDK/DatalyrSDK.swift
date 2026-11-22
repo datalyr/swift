@@ -723,9 +723,9 @@ public class DatalyrSDK {
     /// DEP-01: one-time warning for config options that are stored but never read.
     ///
     /// Fires only when the caller set a NON-default value — an app that never
-    /// touched these stays silent. Emitted via `errorLog` (unconditional) rather
-    /// than `debugLog`, because the whole point is that the developer has a wrong
-    /// belief about what the SDK is doing.
+    /// touched these stays silent. Emitted via `misuseLog` (prints even with debug
+    /// off) rather than `debugLog`, because the whole point is that the developer
+    /// has a wrong belief about what the SDK is doing.
     private static var didWarnAboutIgnoredOptions = false
     private static func warnAboutIgnoredOptions(_ config: DatalyrConfig) {
         guard !didWarnAboutIgnoredOptions else { return }
@@ -747,7 +747,7 @@ public class DatalyrSDK {
 
         guard !ignored.isEmpty else { return }
         didWarnAboutIgnoredOptions = true
-        errorLog("Ignored configuration option(s) — these are accepted but never read: " + ignored.joined(separator: "; "))
+        misuseLog("Ignored configuration option(s) — these are accepted but never read: " + ignored.joined(separator: "; "))
     }
 
     /// Fetch web attribution data for user and merge into mobile session
@@ -1552,7 +1552,9 @@ public class DatalyrSDK {
     }
 
     /// Get deferred deep link attribution data
-    /// - Returns: nil — deferred deep linking is now handled via prelanders
+    /// - Returns: Always nil. Deferred web-to-app attribution is matched on the server
+    ///   and applied to events automatically; read it with `getAttributionData()`.
+    @available(*, deprecated, message: "Always returns nil. Web-to-app attribution is applied automatically; use getAttributionData().")
     public func getDeferredAttributionData() -> DeferredDeepLinkResult? {
         return nil
     }
@@ -2113,26 +2115,15 @@ public class DatalyrSDK {
         config: DatalyrConfig, 
         template: String = "ecommerce"
     ) async throws {
-        // Create config with SKAdNetwork template
-        let skadConfig = DatalyrConfig(
-            apiKey: config.apiKey,
-            workspaceId: config.workspaceId,
-            debug: config.debug,
-            endpoint: config.endpoint,
-            maxRetries: config.maxRetries,
-            retryDelay: config.retryDelay,
-            timeout: config.timeout,
-            batchSize: config.batchSize,
-            flushInterval: config.flushInterval,
-            maxQueueSize: config.maxQueueSize,
-            respectDoNotTrack: config.respectDoNotTrack,
-            enableAutoEvents: config.enableAutoEvents,
-            enableAttribution: config.enableAttribution,
-            autoEventConfig: config.autoEventConfig,
-            skadTemplate: template
-        )
-        
-        try await shared.initialize(config: skadConfig)
+        try await shared.initialize(config: skadConfig(from: config, template: template))
+    }
+
+    /// The caller's config with only `skadTemplate` set. A copy, so every other field
+    /// (existingUserHint, useServerTracking, and any added later) survives.
+    internal static func skadConfig(from config: DatalyrConfig, template: String) -> DatalyrConfig {
+        var skadConfig = config
+        skadConfig.skadTemplate = template
+        return skadConfig
     }
     
     /// Track event with automatic SKAdNetwork conversion value encoding
@@ -2148,11 +2139,11 @@ public class DatalyrSDK {
 
         // NEW: Automatic SKAdNetwork encoding with SKAN 4.0 support
         guard let encoder = conversionEncoder else {
-            // Unconditional (errorLog, not debug-gated) and once per process: a SKAN-bearing
-            // call with no template silently disables every conversion value otherwise.
+            // Debug only, once per process: trackPurchase / trackSubscription land here
+            // in every app without SKAdNetwork, where no template is the normal setup.
             if !warnedMissingSkadTemplate {
                 warnedMissingSkadTemplate = true
-                errorLog("skadTemplate not set — SKAdNetwork conversion values are disabled. Set DatalyrConfig.skadTemplate ('ecommerce' | 'gaming' | 'subscription')")
+                debugLog("skadTemplate not set — SKAdNetwork conversion values are disabled. Set DatalyrConfig.skadTemplate ('ecommerce' | 'gaming' | 'subscription')")
             }
             return
         }

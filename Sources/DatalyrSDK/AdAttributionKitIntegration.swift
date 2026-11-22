@@ -385,14 +385,26 @@ internal class UnifiedAttributionTracker {
     /// and unaffected).
     func register() async {
         if #available(iOS 17.4, *) {
-            let alreadyRegistered = stateLock.withLock { storage.bool(forKey: registeredKey) }
-            guard !alreadyRegistered else {
-                debugLog("AdAttributionKit: already registered this install; skipping 0-value re-registration")
+            // Same check as AdAttributionKitBridge.registerForAttribution: a value the app
+            // already sent (e.g. through the public bridge before initialize()) must not be
+            // lowered by the 0/low registration.
+            guard registrationMaySend() else {
+                markRegistered() // a sent value registered the install; never send 0/low later
+                debugLog("AdAttributionKit: already registered (or a value was sent) this install; skipping 0-value registration")
                 return
             }
             // Persist the one-time flag only once the OS accepted the registration; a
             // rejected call is retried on the next launch.
-            let accepted = await AdAttributionKitIntegration.shared.registerAppForAttribution()
+            let accepted: Bool
+            #if DEBUG
+            if let sender = registrationSenderForTesting {
+                accepted = await sender()
+            } else {
+                accepted = await AdAttributionKitIntegration.shared.registerAppForAttribution()
+            }
+            #else
+            accepted = await AdAttributionKitIntegration.shared.registerAppForAttribution()
+            #endif
             if accepted {
                 stateLock.withLock { storage.set(true, forKey: registeredKey) }
             }
@@ -462,6 +474,63 @@ internal class UnifiedAttributionTracker {
         }
 
         return false
+    }
+
+    // MARK: Public-bridge entry points (AdAttributionKitBridge)
+    //
+    // AdAttributionKitBridge is public and sends values itself (it throws the OS error).
+    // These let it share the same persisted guard: ask before sending, record after the
+    // OS accepted.
+
+    /// Read-only: would this value raise the persisted high-water (and is the window open)?
+    /// Out-of-range values (outside 0-63) never do.
+    func wouldRaiseHighWater(fineValue: Int, coarseValue: String) -> Bool {
+        guard (0...63).contains(fineValue) else { return false }
+        return shouldSend(fine: fineValue, coarseRank: coarseRank(coarseValue))
+    }
+
+    /// Record a value the OS accepted. Monotonic: never lowers the high-water. Out-of-range
+    /// values (outside 0-63) are never stored.
+    func recordAccepted(fineValue: Int, coarseValue: String, lockWindow: Bool) {
+        guard (0...63).contains(fineValue) else { return }
+        _ = commitIfHigher(fine: fineValue, coarseRank: coarseRank(coarseValue), lock: lockWindow)
+    }
+
+    /// The stored high-water (fine, coarse name); nil once the SDK's own tracker locked the
+    /// window. Lets the bridge send a lock at the current value without lowering it.
+    func openHighWater() -> (fine: Int, coarse: String)? {
+        stateLock.withLock {
+            guard !storage.bool(forKey: lockedKey) else { return nil }
+            let coarse: String
+            switch storage.integer(forKey: coarseKey) {
+            case 2: coarse = "high"
+            case 1: coarse = "medium"
+            default: coarse = "low"
+            }
+            return (storage.integer(forKey: fineKey), coarse)
+        }
+    }
+
+    #if DEBUG
+    /// Test support: replaces the 0/low registration call in register() (it fails in the simulator).
+    var registrationSenderForTesting: (() async -> Bool)?
+    #endif
+
+    /// Whether the one-time 0/low registration may still be sent: not registered yet and
+    /// nothing above 0/low sent and the window not locked. Sending 0/low after a higher
+    /// value would lower it.
+    func registrationMaySend() -> Bool {
+        stateLock.withLock {
+            !storage.bool(forKey: registeredKey)
+                && !storage.bool(forKey: lockedKey)
+                && storage.integer(forKey: fineKey) == 0
+                && storage.integer(forKey: coarseKey) == 0
+        }
+    }
+
+    /// Mark the one-time registration done (shared with register()).
+    func markRegistered() {
+        stateLock.withLock { storage.set(true, forKey: registeredKey) }
     }
 
     /// Reset the persisted high-water state. Called from SDK.reset() so a logout/login
