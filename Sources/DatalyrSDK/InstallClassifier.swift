@@ -10,7 +10,7 @@ import Darwin
 ///
 /// The SDK used to fire `app_install` on its first launch, keyed only on its own
 /// storage flag, so an app that added DATALYR in an update reported every existing
-/// user as an install (Clema 2026-10: ~3,300 of 3,563, 952 sent to Meta). The
+/// user as an install. The
 /// question that matters is not "how old is the install" but "did a build of this
 /// app already run on this device before this process": files the app wrote in an
 /// earlier process predate this process's start.

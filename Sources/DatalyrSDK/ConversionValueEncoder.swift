@@ -96,11 +96,11 @@ public class ConversionValueEncoder {
         var conversionValue = (mapping.rank & 0x7) << 3
 
         // Low 3 bits = revenue tier (only for monetary events).
-        // FSR-87: read via NSNumber, not `as? Double`. In Swift an `Any` holding a native Int
+        // read via NSNumber, not `as? Double`. In Swift an `Any` holding a native Int
         // does NOT cast with `as? Double` (only NSNumber-backed values do), so the natural
         // call trackWithSKAdNetwork("purchase", properties: ["revenue": 50]) silently lost its
         // revenue tier. NSNumber bridging catches Int, Double, Float and JSON-decoded numbers.
-        // (Bit-packing schema unchanged — IOS-24.)
+        // (Bit-packing schema unchanged.)
         var coarseValue = mapping.coarseValue
         if mapping.hasRevenue,
            let properties = properties,

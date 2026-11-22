@@ -407,7 +407,7 @@ public extension DatalyrSDK {
     func handleDeepLink(_ url: URL) async {
         // Parse the deep link's query/fragment (lyr / fbclid / gclid / ttclid / utm_*) and
         // persist it. routeDeepLink buffers the URL if initialize() hasn't created the
-        // attributionManager yet (FSR-5) — the cold-start/install case where the optional
+        // attributionManager yet — the cold-start/install case where the optional
         // chain used to no-op and silently drop the install-moment deep link — then replays
         // it at the end of init before checkAndTrackInstall().
         await routeDeepLink(url)
