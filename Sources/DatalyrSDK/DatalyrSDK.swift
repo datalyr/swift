@@ -205,7 +205,10 @@ public class DatalyrSDK {
             maxQueueSize: config.maxQueueSize,
             batchSize: config.batchSize,
             flushInterval: config.flushInterval,
-            maxRetryCount: config.maxRetries
+            // maxRetries can raise the attempts before dead-letter, never lower them
+            // below the floor that rides out a short outage.
+            maxRetryCount: max(config.maxRetries, QueueConfig.minTransientAttempts),
+            retryBaseDelay: config.retryDelay
         )
         self.eventQueue = DatalyrEventQueue(httpClient: httpClient!, config: queueConfig)
         // Surface retry-exhausted / evicted events to the host app's delegate
@@ -2480,15 +2483,16 @@ public class DatalyrSDK {
 
         // Device info
         #if canImport(UIKit)
-        let device = UIDevice.current
-        enrichedEventData["os_version"] = device.systemVersion
+        // Read through a synchronous helper: a direct UIKit read here (an async function)
+        // would wait for the main thread. See readUIKitDeviceValues().
+        let uikit = readUIKitDeviceValues()
+        enrichedEventData["os_version"] = uikit.osVersion
         enrichedEventData["device_model"] = getDeviceModelName()
-        enrichedEventData["idfv"] = device.identifierForVendor?.uuidString
+        enrichedEventData["idfv"] = uikit.idfv
 
-        let screen = UIScreen.main
-        enrichedEventData["screen_width"] = Int(screen.bounds.width)
-        enrichedEventData["screen_height"] = Int(screen.bounds.height)
-        enrichedEventData["screen_density"] = screen.scale
+        enrichedEventData["screen_width"] = uikit.screenWidth
+        enrichedEventData["screen_height"] = uikit.screenHeight
+        enrichedEventData["screen_density"] = uikit.screenScale
         #else
         enrichedEventData["os_version"] = ProcessInfo.processInfo.operatingSystemVersionString
         #endif
