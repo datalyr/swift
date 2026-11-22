@@ -33,7 +33,7 @@ internal struct HTTPClientConfig {
 
 // MARK: - Rate Limiter (Thread-Safe)
 
-/// Actor-based sliding-window rate limiter with BACKPRESSURE, not drop (9.B.1).
+/// Actor-based sliding-window rate limiter with BACKPRESSURE, not drop.
 /// The old fixed-window version THREW `rateLimitExceeded` past 100 requests/min; since
 /// shouldRetry() classified that as non-retryable, every rate-limited send failed on its
 /// first attempt, the queue burned one of its 3 retries per pass, and a >100-event backlog
@@ -56,7 +56,7 @@ internal actor RateLimiter {
     func waitForSlot() async {
         // Bound the total wait so a send can never hang forever: past the deadline we
         // proceed anyway and let the server arbitrate — its 429 is handled as transient
-        // backpressure (FSR-31), which retries without burning the failure budget.
+        // backpressure, which retries without burning the failure budget.
         let deadline = Date().timeIntervalSince1970 + window * 2
 
         while true {
@@ -125,8 +125,8 @@ internal class DatalyrHTTPClient {
     }
 
     /// Max consecutive 429/408 backpressure waits before giving up within a single send.
-    /// These do NOT count against the normal retryCount (a 429 is backpressure, not failure —
-    /// FSR-31), so this separate cap prevents an unbounded loop under sustained throttling.
+    /// These do NOT count against the normal retryCount (a 429 is backpressure, not failure),
+    /// so this separate cap prevents an unbounded loop under sustained throttling.
     private static let maxThrottleWaits = 5
     
     /// Send multiple events in a batch
@@ -152,12 +152,12 @@ internal class DatalyrHTTPClient {
     
     /// Send request with exponential backoff retry.
     /// `retryCount` counts genuine failures (5xx, network) against config.maxRetries.
-    /// `throttleCount` counts 429/408 backpressure waits separately (FSR-31) so sustained
+    /// `throttleCount` counts 429/408 backpressure waits separately so sustained
     /// throttling honors Retry-After without burning the failure budget toward dead-letter.
     private func sendWithRetry(_ payload: EventPayload, retryCount: Int, throttleCount: Int) async -> HTTPResponse {
         do {
             // Pace, don't drop: wait for a rate-limit slot (backpressure) instead of
-            // throwing, so a backlog burst is slowed down rather than dead-lettered (9.B.1).
+            // throwing, so a backlog burst is slowed down rather than dead-lettered.
             await waitForRateLimitSlot()
 
             debugLog("Sending event: \(payload.eventName) (attempt \(retryCount + 1))")
@@ -181,7 +181,7 @@ internal class DatalyrHTTPClient {
                 errorLog(errorMessage)
                 return HTTPResponse(success: false, statusCode: httpResponse.statusCode, error: HTTPError.authenticationFailed)
             } else if httpResponse.statusCode == 429 || httpResponse.statusCode == 408 {
-                // FSR-31: 429 (ingest sends Retry-After:1) / 408 are TRANSIENT backpressure, not
+                // 429 (ingest sends Retry-After:1) / 408 are TRANSIENT backpressure, not
                 // permanent client errors. Honor Retry-After and retry WITHOUT counting it as a
                 // failure, so a workspace-wide throttle burst doesn't dead-letter events.
                 guard throttleCount < DatalyrHTTPClient.maxThrottleWaits else {
@@ -276,7 +276,7 @@ internal class DatalyrHTTPClient {
         request.httpBody = requestBody
         
         if config.debug {
-            // IOS-19: log the byte size, not the body — the payload carries PII
+            // log the byte size, not the body — the payload carries PII
             // (email/phone/name in event properties) even in debug builds.
             debugLog("Request body: \(requestBody.count) bytes")
         }
@@ -289,7 +289,7 @@ internal class DatalyrHTTPClient {
         await rateLimiter.waitForSlot()
     }
     
-    /// Test-only: expose the HTTP-status retry classification (FSR-31) so the suite can assert
+    /// Test-only: expose the HTTP-status retry classification so the suite can assert
     /// 429/408 are retryable without reaching the network. Mirrors the .httpError branch below.
     func isRetryableStatusForTest(_ code: Int) -> Bool {
         return shouldRetry(HTTPError.httpError(code, nil))
@@ -301,13 +301,13 @@ internal class DatalyrHTTPClient {
             switch httpError {
             case .authenticationFailed, .rateLimitExceeded:
                 // .rateLimitExceeded is no longer thrown anywhere — the client-side limiter
-                // now waits for a slot instead of throwing (9.B.1). The case is kept in the
+                // now waits for a slot instead of throwing. The case is kept in the
                 // enum for exhaustiveness/compatibility; classified non-retryable if it ever
                 // resurfaces so it can't loop.
                 return false
             case .httpError(let code, _):
                 // Retry server errors (5xx) and transient throttling/timeout (429, 408).
-                // Other 4xx are permanent client errors and won't improve on retry (FSR-31).
+                // Other 4xx are permanent client errors and won't improve on retry.
                 return code >= 500 || code == 429 || code == 408
             default:
                 return true

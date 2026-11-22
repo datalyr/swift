@@ -46,7 +46,7 @@ public struct DatalyrConfig {
         timeout: TimeInterval = 15.0,
         batchSize: Int = 10,
         flushInterval: TimeInterval = 10.0,
-        maxQueueSize: Int = 1000, // TR-05: was 100 (silently dropped an offline backlog >100)
+        maxQueueSize: Int = 1000, // was 100 (silently dropped an offline backlog >100)
         respectDoNotTrack: Bool = true,
         enableAutoEvents: Bool = true,
         enableAttribution: Bool = true,
@@ -372,7 +372,7 @@ public struct AttributionData: Codable {
     public var deepLinkUrl: String?
     public var installReferrer: String?
     public var attributionTimestamp: String?
-    /// Epoch milliseconds when this attribution was captured/merged (FSR-34). Lets the
+    /// Epoch milliseconds when this attribution was captured/merged. Lets the
     /// init-time journey recorder tell a FRESH touch from a relaunch over stale persisted
     /// attribution, so it doesn't re-append duplicate touchpoints and roll the 90-day expiry
     /// forward on every cold launch.
@@ -396,7 +396,7 @@ public struct AttributionData: Codable {
         case utmSourcePlatform = "utm_source_platform"
         case utmCreativeFormat = "utm_creative_format"
         case utmMarketingTactic = "utm_marketing_tactic"
-        // FSR-35: `oppref` (OpenAI click-id) was declared on the struct but MISSING here, so
+        // `oppref` (OpenAI click-id) was declared on the struct but MISSING here, so
         // the synthesized encode/decode silently skipped it — captured then lost on relaunch.
         case fbclid, ttclid, gclid, wbraid, gbraid, dclid, oppref, twclid
         case liFatId = "li_fat_id"
@@ -548,7 +548,7 @@ public struct QueuedEvent: Codable {
 
 /// Session tracking data
 public struct SessionData: Codable {
-    public var sessionId: String   // var: synced to the SDK session id on reset/timeout (IOS-14)
+    public var sessionId: String   // var: synced to the SDK session id on reset/timeout
     public let startTime: Date
     public var lastActivityTime: Date
     public var eventCount: Int

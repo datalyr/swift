@@ -2,7 +2,7 @@ import Foundation
 
 /// The one place the SDK version is written.
 ///
-/// IOS-20. There used to be **four** independent hardcoded version literals —
+/// There used to be **four** independent hardcoded version literals —
 /// the transport envelope's `context.version`, `properties.sdk_version`, a
 /// *second* `sdk_version` used only by `app_install`, and the `User-Agent`
 /// header — plus a fifth stale one in a thrown error message. They drifted, and

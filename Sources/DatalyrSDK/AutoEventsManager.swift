@@ -14,7 +14,7 @@ internal protocol AutoEventsTrackingDelegate: AnyObject {
     /// Called when AutoEventsManager mints a NEW session id (e.g. after an inactivity
     /// timeout fires session_end and the app foregrounds). The SDK stamps every event
     /// payload + context.session_id with ITS sessionId, so without this reverse-sync the
-    /// SDK would keep emitting the old id while session_start carried the new one (FSR-36).
+    /// SDK would keep emitting the old id while session_start carried the new one.
     func autoEventsDidRotateSession(to sessionId: String)
 }
 
@@ -31,8 +31,8 @@ internal class AutoEventsManager {
     // DispatchSourceTimer (not Timer): initializeSessionTracking / updateSessionActivity run
     // on Swift-concurrency cooperative-pool threads with no running RunLoop, so a
     // Timer.scheduledTimer registered there would NEVER fire (the same class of bug fixed in
-    // DatalyrEventQueue for IOS-6). A dispatch-source timer on a dedicated serial queue fires
-    // regardless of any run loop, and can be (re)scheduled/cancelled from any thread. (FSR-4)
+    // DatalyrEventQueue). A dispatch-source timer on a dedicated serial queue fires
+    // regardless of any run loop, and can be (re)scheduled/cancelled from any thread.
     private var sessionTimer: DispatchSourceTimer?
     private let sessionTimerQueue = DispatchQueue(label: "com.datalyr.session-timer")
     private var lastActivityTime = Date()
@@ -95,7 +95,7 @@ internal class AutoEventsManager {
             osVersion: osVersion
         )
         
-        // FSR-36: getOrCreateSessionId() may have minted a brand-new session id (prior one
+        // getOrCreateSessionId() may have minted a brand-new session id (prior one
         // timed out). Push it back to the SDK so its event payloads / context.session_id
         // use the SAME id this session_start carries, instead of diverging.
         trackingDelegate?.autoEventsDidRotateSession(to: sessionId)
@@ -115,7 +115,7 @@ internal class AutoEventsManager {
     }
     
     /// Start (or restart) the session timeout timer. Dispatch-source based so it fires
-    /// without a RunLoop, and safe to schedule/cancel across threads (FSR-4).
+    /// without a RunLoop, and safe to schedule/cancel across threads.
     private func startSessionTimer() {
         sessionTimer?.cancel()
 
@@ -152,7 +152,7 @@ internal class AutoEventsManager {
     /// Keep the auto-events session id in lockstep with the SDK's session id.
     /// The SDK rotates its session on reset() and on a foreground timeout; without this,
     /// session_start/session_end and the pageview `session_id` enrichment kept emitting the
-    /// stale init-time id while event payloads carried the new one (IOS-14 divergence).
+    /// stale init-time id while event payloads carried the new one.
     func updateSessionId(_ newSessionId: String) {
         guard var session = currentSession, session.sessionId != newSessionId else { return }
         session.sessionId = newSessionId
@@ -185,7 +185,7 @@ internal class AutoEventsManager {
     func recordScreenView(_ screenName: String) {
         guard config.trackScreenViews else { return }
 
-        // IOS-5: remember the prior screen BEFORE overwriting, so getScreenViewEnrichment
+        // remember the prior screen BEFORE overwriting, so getScreenViewEnrichment
         // reports a real previous_screen (it used to read currentScreen after this line
         // set it to the current screen, so previous_screen always equalled the current).
         self.previousScreen = self.currentScreen
