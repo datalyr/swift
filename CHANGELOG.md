@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- `initializeWithSKAdNetwork(config:template:)` and `configureWithSKAdNetwork(...)` now keep every field of the caller's config and set only `skadTemplate`. They used to rebuild the config and drop `existingUserHint` and `useServerTracking`, so an existing user on this path was sent as `app_install` instead of `$sdk_first_launch_existing`.
+- `AdAttributionKitBridge.updatePostbackConversionValue`, `updateConversionValue(_:)` and `registerForAttribution()` now use the same stored high-water as the SDK's own conversion-value updates. A value not higher than the last one, or any value after a locked window, is skipped without an error, so a conversion value never goes down. Registration sends its 0/low value once per install and never after a higher value. Signatures and errors are unchanged.
+- SDK error messages print only when `debug` is on, including the Apple Search Ads fetch error and the "skadTemplate not set" message that `trackPurchase` / `trackSubscription` printed in every app without SKAdNetwork. The one-off warning about ignored configuration options still prints at `initialize()`.
+
+### Changed
+- The two `configure(apiKey:...)` overloads are one function with default arguments. Every earlier call form still compiles and builds the same config.
+
+### Deprecated
+- `getDeferredAttributionData()` and `getLastError()`: both always return nil. They keep working.
+
 ## [2.2.0] - 2026-10-30
 
 ### Changed
@@ -147,6 +160,19 @@ All notable changes to this project will be documented in this file.
   `match_window_minutes`. It is deliberately separate from `$web_attribution_matched`,
   which stays the bridge event downstream readers consume and still fires only on a real
   match.
+
+## [2.1.13] - 2026-08-04 (entry added later)
+
+### Fixed
+- The deferred web→app attribution lookup is retried on later launches until the server gives a definitive answer. It used to run once at first launch, so a first launch with no network lost it for good. Retries stop at the server's 60-minute match window or after a fixed number of attempts. A 200 answer (match or no match) or a 4xx resolves it; transport errors and 5xx stay eligible. The state is not cleared by `reset()`.
+
+## [2.1.12] - 2026-08-01 (entry added later)
+
+### Added
+- `bindProviderIdentity(namespace:providerUserId:)`: sends `$provider_identity_bound` with the provider's user id in `external_ids`, so RevenueCat / Superwall webhooks can be matched to the person without forwarding `datalyr_id`.
+
+### Fixed
+- The RevenueCat attribute key is `datalyr_id` (was `$datalyrId`). RevenueCat drops unknown `$` keys, so the id never reached the webhook.
 
 ## [2.1.11] - 2026-07-25
 
