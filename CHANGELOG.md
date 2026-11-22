@@ -15,6 +15,36 @@ All notable changes to this project will be documented in this file.
 ### Deprecated
 - `getDeferredAttributionData()` and `getLastError()`: both always return nil. They keep working.
 
+Release as **2.2.1** on its own (2.3.0 if shipped with the event-retry change in #9). Version number not bumped yet.
+
+### Changed
+- The deferred web-to-app lookup (`POST /attribution/deferred-lookup`) sends the SDK's `anonymous_id` (the id every event already carries), so the server can tell a repeat lookup from this install apart from another install on the same network.
+- A lookup that gets no usable answer is reported as `$attribution_match` with `reason: request_failed` plus `error_class` (`timeout`, `network`, `http_4xx`, `http_5xx`, `decode`), `error_code` or `http_status`, and `elapsed_ms`. HTTP errors, unreadable answers and non-HTTP responses, which sent no event before, now send this one.
+- A lookup that times out in the first hour after install is sent once more (same counted attempt) in the background after `app_install`. `initialize()` still waits for at most one lookup (10 s), as in 2.2.0. The retry's outcome carries `timeout_retry: true`, and a match it finds is sent as `$web_attribution_matched` after `app_install`.
+
+### Release note
+- Do not re-track an event from `datalyrDidFailToSendEvent`. With the event-retry change (#9), an app that does so would loop on a final refusal: each re-tracked copy is refused again and reported again.
+
+Release as **2.3.0** (or 2.3.0 together with the install-lookup change in #8, which alone would be 2.2.1). Version number not bumped yet.
+
+### Changed
+- Events are kept on a 5xx, 503, 429, 408, timeout or network error (offline, DNS, TLS, cancelled) and retried with the same event id. A send is one request; the queue waits for `Retry-After` (as a minimum, plus 0–25% jitter, capped at 300 s) or a backoff that doubles from `retryDelay` to 300 s. The first request that does not deliver pauses the batch, so an outage is probed with one request at a time.
+- An event moves to the dead-letter store only after 10 failed attempts (about 8–10 minutes; `maxRetries` can raise this, not lower it). 429 and 408 spend no attempt. Before, an event was dead-lettered after about 30 s of 5xx.
+- Any 2xx counts as delivered (before: only 200 and 201; a 202 or 204 was sent again).
+- 401, 403 and 404 are kept and retried for 10 minutes, then dropped and counted. DATALYR's ingest never answers 404, so a 404 means a misroute in front of it and is no longer reported as an authentication failure.
+- Any other 4xx (400, 405, 413, 415, 422, …) is dropped at once and counted; before, it was re-sent about 12 times over several launches.
+- When the dead-letter store (100) is full, the oldest event that is not a purchase, subscription, checkout, install or value-bearing event is dropped, and counted. Replayed dead letters are saved in the queue before they are removed from the store, so a kill during launch loses nothing.
+- `datalyrDidFailToSendEvent` now also fires for final refusals and for 401/403/404 after 10 minutes.
+
+### Added
+- `QueueStats.droppedEvents` and `QueueStats.droppedEventsByReason` (`rejected`, `refused`, `dead_letter_full`, `dead_letter_expired`), kept across launches. `QueuedEvent.authRefusedSince`.
+
+### Release note
+- Do not re-track an event from `datalyrDidFailToSendEvent`. An app that does so would now loop on a final refusal (400, 413, …): each re-tracked copy is refused again and reported again.
+
+### Fixed
+- Building an event no longer waits for the main thread on iOS. `track()`, and with it `identify()`, `bindProviderIdentity()` and `updateTrackingAuthorization(status:)`, read `UIDevice` / `UIScreen` inside an `async` function, where Swift hops to the main actor for those properties. Each event therefore waited for the main thread. An app that blocked the main thread waiting on one of these calls deadlocked, and events built while main was busy were delayed. The values are now read synchronously on the calling thread, as `getDeviceInfo()` already did. The event properties are unchanged. The session start in auto events had the same wait for `os_version` and is fixed the same way.
+
 ## [2.2.0] - 2026-10-30
 
 ### Changed

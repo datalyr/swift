@@ -204,7 +204,7 @@ final class FullStackReviewTests: XCTestCase {
 
         let httpConfig = HTTPClientConfig(apiKey: "k")
         let client = DatalyrHTTPClient(endpoint: "https://127.0.0.1:1/track", config: httpConfig)
-        let queue = DatalyrEventQueue(httpClient: client, config: QueueConfig(flushInterval: 999))
+        let queue = DatalyrEventQueue(httpClient: client, config: QueueConfig(flushInterval: 999), startsNetworkMonitor: false)
         queue.setOnlineStatus(false) // never actually send
 
         // Enqueue a live event that races the init load.
@@ -227,7 +227,7 @@ final class FullStackReviewTests: XCTestCase {
     func testFSR89_updateConfigDoesNotCrashAndApplies() {
         let httpConfig = HTTPClientConfig(apiKey: "k")
         let client = DatalyrHTTPClient(endpoint: "https://example.com", config: httpConfig)
-        let queue = DatalyrEventQueue(httpClient: client, config: QueueConfig(flushInterval: 30))
+        let queue = DatalyrEventQueue(httpClient: client, config: QueueConfig(flushInterval: 30), startsNetworkMonitor: false)
         // Latent API (no callers), but must apply without crashing now that config is var.
         queue.updateConfig(QueueConfig(maxQueueSize: 7, batchSize: 2, flushInterval: 5, maxRetryCount: 1))
         XCTAssertTrue(true)

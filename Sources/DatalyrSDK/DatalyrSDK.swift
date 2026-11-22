@@ -119,6 +119,8 @@ public class DatalyrSDK {
 
     /// Single-flight guard + ATT-transition tracking for the deferred web→app lookup.
     internal let deferredLookupCoordinator = DeferredLookupCoordinator()
+    /// Set by a first-hour lookup timeout; consumed by startOwedTimeoutRetry(). Under preInitLock.
+    private var owesTimeoutRetry = false
 
     // App lifecycle monitoring
     private var appStateObserver: NSObjectProtocol?
@@ -203,7 +205,10 @@ public class DatalyrSDK {
             maxQueueSize: config.maxQueueSize,
             batchSize: config.batchSize,
             flushInterval: config.flushInterval,
-            maxRetryCount: config.maxRetries
+            // maxRetries can raise the attempts before dead-letter, never lower them
+            // below the floor that rides out a short outage.
+            maxRetryCount: max(config.maxRetries, QueueConfig.minTransientAttempts),
+            retryBaseDelay: config.retryDelay
         )
         self.eventQueue = DatalyrEventQueue(httpClient: httpClient!, config: queueConfig)
         // Surface retry-exhausted / evicted events to the host app's delegate
@@ -382,14 +387,9 @@ public class DatalyrSDK {
             }
         }
 
-        // Attempt deferred web-to-app attribution (IP-based matching). Gated on the lookup
-        // not having SUCCEEDED yet rather than on first launch: the first-launch marker is
-        // written during attribution init, before this call, so it is spent whether or not
-        // the lookup ever reached the server. shouldAttemptDeferredLookup() bounds the retries.
-        await runDeferredLookupIfEligible()
-
-        // Check for app install (after SDK is marked as initialized)
-        await checkAndTrackInstall()
+        // Deferred web-to-app lookup, then app_install, then (background) the one retry of a
+        // first-hour timeout. See runLaunchLookupAndInstall.
+        _ = await runLaunchLookupAndInstall()
 
         // Register for attribution tracking (AdAttributionKit on iOS 17.4+, SKAdNetwork otherwise)
         await UnifiedAttributionTracker.shared.register()
@@ -983,7 +983,7 @@ public class DatalyrSDK {
     /// Every exit path either marks the lookup resolved (the server answered) or leaves it
     /// eligible for a later launch (nothing reached the server / nothing usable came back).
     /// Call through runDeferredLookupIfEligible(), which keeps it single-flight.
-    private func fetchDeferredWebAttribution() async {
+    private func fetchDeferredWebAttribution(isTimeoutRetry timeoutRetried: Bool = false) async {
         // A reset (logout / account switch) during the request makes the answer belong to
         // the identity before it: checked again right before the merge.
         let generation = identityGeneration
@@ -1004,7 +1004,7 @@ public class DatalyrSDK {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-Datalyr-API-Key")
-        request.timeoutInterval = 10
+        request.timeoutInterval = DeferredLookup.requestTimeout
 
         // Device context — the exact values the click-side fp_* capture approximates
         // from the redirect request's headers. This is what opens the server's tier-2
@@ -1021,19 +1021,33 @@ public class DatalyrSDK {
             deviceModel: deviceInfo.model,
             timezone: deviceInfo.timezone,
             language: Locale.preferredLanguages.first,
-            attStatus: attStatus
+            attStatus: attStatus,
+            anonymousId: anonymousId
         )
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         // Spend the attempt before the request goes out: a request that never returns
         // (app killed mid-flight, hung connection) must still count against the bound.
-        await attributionManager?.recordDeferredLookupAttempt()
+        // The one timeout retry belongs to the same attempt and spends nothing.
+        if !timeoutRetried {
+            await attributionManager?.recordDeferredLookupAttempt()
+        }
+
+        // every lookup that gets no usable answer is reported with how long it took.
+        let startedAt = Date()
+        let elapsedMs = { Int((Date().timeIntervalSince(startedAt) * 1000).rounded()) }
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 errorLog("Deferred attribution lookup got a non-HTTP response — retrying on a later launch")
+                await trackAttributionMatchOutcome(
+                    matched: false, reason: "request_failed", windowMinutes: nil,
+                    extra: DeferredLookup.failureFieldsForNonHTTPResponse()
+                        .merging(["elapsed_ms": elapsedMs()]) { a, _ in a }
+                        .merging(timeoutRetried ? ["timeout_retry": true] : [:]) { a, _ in a }
+                )
                 return
             }
 
@@ -1047,6 +1061,12 @@ public class DatalyrSDK {
                 }
                 errorLog("Deferred attribution lookup failed with status \(httpResponse.statusCode)"
                     + (retryable ? " — retrying on a later launch" : " — not retryable"))
+                await trackAttributionMatchOutcome(
+                    matched: false, reason: "request_failed", windowMinutes: nil,
+                    extra: DeferredLookup.failureFields(forHTTPStatus: httpResponse.statusCode)
+                        .merging(["elapsed_ms": elapsedMs()]) { a, _ in a }
+                        .merging(timeoutRetried ? ["timeout_retry": true] : [:]) { a, _ in a }
+                )
                 return
             }
 
@@ -1055,6 +1075,12 @@ public class DatalyrSDK {
             // the install's one shot at the bridge.
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 errorLog("Deferred attribution lookup returned an unparseable body — retrying on a later launch")
+                await trackAttributionMatchOutcome(
+                    matched: false, reason: "request_failed", windowMinutes: nil,
+                    extra: DeferredLookup.failureFieldsForUnreadableBody()
+                        .merging(["elapsed_ms": elapsedMs()]) { a, _ in a }
+                        .merging(timeoutRetried ? ["timeout_retry": true] : [:]) { a, _ in a }
+                )
                 return
             }
 
@@ -1115,7 +1141,7 @@ public class DatalyrSDK {
                     matched: false,
                     reason: json["reason"] as? String ?? "no_candidates",
                     windowMinutes: json["window_minutes"],
-                    extra: [:]
+                    extra: timeoutRetried ? ["timeout_retry": true] : [:]
                 )
                 return
             }
@@ -1213,6 +1239,7 @@ public class DatalyrSDK {
             if let v = attribution["match_candidates"] { matchStats["match_candidates"] = v }
             if let v = attribution["match_score"] { matchStats["match_score"] = v }
             if let v = attribution["match_confidence"] { matchStats["match_confidence"] = v }
+            if timeoutRetried { matchStats["timeout_retry"] = true }
             await trackAttributionMatchOutcome(
                 matched: true,
                 reason: "matched",
@@ -1232,8 +1259,20 @@ public class DatalyrSDK {
             // Still reported: a workspace whose misses are overwhelmingly `request_failed`
             // has a connectivity/timeout problem, not an attribution problem, and those
             // two need completely different fixes. The lookup stays eligible regardless.
+            // which kind of failure (timeout vs other network) and how long it took.
+            var failure = DeferredLookup.failureFields(forTransportError: error)
+            failure["elapsed_ms"] = elapsedMs()
+            if timeoutRetried { failure["timeout_retry"] = true }
+            // A slow answer used to be a failure that waited for the next launch. In the first
+            // hour it is asked once more — but AFTER app_install, in the background, so the
+            // retry never lengthens initialize() (see runLaunchLookupAndInstall).
+            if !timeoutRetried, DeferredLookup.shouldRetryAfterTimeout(
+                error, installAgeMinutes: attributionManager?.installAgeMinutes()
+            ) {
+                preInitLock.withLock { owesTimeoutRetry = true }
+            }
             await trackAttributionMatchOutcome(
-                matched: false, reason: "request_failed", windowMinutes: nil, extra: [:]
+                matched: false, reason: "request_failed", windowMinutes: nil, extra: failure
             )
         }
     }
@@ -1609,6 +1648,41 @@ public class DatalyrSDK {
     /// window, not resolved, attempts left).
     /// Single-flight: a call while a lookup is in flight queues a re-run instead of
     /// starting a second request.
+    /// The launch sequence: the deferred lookup (awaited, as before: a match is merged into
+    /// `app_install`), then `app_install`, then — not awaited — the one retry of a lookup
+    /// that timed out in the first hour after install. initialize() therefore waits at worst
+    /// one lookup timeout, exactly as in 2.2.0; a match found by the retry is merged and
+    /// sent as `$web_attribution_matched` afterwards, like a match on a later launch.
+    /// Returns the retry task (tests await it), or nil when no retry is owed.
+    @discardableResult
+    internal func runLaunchLookupAndInstall() async -> Task<Void, Never>? {
+        // Gated on the lookup not having SUCCEEDED yet rather than on first launch: the
+        // first-launch marker is written during attribution init, before this call, so it is
+        // spent whether or not the lookup ever reached the server.
+        // shouldAttemptDeferredLookup() bounds the retries.
+        await runDeferredLookupIfEligible()
+        // Check for app install (after SDK is marked as initialized)
+        await checkAndTrackInstall()
+        return startOwedTimeoutRetry()
+    }
+
+    /// Starts the background retry owed by a first-hour timeout, if any.
+    internal func startOwedTimeoutRetry() -> Task<Void, Never>? {
+        let owed: Bool = preInitLock.withLock {
+            let o = owesTimeoutRetry
+            owesTimeoutRetry = false
+            return o
+        }
+        guard owed, let manager = attributionManager else { return nil }
+        return Task { [weak self] in
+            guard let self = self else { return }
+            await self.deferredLookupCoordinator.run(
+                isEligible: { await manager.isDeferredLookupOpen() },
+                lookup: { [weak self] in await self?.fetchDeferredWebAttribution(isTimeoutRetry: true) }
+            )
+        }
+    }
+
     internal func runDeferredLookupIfEligible() async {
         guard initializedLocked, config?.enableAttribution == true, let manager = attributionManager else { return }
         await deferredLookupCoordinator.run(
@@ -1630,6 +1704,8 @@ public class DatalyrSDK {
             },
             lookup: { [weak self] in await self?.fetchDeferredWebAttribution() }
         )
+        // Already off the launch path: a timeout here is retried straight away.
+        await startOwedTimeoutRetry()?.value
     }
 
     /// Foreground hook: re-read ATT (apps often call ATTrackingManager themselves) so events
@@ -2398,15 +2474,16 @@ public class DatalyrSDK {
 
         // Device info
         #if canImport(UIKit)
-        let device = UIDevice.current
-        enrichedEventData["os_version"] = device.systemVersion
+        // Read through a synchronous helper: a direct UIKit read here (an async function)
+        // would wait for the main thread. See readUIKitDeviceValues().
+        let uikit = readUIKitDeviceValues()
+        enrichedEventData["os_version"] = uikit.osVersion
         enrichedEventData["device_model"] = getDeviceModelName()
-        enrichedEventData["idfv"] = device.identifierForVendor?.uuidString
+        enrichedEventData["idfv"] = uikit.idfv
 
-        let screen = UIScreen.main
-        enrichedEventData["screen_width"] = Int(screen.bounds.width)
-        enrichedEventData["screen_height"] = Int(screen.bounds.height)
-        enrichedEventData["screen_density"] = screen.scale
+        enrichedEventData["screen_width"] = uikit.screenWidth
+        enrichedEventData["screen_height"] = uikit.screenHeight
+        enrichedEventData["screen_density"] = uikit.screenScale
         #else
         enrichedEventData["os_version"] = ProcessInfo.processInfo.operatingSystemVersionString
         #endif

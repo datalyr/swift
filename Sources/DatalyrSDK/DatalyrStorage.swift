@@ -121,7 +121,28 @@ internal class DatalyrStorage: Storage {
         }
     }
     
-    /// Get Codable object from storage
+    // MARK: - Synchronous access (for callers that serialize a read-modify-write under a lock)
+
+    func getDoubleSync(_ key: String) -> Double? {
+        let prefixedKey = keyPrefix + key
+        return userDefaults.object(forKey: prefixedKey) != nil ? userDefaults.double(forKey: prefixedKey) : nil
+    }
+
+    func setDoubleSync(_ key: String, value: Double) {
+        userDefaults.set(value, forKey: keyPrefix + key)
+    }
+
+    func getCodableArraySync<T: Codable>(_ key: String, type: T.Type) -> [T]? {
+        guard let data = userDefaults.data(forKey: keyPrefix + key) else { return nil }
+        return try? JSONDecoder().decode([T].self, from: data)
+    }
+
+    func setCodableArraySync<T: Codable>(_ key: String, value: [T]) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        userDefaults.set(data, forKey: keyPrefix + key)
+    }
+
+        /// Get Codable object from storage
     func getCodable<T: Codable>(_ key: String, type: T.Type) async -> T? {
         guard let data = await getData(key) else { return nil }
         

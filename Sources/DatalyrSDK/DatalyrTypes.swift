@@ -525,16 +525,21 @@ public struct QueuedEvent: Codable {
     /// replay loop so a permanently-rejected payload (400/413) is dropped after a few launches
     /// instead of cycling forever. Decodes as 0 for entries persisted before the field existed.
     public var replayCount: Int
+    /// When the server first refused this event with 401, 403 or 404, seconds since 1970; nil
+    /// while it has not. The queue keeps a refused event for a window from this time, then
+    /// drops it (counted). Decodes as nil for entries persisted before the field existed.
+    public var authRefusedSince: TimeInterval?
 
     public init(payload: EventPayload, timestamp: TimeInterval = Date().timeIntervalSince1970, retryCount: Int = 0, replayCount: Int = 0) {
         self.payload = payload
         self.timestamp = timestamp
         self.retryCount = retryCount
         self.replayCount = replayCount
+        self.authRefusedSince = nil
     }
 
     private enum CodingKeys: String, CodingKey {
-        case payload, timestamp, retryCount, replayCount
+        case payload, timestamp, retryCount, replayCount, authRefusedSince
     }
 
     public init(from decoder: Decoder) throws {
@@ -543,6 +548,7 @@ public struct QueuedEvent: Codable {
         timestamp = try c.decode(TimeInterval.self, forKey: .timestamp)
         retryCount = try c.decodeIfPresent(Int.self, forKey: .retryCount) ?? 0
         replayCount = try c.decodeIfPresent(Int.self, forKey: .replayCount) ?? 0
+        authRefusedSince = try c.decodeIfPresent(TimeInterval.self, forKey: .authRefusedSince)
     }
 }
 
@@ -577,13 +583,39 @@ public struct HTTPResponse {
     public let statusCode: Int
     public let data: Data?
     public let error: Error?
-    
+    /// What the queue does with the event. Internal: the public init derives it.
+    internal let disposition: DeliveryDisposition
+
     public init(success: Bool, statusCode: Int, data: Data? = nil, error: Error? = nil) {
+        self.init(success: success, statusCode: statusCode, data: data, error: error,
+                  disposition: success ? .delivered : .retry(after: nil))
+    }
+
+    internal init(success: Bool, statusCode: Int, data: Data? = nil, error: Error? = nil,
+                  disposition: DeliveryDisposition) {
         self.success = success
         self.statusCode = statusCode
         self.data = data
         self.error = error
+        self.disposition = disposition
     }
+}
+
+/// What one ingest answer means for a queued event.
+internal enum DeliveryDisposition: Equatable {
+    /// Any 2xx: stored. Removed from the queue and never sent again.
+    case delivered
+    /// 5xx, 503, an unexpected status, or a transport error (timeout, offline, DNS, TLS,
+    /// cancelled): kept, retried after `after` (Retry-After) or the queue's backoff. Spends
+    /// one of the event's attempts.
+    case retry(after: TimeInterval?)
+    /// 429 / 408: backpressure. Kept and retried after `after`; spends no attempt.
+    case throttled(after: TimeInterval?)
+    /// 401 / 403 (key refused) or 404 (ingest never answers 404, so it is a misroute in
+    /// front of it): kept for DatalyrEventQueue.refusalWindow, then dropped and counted.
+    case refused
+    /// Any other 4xx, or a payload that cannot be encoded: final. Dropped and counted.
+    case rejected
 }
 
 // MARK: - SDK Status
@@ -626,12 +658,21 @@ public struct QueueStats {
     public let isProcessing: Bool
     public let isOnline: Bool
     public let oldestEventAge: TimeInterval?
-    
-    public init(queueSize: Int, isProcessing: Bool, isOnline: Bool, oldestEventAge: TimeInterval? = nil) {
+    /// Events this device has dropped for good since the app was installed: the
+    /// server refused them as final (4xx), their key stayed refused (401/403) past the
+    /// retry window, the dead-letter store was full, or a dead-letter entry ran out of
+    /// replays or aged past 7 days. Per-reason counts: `droppedEventsByReason`.
+    public let droppedEvents: Int
+    public let droppedEventsByReason: [String: Int]
+
+    public init(queueSize: Int, isProcessing: Bool, isOnline: Bool, oldestEventAge: TimeInterval? = nil,
+                droppedEventsByReason: [String: Int] = [:]) {
         self.queueSize = queueSize
         self.isProcessing = isProcessing
         self.isOnline = isOnline
         self.oldestEventAge = oldestEventAge
+        self.droppedEventsByReason = droppedEventsByReason
+        self.droppedEvents = droppedEventsByReason.values.reduce(0, +)
     }
 }
 
