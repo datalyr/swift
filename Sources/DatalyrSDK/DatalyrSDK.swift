@@ -723,9 +723,9 @@ public class DatalyrSDK {
     /// DEP-01: one-time warning for config options that are stored but never read.
     ///
     /// Fires only when the caller set a NON-default value — an app that never
-    /// touched these stays silent. Emitted via `errorLog` (unconditional) rather
-    /// than `debugLog`, because the whole point is that the developer has a wrong
-    /// belief about what the SDK is doing.
+    /// touched these stays silent. Emitted via `misuseLog` (prints even with debug
+    /// off) rather than `debugLog`, because the whole point is that the developer
+    /// has a wrong belief about what the SDK is doing.
     private static var didWarnAboutIgnoredOptions = false
     private static func warnAboutIgnoredOptions(_ config: DatalyrConfig) {
         guard !didWarnAboutIgnoredOptions else { return }
@@ -747,7 +747,7 @@ public class DatalyrSDK {
 
         guard !ignored.isEmpty else { return }
         didWarnAboutIgnoredOptions = true
-        errorLog("Ignored configuration option(s) — these are accepted but never read: " + ignored.joined(separator: "; "))
+        misuseLog("Ignored configuration option(s) — these are accepted but never read: " + ignored.joined(separator: "; "))
     }
 
     /// Fetch web attribution data for user and merge into mobile session
@@ -2072,11 +2072,11 @@ public class DatalyrSDK {
 
         // NEW: Automatic SKAdNetwork encoding with SKAN 4.0 support
         guard let encoder = conversionEncoder else {
-            // Unconditional (errorLog, not debug-gated) and once per process: a SKAN-bearing
-            // call with no template silently disables every conversion value otherwise.
+            // Debug only, once per process: trackPurchase / trackSubscription land here
+            // in every app without SKAdNetwork, where no template is the normal setup.
             if !warnedMissingSkadTemplate {
                 warnedMissingSkadTemplate = true
-                errorLog("skadTemplate not set — SKAdNetwork conversion values are disabled. Set DatalyrConfig.skadTemplate ('ecommerce' | 'gaming' | 'subscription')")
+                debugLog("skadTemplate not set — SKAdNetwork conversion values are disabled. Set DatalyrConfig.skadTemplate ('ecommerce' | 'gaming' | 'subscription')")
             }
             return
         }

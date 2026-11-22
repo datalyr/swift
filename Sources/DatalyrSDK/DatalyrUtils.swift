@@ -7,6 +7,11 @@ import AppTrackingTransparency
 
 // MARK: - Logging Utilities
 
+/// Where SDK log lines go. Tests replace it to capture output.
+internal enum DatalyrLogOutput {
+    static var write: (String) -> Void = { print($0) }
+}
+
 /// Debug logging function
 internal func debugLog(_ message: String, data: Any? = nil) {
     if DatalyrSDK.shared.config?.debug == true {
@@ -17,12 +22,16 @@ internal func debugLog(_ message: String, data: Any? = nil) {
             logMessage += " - \(data)"
         }
         
-        print(logMessage)
+        DatalyrLogOutput.write(logMessage)
     }
 }
 
-/// Error logging function
+/// Error logging function. Prints only when `debug` is on: these are runtime
+/// failures the SDK already handles (retries, drops, fallbacks), and a release
+/// app's console should stay quiet. One-off configuration mistakes found at
+/// initialize use `misuseLog` instead.
 internal func errorLog(_ message: String, error: Error? = nil) {
+    guard DatalyrSDK.shared.config?.debug == true else { return }
     let timestamp = DateFormatter.logFormatter.string(from: Date())
     var logMessage = "[\(timestamp)] [Datalyr ERROR] \(message)"
     
@@ -30,7 +39,14 @@ internal func errorLog(_ message: String, error: Error? = nil) {
         logMessage += " - \(error.localizedDescription)"
     }
     
-    print(logMessage)
+    DatalyrLogOutput.write(logMessage)
+}
+
+/// Misuse logging: always prints, debug or not. Only for one-off configuration
+/// mistakes the developer must see (reported once, at initialize).
+internal func misuseLog(_ message: String) {
+    let timestamp = DateFormatter.logFormatter.string(from: Date())
+    DatalyrLogOutput.write("[\(timestamp)] [Datalyr ERROR] \(message)")
 }
 
 // MARK: - Validation Utilities
