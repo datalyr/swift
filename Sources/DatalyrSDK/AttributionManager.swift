@@ -42,7 +42,7 @@ internal let ATTRIBUTION_PARAMS = [
     "aleid", "alart",
 
     // Custom attribution parameters
-    // FSR-86: removed irclickid / fb_click_id / fb_action_ids / fb_action_types / click_id —
+    // removed irclickid / fb_click_id / fb_action_ids / fb_action_types / click_id —
     // they were whitelisted (so extractURLParameters collected them) but never assigned to
     // AttributionData and have no field, so they were parsed and dropped. The whitelist now
     // reflects exactly what is captured. (dclid is captured below — ingest supports it.)
@@ -163,7 +163,7 @@ internal class AttributionManager {
     
     /// Process a deep link URL for attribution parameters
     /// Parse a deep link, persist its attribution params, and RETURN the extracted params
-    /// (click-ids + lyr, lowercased keys) so the caller can emit a `$deep_link` event — TR-17:
+    /// (click-ids + lyr, lowercased keys) so the caller can emit a `$deep_link` event:
     /// the params were only persisted locally + surfaced to Superwall/RevenueCat client
     /// attributes, never sent to Datalyr ingest, so server attribution / CAPI couldn't see a
     /// post-install re-engagement ad-click. Empty return = nothing attributable in the URL.
@@ -178,7 +178,7 @@ internal class AttributionManager {
             await processAttributionParameters(parameters)
             attributionData.deepLinkUrl = url.absoluteString
             attributionData.attributionTimestamp = DateFormatter.iso8601.string(from: Date())
-            // FSR-34: stamp a numeric capture-time so the journey recorder can detect that
+            // stamp a numeric capture-time so the journey recorder can detect that
             // THIS is a fresh touch (vs a relaunch over stale persisted attribution).
             attributionData.attributionCapturedAt = Date().timeIntervalSince1970 * 1000
 
@@ -252,7 +252,7 @@ internal class AttributionManager {
         // were never assigned here — so Google App-campaign attribution was dropped on iOS.
         attributionData.gbraid = parameters["gbraid"] ?? attributionData.gbraid
         attributionData.wbraid = parameters["wbraid"] ?? attributionData.wbraid
-        // FSR-86: dclid was whitelisted but never assigned; ingest's clickIdMapping supports it.
+        // dclid was whitelisted but never assigned; ingest's clickIdMapping supports it.
         attributionData.dclid = parameters["dclid"] ?? attributionData.dclid
         attributionData.oppref = parameters["oppref"] ?? attributionData.oppref
         attributionData.twclid = parameters["twclid"] ?? attributionData.twclid
@@ -478,7 +478,7 @@ internal class AttributionManager {
         if attributionData.oppref == nil, let oppref = webAttribution["oppref"] as? String {
             attributionData.oppref = oppref
         }
-        // FSR-30: gbraid/wbraid/lyr were forwarded by BOTH web→app recovery paths
+        // gbraid/wbraid/lyr were forwarded by BOTH web→app recovery paths
         // (DatalyrSDK.swift:459-460/586-587) and carried in the lookup response, but never
         // merged into the persisted struct. Under ATT, Google App campaigns produce
         // gbraid/wbraid (not gclid), so the recovered Google-iOS click-id never reached
@@ -552,7 +552,7 @@ internal class AttributionManager {
             attributionData.campaignTerm = utmTerm
         }
 
-        // FSR-34: a web→app merge is a fresh attribution event — stamp the capture-time so the
+        // a web→app merge is a fresh attribution event — stamp the capture-time so the
         // journey recorder treats it as new rather than relaunch-over-stale.
         attributionData.attributionCapturedAt = Date().timeIntervalSince1970 * 1000
 

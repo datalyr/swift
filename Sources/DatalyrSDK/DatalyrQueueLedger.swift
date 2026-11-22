@@ -1,6 +1,6 @@
 import Foundation
 
-/// The dead-letter store and the dropped-event counts, behind ONE lock (FX-047 review).
+/// The dead-letter store and the dropped-event counts, behind ONE lock (review).
 ///
 /// Both are read-modify-write over UserDefaults. Before, two concurrent dead-letter writes
 /// could each read the same list and the second write would lose the first's event, and a

@@ -56,7 +56,7 @@ internal actor RateLimiter {
     func waitForSlot() async {
         // Bound the total wait so a send can never hang forever: past the deadline we
         // proceed anyway and let the server arbitrate — its 429 is handled as transient
-        // backpressure (FSR-31), which retries without burning the failure budget.
+        // backpressure, which retries without burning the failure budget.
         let deadline = Date().timeIntervalSince1970 + window * 2
 
         while true {
@@ -119,7 +119,7 @@ internal class DatalyrHTTPClient {
     
     // MARK: - Event Sending
     
-    /// Send a single event: ONE request, classified (FX-047).
+    /// Send a single event: ONE request, classified.
     ///
     /// The client no longer retries or sleeps inside a send. Waiting belongs to the queue,
     /// which keeps the event and paces every retry (backoff, Retry-After) so a server outage
@@ -297,7 +297,7 @@ internal class DatalyrHTTPClient {
         request.httpBody = requestBody
         
         if config.debug {
-            // IOS-19: log the byte size, not the body — the payload carries PII
+            // log the byte size, not the body — the payload carries PII
             // (email/phone/name in event properties) even in debug builds.
             debugLog("Request body: \(requestBody.count) bytes")
         }
@@ -310,7 +310,7 @@ internal class DatalyrHTTPClient {
         await rateLimiter.waitForSlot()
     }
     
-    /// Test-only: expose the HTTP-status retry classification (FSR-31) so the suite can assert
+    /// Test-only: expose the HTTP-status retry classification so the suite can assert
     /// 429/408 are retryable without reaching the network. Mirrors the .httpError branch below.
     func isRetryableStatusForTest(_ code: Int) -> Bool {
         switch Self.disposition(forStatus: code, retryAfter: nil) {
