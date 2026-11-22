@@ -45,7 +45,7 @@ pod 'DatalyrSDK', '~> 2.2.0'
 
 Run `pod install`. Then open the generated `.xcworkspace`.
 
-Find your API key in DATALYR under **Settings → Tracking → Install**. The key starts with `dk_`.
+Find your API key in DATALYR under **Settings → API**. The key starts with `dk_`.
 
 ## Quick start
 
