@@ -424,7 +424,8 @@ public extension DatalyrSDK {
     }
     
     /// Get last error if any occurred during initialization
-    /// - Returns: Last error or nil
+    /// - Returns: Always nil. `initialize(config:)` throws its errors instead.
+    @available(*, deprecated, message: "Always returns nil. Catch the error thrown by initialize(config:) / configure(apiKey:) instead.")
     func getLastError() -> Error? {
         // In a production implementation, you might want to store the last error
         return nil

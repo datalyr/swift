@@ -1513,7 +1513,9 @@ public class DatalyrSDK {
     }
 
     /// Get deferred deep link attribution data
-    /// - Returns: nil — deferred deep linking is now handled via prelanders
+    /// - Returns: Always nil. Deferred web-to-app attribution is matched on the server
+    ///   and applied to events automatically; read it with `getAttributionData()`.
+    @available(*, deprecated, message: "Always returns nil. Web-to-app attribution is applied automatically; use getAttributionData().")
     public func getDeferredAttributionData() -> DeferredDeepLinkResult? {
         return nil
     }
