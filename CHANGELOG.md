@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Breaking
+- `Package.swift` now declares iOS 13 only. It used to also list macOS 10.15, tvOS 13 and watchOS 6. Those platforms were never built or tested: CI and the CocoaPods spec are iOS-only, and the SDK imports AdSupport and AppTrackingTransparency without a platform guard. A Swift package or app target for macOS, tvOS or watchOS that depends on DatalyrSDK no longer resolves. iOS apps are not affected. Ship this as a major version unless no one builds for another platform.
+
 ## [2.2.0] - 2026-10-30
 
 ### Changed
