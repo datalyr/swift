@@ -115,16 +115,18 @@ public class AdAttributionKitBridge {
     // MARK: - Registration
 
     /// Register app for ad network attribution
-    /// Uses AdAttributionKit on iOS 17.4+, SKAdNetwork on older versions
+    /// Uses AdAttributionKit on iOS 17.4+, SKAdNetwork on older versions.
+    /// On iOS 17.4+ registration sends a 0/low value; it is sent once per install and
+    /// never after a higher value (it would lower it). Shared with the SDK's own tracker.
     public func registerForAttribution() async throws {
         if #available(iOS 17.4, *) {
-            // AdAttributionKit: registration happens implicitly with first postback update
-            // Send initial conversion value of 0 to register
-            try await updatePostbackConversionValue(
-                fineValue: 0,
-                coarseValue: .low,
-                lockWindow: false
-            )
+            let tracker = UnifiedAttributionTracker.shared
+            guard tracker.registrationMaySend() else {
+                debugLog("AdAttributionKitBridge: already registered or a value was sent; skipping 0-value registration")
+                return
+            }
+            try await sendPostback(fineValue: 0, coarseValue: .low, lockWindow: false)
+            tracker.markRegistered()
         } else if #available(iOS 14.0, *) {
             // SKAdNetwork: explicit registration
             SKAdNetwork.registerAppForAdNetworkAttribution()
@@ -135,7 +137,10 @@ public class AdAttributionKitBridge {
 
     // MARK: - Conversion Value Updates
 
-    /// Update conversion value using the appropriate framework
+    /// Update conversion value using the appropriate framework.
+    /// Goes through the same persisted high-water guard as the SDK's own updates: a value
+    /// that is not higher than the last accepted one (or any value after a locked window)
+    /// is skipped without an error, so a conversion value never goes down.
     /// - Parameters:
     ///   - fineValue: Fine-grained conversion value (0-63)
     ///   - coarseValue: Coarse conversion value (.low, .medium, .high)
@@ -149,7 +154,33 @@ public class AdAttributionKitBridge {
         guard fineValue >= 0 && fineValue <= 63 else {
             throw AttributionError.invalidConversionValue
         }
+        let tracker = UnifiedAttributionTracker.shared
+        guard tracker.wouldRaiseHighWater(fineValue: fineValue, coarseValue: coarseValue.rawValue) else {
+            debugLog("AdAttributionKitBridge: skipping fine=\(fineValue) coarse=\(coarseValue.rawValue) (not higher than the last value, or window locked)")
+            return
+        }
+        try await sendPostback(fineValue: fineValue, coarseValue: coarseValue, lockWindow: lockWindow)
+        tracker.recordAccepted(fineValue: fineValue, coarseValue: coarseValue.rawValue, lockWindow: lockWindow)
+    }
 
+    #if DEBUG
+    /// Test support: replaces the OS calls (they fail in the simulator).
+    internal var postbackSenderForTesting: ((Int, CoarseConversionValue, Bool) async throws -> Void)?
+    internal var legacySenderForTesting: ((Int) -> Void)?
+    #endif
+
+    /// The OS calls, unguarded. Throws the SKAdNetwork error.
+    private func sendPostback(
+        fineValue: Int,
+        coarseValue: CoarseConversionValue,
+        lockWindow: Bool
+    ) async throws {
+        #if DEBUG
+        if let sender = postbackSenderForTesting {
+            try await sender(fineValue, coarseValue, lockWindow)
+            return
+        }
+        #endif
         if #available(iOS 17.4, *) {
             // SKAdNetwork 4 and AdAttributionKit are separate systems: send to both.
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -184,11 +215,27 @@ public class AdAttributionKitBridge {
         }
     }
 
-    /// Update conversion value with legacy API (SKAN 3.0 compatible)
+    /// Update conversion value with legacy API (SKAN 3.0 compatible).
+    /// Same high-water guard: a value not higher than the last one is skipped.
     /// - Parameter value: Conversion value (0-63)
     @available(iOS 14.0, *)
     public func updateConversionValue(_ value: Int) {
+        let tracker = UnifiedAttributionTracker.shared
+        guard tracker.wouldRaiseHighWater(fineValue: value, coarseValue: CoarseConversionValue.low.rawValue) else {
+            debugLog("AdAttributionKitBridge: skipping legacy value \(value) (not higher than the last value, or window locked)")
+            return
+        }
+        #if DEBUG
+        if let sender = legacySenderForTesting {
+            sender(value)
+        } else {
+            SKAdNetwork.updateConversionValue(value)
+        }
+        #else
         SKAdNetwork.updateConversionValue(value)
+        #endif
+        // Fire-and-forget API with no acceptance signal: record now, as the tracker's SKAN 3 path does.
+        tracker.recordAccepted(fineValue: value, coarseValue: CoarseConversionValue.low.rawValue, lockWindow: false)
     }
 
     // MARK: - Re-engagement Attribution (AdAttributionKit only)

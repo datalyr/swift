@@ -464,6 +464,39 @@ internal class UnifiedAttributionTracker {
         return false
     }
 
+    // MARK: Public-bridge entry points (AdAttributionKitBridge)
+    //
+    // AdAttributionKitBridge is public and sends values itself (it throws the OS error).
+    // These let it share the same persisted guard: ask before sending, record after the
+    // OS accepted.
+
+    /// Read-only: would this value raise the persisted high-water (and is the window open)?
+    func wouldRaiseHighWater(fineValue: Int, coarseValue: String) -> Bool {
+        shouldSend(fine: fineValue, coarseRank: coarseRank(coarseValue))
+    }
+
+    /// Record a value the OS accepted. Monotonic: never lowers the high-water.
+    func recordAccepted(fineValue: Int, coarseValue: String, lockWindow: Bool) {
+        _ = commitIfHigher(fine: fineValue, coarseRank: coarseRank(coarseValue), lock: lockWindow)
+    }
+
+    /// Whether the one-time 0/low registration may still be sent: not registered yet and
+    /// nothing above 0/low sent and the window not locked. Sending 0/low after a higher
+    /// value would lower it.
+    func registrationMaySend() -> Bool {
+        stateLock.withLock {
+            !storage.bool(forKey: registeredKey)
+                && !storage.bool(forKey: lockedKey)
+                && storage.integer(forKey: fineKey) == 0
+                && storage.integer(forKey: coarseKey) == 0
+        }
+    }
+
+    /// Mark the one-time registration done (shared with register()).
+    func markRegistered() {
+        stateLock.withLock { storage.set(true, forKey: registeredKey) }
+    }
+
     /// Reset the persisted high-water state. Called from SDK.reset() so a logout/login
     /// (new install identity) starts a fresh conversion-value window. Does NOT touch the
     /// one-time registration flag (registration is per physical install, not per user).
