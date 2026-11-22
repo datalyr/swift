@@ -122,6 +122,7 @@ public class AdAttributionKitBridge {
         if #available(iOS 17.4, *) {
             let tracker = UnifiedAttributionTracker.shared
             guard tracker.registrationMaySend() else {
+                tracker.markRegistered() // a sent value registered the install; never send 0/low later
                 debugLog("AdAttributionKitBridge: already registered or a value was sent; skipping 0-value registration")
                 return
             }
@@ -140,7 +141,9 @@ public class AdAttributionKitBridge {
     /// Update conversion value using the appropriate framework.
     /// Goes through the same persisted high-water guard as the SDK's own updates: a value
     /// that is not higher than the last accepted one (or any value after a locked window)
-    /// is skipped without an error, so a conversion value never goes down.
+    /// is skipped without an error, so a conversion value never goes down. With
+    /// `lockWindow: true` and a value that is not higher, the lock is sent to Apple at the
+    /// stored value instead. A lock sent through the bridge does not stop later values.
     /// - Parameters:
     ///   - fineValue: Fine-grained conversion value (0-63)
     ///   - coarseValue: Coarse conversion value (.low, .medium, .high)
@@ -156,11 +159,21 @@ public class AdAttributionKitBridge {
         }
         let tracker = UnifiedAttributionTracker.shared
         guard tracker.wouldRaiseHighWater(fineValue: fineValue, coarseValue: coarseValue.rawValue) else {
+            // Not higher. A lock request is still passed to Apple, at the stored value (never
+            // a lower one).
+            if lockWindow, let stored = tracker.openHighWater() {
+                let storedCoarse = CoarseConversionValue(rawValue: stored.coarse) ?? .low
+                debugLog("AdAttributionKitBridge: locking at the stored value fine=\(stored.fine) coarse=\(stored.coarse) (requested fine=\(fineValue) is not higher)")
+                try await sendPostback(fineValue: stored.fine, coarseValue: storedCoarse, lockWindow: true)
+                return
+            }
             debugLog("AdAttributionKitBridge: skipping fine=\(fineValue) coarse=\(coarseValue.rawValue) (not higher than the last value, or window locked)")
             return
         }
         try await sendPostback(fineValue: fineValue, coarseValue: coarseValue, lockWindow: lockWindow)
-        tracker.recordAccepted(fineValue: fineValue, coarseValue: coarseValue.rawValue, lockWindow: lockWindow)
+        // lockWindow goes to Apple as asked, but never sets the SDK's install-wide lock: that
+        // flag never reopens and would block later SKAN 4 windows (2 and 3).
+        tracker.recordAccepted(fineValue: fineValue, coarseValue: coarseValue.rawValue, lockWindow: false)
     }
 
     #if DEBUG
@@ -216,10 +229,17 @@ public class AdAttributionKitBridge {
     }
 
     /// Update conversion value with legacy API (SKAN 3.0 compatible).
-    /// Same high-water guard: a value not higher than the last one is skipped.
+    /// Same high-water guard: a value not higher than the last one is skipped, and a
+    /// value outside 0-63 is ignored.
     /// - Parameter value: Conversion value (0-63)
     @available(iOS 14.0, *)
     public func updateConversionValue(_ value: Int) {
+        // Range first: an out-of-range value must never become the stored high-water
+        // (it would block every later value for this install).
+        guard (0...63).contains(value) else {
+            debugLog("AdAttributionKitBridge: ignoring legacy value \(value) (must be 0-63)")
+            return
+        }
         let tracker = UnifiedAttributionTracker.shared
         guard tracker.wouldRaiseHighWater(fineValue: value, coarseValue: CoarseConversionValue.low.rawValue) else {
             debugLog("AdAttributionKitBridge: skipping legacy value \(value) (not higher than the last value, or window locked)")

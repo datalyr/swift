@@ -28,6 +28,7 @@ final class AdAttributionKitBridgeGuardTests: XCTestCase {
     }
 
     override func tearDown() {
+        tracker.registrationSenderForTesting = nil
         bridge.postbackSenderForTesting = nil
         bridge.legacySenderForTesting = nil
         tracker.resetConversionState()
@@ -43,8 +44,8 @@ final class AdAttributionKitBridgeGuardTests: XCTestCase {
 
         try await bridge.updatePostbackConversionValue(fineValue: 32, coarseValue: .high, lockWindow: false)
         try await bridge.updatePostbackConversionValue(fineValue: 40, coarseValue: .high, lockWindow: true)
-        try await bridge.updatePostbackConversionValue(fineValue: 63, coarseValue: .high, lockWindow: false)
-        XCTAssertEqual(sent.values, [32, 32, 40], "equal fine + higher coarse goes; nothing after a locked window")
+        try await bridge.updatePostbackConversionValue(fineValue: 39, coarseValue: .high, lockWindow: false)
+        XCTAssertEqual(sent.values, [32, 32, 40], "equal fine + higher coarse goes; lower never does")
     }
 
     func testTheBridgeAndTheSDKShareOneHighWater() async throws {
@@ -96,6 +97,90 @@ final class AdAttributionKitBridgeGuardTests: XCTestCase {
         try await bridge.updatePostbackConversionValue(fineValue: 12, coarseValue: .low, lockWindow: false)
         try await bridge.registerForAttribution()
         XCTAssertEqual(sent.values, [0, 12], "no 0/low after a higher value")
+    }
+    // MARK: - C5 review fixes
+
+    func testOutOfRangeLegacyValueIsNeverSentOrStored() throws {
+        guard #available(iOS 14.0, *) else { throw XCTSkip("legacy SKAdNetwork API is iOS 14+") }
+        bridge.updateConversionValue(70)
+        bridge.updateConversionValue(-1)
+        XCTAssertEqual(sent.values, [])
+        XCTAssertTrue(tracker.wouldRaiseHighWater(fineValue: 10, coarseValue: "low"),
+                      "70 must not become the high-water and block later values")
+        bridge.updateConversionValue(10)
+        XCTAssertEqual(sent.values, [10])
+    }
+
+    func testTrackerNeverStoresAnOutOfRangeValue() {
+        tracker.recordAccepted(fineValue: 70, coarseValue: "high", lockWindow: false)
+        XCTAssertFalse(tracker.wouldRaiseHighWater(fineValue: 64, coarseValue: "high"))
+        XCTAssertTrue(tracker.wouldRaiseHighWater(fineValue: 1, coarseValue: "low"))
+    }
+
+    private final class Calls {
+        private let lock = NSLock()
+        private var _all: [(Int, CoarseConversionValue, Bool)] = []
+        func append(_ c: (Int, CoarseConversionValue, Bool)) { lock.withLock { _all.append(c) } }
+        var all: [(Int, CoarseConversionValue, Bool)] { lock.withLock { _all } }
+    }
+
+    func testLockAtTheCurrentValueIsSentAtTheStoredValue() async throws {
+        let calls = Calls()
+        bridge.postbackSenderForTesting = { fine, coarse, lock in calls.append((fine, coarse, lock)) }
+
+        try await bridge.updatePostbackConversionValue(fineValue: 20, coarseValue: .medium, lockWindow: false)
+        // Same value with lockWindow: the lock goes to Apple, at the stored value.
+        try await bridge.updatePostbackConversionValue(fineValue: 20, coarseValue: .medium, lockWindow: true)
+        XCTAssertEqual(calls.all.count, 2)
+        XCTAssertEqual(calls.all.last?.0, 20)
+        XCTAssertEqual(calls.all.last?.1, .medium)
+        XCTAssertEqual(calls.all.last?.2, true)
+    }
+
+    func testLockWithALowerValueSendsTheStoredValueNeverTheLowerOne() async throws {
+        let calls = Calls()
+        bridge.postbackSenderForTesting = { fine, coarse, lock in calls.append((fine, coarse, lock)) }
+
+        try await bridge.updatePostbackConversionValue(fineValue: 30, coarseValue: .high, lockWindow: false)
+        try await bridge.updatePostbackConversionValue(fineValue: 5, coarseValue: .low, lockWindow: true)
+        XCTAssertEqual(calls.all.count, 2)
+        XCTAssertEqual(calls.all.last?.0, 30)
+        XCTAssertEqual(calls.all.last?.1, .high)
+        XCTAssertEqual(calls.all.last?.2, true)
+    }
+
+    func testABridgeLockDoesNotBlockLaterHigherValues() async throws {
+        // SKAN 4 windows 2 and 3 need later values; a bridge lock must not stop them.
+        try await bridge.updatePostbackConversionValue(fineValue: 20, coarseValue: .medium, lockWindow: true)
+        try await bridge.updatePostbackConversionValue(fineValue: 40, coarseValue: .high, lockWindow: false)
+        XCTAssertEqual(sent.values, [20, 40])
+        XCTAssertTrue(tracker.wouldRaiseHighWater(fineValue: 41, coarseValue: "high"),
+                      "the SDK's own updates are not blocked either")
+    }
+
+    func testSDKRegisterDoesNotLowerAValueSentThroughTheBridge() async throws {
+        guard #available(iOS 17.4, *) else { throw XCTSkip("0-value registration is iOS 17.4+") }
+        let registrations = Sent()
+        tracker.registrationSenderForTesting = { registrations.append(0); return true }
+
+        // The app raised the value through the bridge before initialize().
+        try await bridge.updatePostbackConversionValue(fineValue: 20, coarseValue: .medium, lockWindow: false)
+        await tracker.register()
+        XCTAssertEqual(registrations.values, [], "initialize()'s register() must not send 0/low over 20")
+
+        // Even after reset() clears the high-water, the install stays registered.
+        tracker.resetConversionState()
+        await tracker.register()
+        XCTAssertEqual(registrations.values, [])
+    }
+
+    func testSDKRegisterStillRegistersAFreshInstallOnce() async throws {
+        guard #available(iOS 17.4, *) else { throw XCTSkip("0-value registration is iOS 17.4+") }
+        let registrations = Sent()
+        tracker.registrationSenderForTesting = { registrations.append(0); return true }
+        await tracker.register()
+        await tracker.register()
+        XCTAssertEqual(registrations.values, [0])
     }
 }
 #endif
