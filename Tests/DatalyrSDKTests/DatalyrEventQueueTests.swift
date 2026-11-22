@@ -34,7 +34,7 @@ final class DatalyrEventQueueTests: XCTestCase {
             debug: true
         )
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig())
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(), startsNetworkMonitor: false)
 
         // Wait for initialization
         try await Task.sleep(nanoseconds: 100_000_000) // 100ms
@@ -57,7 +57,7 @@ final class DatalyrEventQueueTests: XCTestCase {
 
         // Use offline mode to prevent immediate processing
         let queueConfig = QueueConfig(flushInterval: 60.0)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig, startsNetworkMonitor: false)
 
         // Set offline to prevent processing
         queue.setOnlineStatus(false)
@@ -81,7 +81,7 @@ final class DatalyrEventQueueTests: XCTestCase {
             debug: true
         )
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig())
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(), startsNetworkMonitor: false)
 
         // Wait for initialization
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -112,7 +112,7 @@ final class DatalyrEventQueueTests: XCTestCase {
 
         // Create queue with small size limit
         let queueConfig = QueueConfig(maxQueueSize: 5, flushInterval: 60.0)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig, startsNetworkMonitor: false)
 
         // Set offline to prevent processing
         queue.setOnlineStatus(false)
@@ -137,7 +137,7 @@ final class DatalyrEventQueueTests: XCTestCase {
     func testOverflowEvictionGoesToDeadLetter() async throws {
         let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(maxQueueSize: 3, flushInterval: 60.0))
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(maxQueueSize: 3, flushInterval: 60.0), startsNetworkMonitor: false)
         queue.setOnlineStatus(false)
         try await Task.sleep(nanoseconds: 100_000_000)
 
@@ -156,7 +156,7 @@ final class DatalyrEventQueueTests: XCTestCase {
     func testOverflowKeepsPurchaseEvictsAnalytics() async throws {
         let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(maxQueueSize: 3, flushInterval: 60.0))
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(maxQueueSize: 3, flushInterval: 60.0), startsNetworkMonitor: false)
         queue.setOnlineStatus(false)
         try await Task.sleep(nanoseconds: 100_000_000)
 
@@ -188,9 +188,9 @@ final class DatalyrEventQueueTests: XCTestCase {
 
         let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(flushInterval: 60.0))
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(flushInterval: 60.0), startsNetworkMonitor: false)
         queue.setOnlineStatus(false)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await queue.waitForInitialization()
 
         XCTAssertEqual(queue.getStats().queueSize, 1, "dead-letter entry should be replayed into the queue")
         let persisted = await DatalyrStorage.shared.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
@@ -211,9 +211,9 @@ final class DatalyrEventQueueTests: XCTestCase {
 
         let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(flushInterval: 60.0))
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(flushInterval: 60.0), startsNetworkMonitor: false)
         queue.setOnlineStatus(false)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await queue.waitForInitialization()
 
         XCTAssertEqual(queue.getStats().queueSize, 1, "only the fresh, under-cap entry is replayed")
         let persisted = await DatalyrStorage.shared.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
@@ -239,7 +239,7 @@ final class DatalyrEventQueueTests: XCTestCase {
     func testOnDeadLetterHookFiresOnEviction() async throws {
         let config = HTTPClientConfig(apiKey: "test_api_key", debug: true)
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(maxQueueSize: 2, flushInterval: 60.0))
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(maxQueueSize: 2, flushInterval: 60.0), startsNetworkMonitor: false)
         queue.setOnlineStatus(false)
         try await Task.sleep(nanoseconds: 100_000_000)
 
@@ -269,7 +269,7 @@ final class DatalyrEventQueueTests: XCTestCase {
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
 
         let queueConfig = QueueConfig(flushInterval: 60.0)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig, startsNetworkMonitor: false)
 
         // Set offline to prevent processing
         queue.setOnlineStatus(false)
@@ -303,7 +303,7 @@ final class DatalyrEventQueueTests: XCTestCase {
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
 
         let queueConfig = QueueConfig(maxQueueSize: 100, flushInterval: 60.0)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig, startsNetworkMonitor: false)
 
         // Set offline to prevent processing
         queue.setOnlineStatus(false)
@@ -334,7 +334,7 @@ final class DatalyrEventQueueTests: XCTestCase {
             debug: true
         )
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig())
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(), startsNetworkMonitor: false)
 
         // Wait for initialization
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -363,7 +363,7 @@ final class DatalyrEventQueueTests: XCTestCase {
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
 
         let queueConfig = QueueConfig(maxQueueSize: 1000, flushInterval: 60.0)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig, startsNetworkMonitor: false)
 
         // Set offline to prevent processing
         queue.setOnlineStatus(false)

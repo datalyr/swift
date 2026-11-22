@@ -33,7 +33,7 @@ internal struct HTTPClientConfig {
 
 // MARK: - Rate Limiter (Thread-Safe)
 
-/// Actor-based sliding-window rate limiter with BACKPRESSURE, not drop.
+/// Actor-based sliding-window rate limiter with BACKPRESSURE, not drop (9.B.1).
 /// The old fixed-window version THREW `rateLimitExceeded` past 100 requests/min; since
 /// shouldRetry() classified that as non-retryable, every rate-limited send failed on its
 /// first attempt, the queue burned one of its 3 retries per pass, and a >100-event backlog
@@ -119,16 +119,97 @@ internal class DatalyrHTTPClient {
     
     // MARK: - Event Sending
     
-    /// Send a single event with retry logic
+    /// Send a single event: ONE request, classified.
+    ///
+    /// The client no longer retries or sleeps inside a send. Waiting belongs to the queue,
+    /// which keeps the event and paces every retry (backoff, Retry-After) so a server outage
+    /// costs one probe per wait instead of a burst, and never moves a temporarily failing
+    /// event toward the dead-letter store early. `response.disposition` says what the queue
+    /// should do with the event.
     func sendEvent(_ payload: EventPayload) async -> HTTPResponse {
-        return await sendWithRetry(payload, retryCount: 0, throttleCount: 0)
+        // Pace, don't drop: wait for a rate-limit slot (backpressure) instead of
+        // throwing, so a backlog burst is slowed down rather than dead-lettered (9.B.1).
+        await waitForRateLimitSlot()
+        debugLog("Sending event: \(payload.eventName)")
+
+        let request: URLRequest
+        do {
+            request = try createRequest(for: payload)
+        } catch {
+            // The payload cannot be encoded: no retry will ever change that.
+            errorLog("Event could not be encoded: \(payload.eventName)")
+            return HTTPResponse(success: false, statusCode: 0, error: error, disposition: .rejected)
+        }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return HTTPResponse(success: false, statusCode: 0, error: HTTPError.invalidResponse,
+                                    disposition: .retry(after: nil))
+            }
+            let status = httpResponse.statusCode
+            let retryAfter = retryAfterSeconds(from: httpResponse)
+            let disposition = Self.disposition(forStatus: status, retryAfter: retryAfter)
+            switch disposition {
+            case .delivered:
+                debugLog("Event sent successfully: \(payload.eventName)")
+                return HTTPResponse(success: true, statusCode: status, data: data, disposition: .delivered)
+            case .refused where status == 404:
+                // Ingest never answers 404: something in front of it sent this request elsewhere.
+                errorLog("HTTP 404: the event endpoint was not found (a misroute in front of DATALYR ingest). Kept and retried.")
+                return HTTPResponse(success: false, statusCode: status, data: data,
+                                    error: HTTPError.httpError(status, "Endpoint not found"), disposition: disposition)
+            case .refused:
+                errorLog("HTTP \(status): Authentication failed. Check your API key and workspace ID.")
+                return HTTPResponse(success: false, statusCode: status, data: data,
+                                    error: HTTPError.authenticationFailed, disposition: disposition)
+            default:
+                errorLog("Event send failed: HTTP \(status)")
+                return HTTPResponse(success: false, statusCode: status, data: data,
+                                    error: HTTPError.httpError(status, String(data: data, encoding: .utf8)),
+                                    disposition: disposition)
+            }
+        } catch {
+            errorLog("Event send failed: \(error.localizedDescription)")
+            return HTTPResponse(success: false, statusCode: 0, error: error, disposition: Self.disposition(forError: error))
+        }
     }
 
-    /// Max consecutive 429/408 backpressure waits before giving up within a single send.
-    /// These do NOT count against the normal retryCount (a 429 is backpressure, not failure),
-    /// so this separate cap prevents an unbounded loop under sustained throttling.
-    private static let maxThrottleWaits = 5
-    
+    /// What an ingest answer means for the event (the server's answer contract,
+    /// infra/cloudflare/ingest handleServerTrack):
+    /// - any 2xx: stored (a duplicate event id also answers 200), never sent again;
+    /// - 429 (Retry-After 1 or 60) and 408: backpressure, retried without spending an attempt;
+    /// - 5xx, 503 (Retry-After 5 when the fault is the server's own): retried;
+    /// - 401/403 (key refused) and 404 (never sent by ingest: a misroute): retried for
+    ///   DatalyrEventQueue.refusalWindow, then dropped and counted;
+    /// - any other 4xx (400 bad body or missing name/identity, 413 too large, 405, 415): this
+    ///   exact request can never succeed, so the event is dropped at once and counted.
+    static func disposition(forStatus status: Int, retryAfter: TimeInterval?) -> DeliveryDisposition {
+        switch status {
+        case 200..<300: return .delivered
+        case 429, 408: return .throttled(after: retryAfter)
+        // 404: ingest never answers it, so it comes from a misroute in front of ingest and
+        // would otherwise wipe events on every phone at once.
+        case 401, 403, 404: return .refused
+        case 400..<500: return .rejected
+        default: return .retry(after: retryAfter) // 5xx and anything unexpected (1xx/3xx)
+        }
+    }
+
+    /// Transport errors are connectivity, never a verdict on the event: timeouts, lost or
+    /// refused connections, DNS, TLS and cancelled requests are all retried. Only a request
+    /// the client itself cannot build is final.
+    static func disposition(forError error: Error) -> DeliveryDisposition {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .badURL, .unsupportedURL: return .rejected
+            default: return .retry(after: nil)
+            }
+        }
+        if let httpError = error as? HTTPError, case .invalidURL = httpError { return .rejected }
+        return .retry(after: nil)
+    }
+
     /// Send multiple events in a batch
     func sendBatch(_ payloads: [EventPayload]) async -> [HTTPResponse] {
         // For now, send events individually
@@ -150,77 +231,17 @@ internal class DatalyrHTTPClient {
     
     // MARK: - Private Methods
     
-    /// Send request with exponential backoff retry.
-    /// `retryCount` counts genuine failures (5xx, network) against config.maxRetries.
-    /// `throttleCount` counts 429/408 backpressure waits separately so sustained
-    /// throttling honors Retry-After without burning the failure budget toward dead-letter.
-    private func sendWithRetry(_ payload: EventPayload, retryCount: Int, throttleCount: Int) async -> HTTPResponse {
-        do {
-            // Pace, don't drop: wait for a rate-limit slot (backpressure) instead of
-            // throwing, so a backlog burst is slowed down rather than dead-lettered.
-            await waitForRateLimitSlot()
+    /// Longest wait a `Retry-After` header can ask for. Ingest sends 1, 5 or 60.
+    static let maxRetryAfter: TimeInterval = 300
 
-            debugLog("Sending event: \(payload.eventName) (attempt \(retryCount + 1))")
-
-            // Create request
-            let request = try createRequest(for: payload)
-
-            // Send request
-            let (data, response) = try await session.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw HTTPError.invalidResponse
-            }
-
-            // Check response status
-            if httpResponse.statusCode == 200 || httpResponse.statusCode == 201 {
-                debugLog("Event sent successfully: \(payload.eventName)")
-                return HTTPResponse(success: true, statusCode: httpResponse.statusCode, data: data)
-            } else if httpResponse.statusCode == 401 {
-                let errorMessage = "HTTP 401: Authentication failed. Check your API key and workspace ID."
-                errorLog(errorMessage)
-                return HTTPResponse(success: false, statusCode: httpResponse.statusCode, error: HTTPError.authenticationFailed)
-            } else if httpResponse.statusCode == 429 || httpResponse.statusCode == 408 {
-                // 429 (ingest sends Retry-After:1) / 408 are TRANSIENT backpressure, not
-                // permanent client errors. Honor Retry-After and retry WITHOUT counting it as a
-                // failure, so a workspace-wide throttle burst doesn't dead-letter events.
-                guard throttleCount < DatalyrHTTPClient.maxThrottleWaits else {
-                    debugLog("Throttle persisted past \(DatalyrHTTPClient.maxThrottleWaits) waits; surfacing \(httpResponse.statusCode)")
-                    return HTTPResponse(success: false, statusCode: httpResponse.statusCode,
-                                        error: HTTPError.httpError(httpResponse.statusCode, "rate limited"))
-                }
-                let retryAfter = retryAfterSeconds(from: httpResponse) ?? calculateRetryDelay(throttleCount)
-                debugLog("HTTP \(httpResponse.statusCode) throttled; honoring Retry-After \(retryAfter)s (wait \(throttleCount + 1))")
-                try? await Task.sleep(nanoseconds: UInt64(retryAfter * 1_000_000_000))
-                return await sendWithRetry(payload, retryCount: retryCount, throttleCount: throttleCount + 1)
-            } else {
-                throw HTTPError.httpError(httpResponse.statusCode, String(data: data, encoding: .utf8))
-            }
-
-        } catch {
-            errorLog("Event send failed (attempt \(retryCount + 1)): \(error.localizedDescription)")
-
-            // Check if we should retry
-            if retryCount < config.maxRetries && shouldRetry(error) {
-                let delay = calculateRetryDelay(retryCount)
-                debugLog("Retrying in \(delay)s...")
-
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                return await sendWithRetry(payload, retryCount: retryCount + 1, throttleCount: throttleCount)
-            }
-
-            return HTTPResponse(success: false, statusCode: 0, error: error)
-        }
-    }
-
-    /// Parse a `Retry-After` header (delta-seconds form; ingest sends "1"). Clamped to a sane
-    /// ceiling so a hostile/garbage header can't park an event for minutes. Returns nil if absent.
+    /// Parse a `Retry-After` header (delta-seconds form). Clamped so a garbage header
+    /// can't park an event for hours. Returns nil if absent or unreadable.
     private func retryAfterSeconds(from response: HTTPURLResponse) -> TimeInterval? {
         guard let raw = response.value(forHTTPHeaderField: "Retry-After")?
-            .trimmingCharacters(in: .whitespaces), let seconds = Double(raw) else {
+            .trimmingCharacters(in: .whitespaces), let seconds = Double(raw), seconds.isFinite else {
             return nil
         }
-        return min(max(seconds, 0), 30)
+        return min(max(seconds, 0), Self.maxRetryAfter)
     }
     
     /// Create HTTP request for event payload
@@ -292,48 +313,12 @@ internal class DatalyrHTTPClient {
     /// Test-only: expose the HTTP-status retry classification so the suite can assert
     /// 429/408 are retryable without reaching the network. Mirrors the .httpError branch below.
     func isRetryableStatusForTest(_ code: Int) -> Bool {
-        return shouldRetry(HTTPError.httpError(code, nil))
+        switch Self.disposition(forStatus: code, retryAfter: nil) {
+        case .retry, .throttled: return true
+        default: return false
+        }
     }
 
-    /// Determine if an error should trigger a retry
-    private func shouldRetry(_ error: Error) -> Bool {
-        if let httpError = error as? HTTPError {
-            switch httpError {
-            case .authenticationFailed, .rateLimitExceeded:
-                // .rateLimitExceeded is no longer thrown anywhere — the client-side limiter
-                // now waits for a slot instead of throwing. The case is kept in the
-                // enum for exhaustiveness/compatibility; classified non-retryable if it ever
-                // resurfaces so it can't loop.
-                return false
-            case .httpError(let code, _):
-                // Retry server errors (5xx) and transient throttling/timeout (429, 408).
-                // Other 4xx are permanent client errors and won't improve on retry.
-                return code >= 500 || code == 429 || code == 408
-            default:
-                return true
-            }
-        }
-        
-        if let urlError = error as? URLError {
-            switch urlError.code {
-            case .timedOut, .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet:
-                return true
-            default:
-                return false
-            }
-        }
-        
-        return false
-    }
-    
-    /// Calculate exponential backoff delay
-    private func calculateRetryDelay(_ retryCount: Int) -> TimeInterval {
-        let baseDelay = config.retryDelay
-        let exponentialDelay = pow(2.0, Double(retryCount)) * baseDelay
-        let jitter = Double.random(in: 0...1) // Add jitter to prevent thundering herd
-        return min(exponentialDelay + jitter, 30.0) // Cap at 30 seconds
-    }
-    
     // MARK: - Utility Methods
     
     /// Test connectivity to the endpoint

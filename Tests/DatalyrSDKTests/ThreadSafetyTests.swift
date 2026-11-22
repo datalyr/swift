@@ -82,7 +82,7 @@ final class ThreadSafetyTests: XCTestCase {
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
 
         let queueConfig = QueueConfig(maxQueueSize: 100, flushInterval: 60.0)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig, startsNetworkMonitor: false)
 
         // Set offline initially
         queue.setOnlineStatus(false)
@@ -135,7 +135,7 @@ final class ThreadSafetyTests: XCTestCase {
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
 
         let queueConfig = QueueConfig(flushInterval: 60.0)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig, startsNetworkMonitor: false)
 
         // Wait for initialization
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -268,7 +268,7 @@ final class ThreadSafetyTests: XCTestCase {
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
 
         let queueConfig = QueueConfig(maxQueueSize: 500, flushInterval: 60.0)
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig)
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: queueConfig, startsNetworkMonitor: false)
 
         // Set offline to prevent network calls
         queue.setOnlineStatus(false)
@@ -314,7 +314,7 @@ final class ThreadSafetyTests: XCTestCase {
         )
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
 
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig())
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(), startsNetworkMonitor: false)
 
         // Wait for initialization
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -343,7 +343,7 @@ final class ThreadSafetyTests: XCTestCase {
         )
         let httpClient = DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
 
-        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig())
+        let queue = DatalyrEventQueue(httpClient: httpClient, config: QueueConfig(), startsNetworkMonitor: false)
 
         // Set to known state
         queue.setOnlineStatus(true)
