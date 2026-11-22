@@ -21,6 +21,9 @@ Release as **2.3.0** (or 2.3.0 together with the install-lookup change in #8, wh
 ### Release note
 - Do not re-track an event from `datalyrDidFailToSendEvent`. An app that does so would now loop on a final refusal (400, 413, …): each re-tracked copy is refused again and reported again.
 
+### Fixed
+- Building an event no longer waits for the main thread on iOS. `track()`, and with it `identify()`, `bindProviderIdentity()` and `updateTrackingAuthorization(status:)`, read `UIDevice` / `UIScreen` inside an `async` function, where Swift hops to the main actor for those properties. Each event therefore waited for the main thread. An app that blocked the main thread waiting on one of these calls deadlocked, and events built while main was busy were delayed. The values are now read synchronously on the calling thread, as `getDeviceInfo()` already did. The event properties are unchanged. The session start in auto events had the same wait for `os_version` and is fixed the same way.
+
 ## [2.2.0] - 2026-10-30
 
 ### Changed
