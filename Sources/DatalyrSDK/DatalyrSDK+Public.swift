@@ -5,28 +5,15 @@ import Foundation
 /// Main public interface for Datalyr iOS SDK
 public extension DatalyrSDK {
     
-    /// Convenience method to initialize with basic configuration
+    /// Convenience method to initialize with the common options.
+    /// Every argument after `apiKey` is optional, so `configure(apiKey:)`,
+    /// `configure(apiKey:workspaceId:debug:)` and the full form all call this.
     /// - Parameters:
     ///   - apiKey: Your Datalyr API key
-    ///   - workspaceId: Your Datalyr workspace ID
+    ///   - workspaceId: Your Datalyr workspace ID (default: "")
     ///   - debug: Enable debug logging (default: false)
-    static func configure(apiKey: String, workspaceId: String = "", debug: Bool = false) async throws {
-        let config = DatalyrConfig(
-            apiKey: apiKey,
-            workspaceId: workspaceId,
-            debug: debug
-        )
-
-        try await shared.initialize(config: config)
-    }
-    
-    /// Convenience method to initialize with full configuration
-    /// - Parameters:
-    ///   - apiKey: Your Datalyr API key
-    ///   - workspaceId: Your Datalyr workspace ID
-    ///   - debug: Enable debug logging
-    ///   - enableAutoEvents: Enable automatic event tracking
-    ///   - enableAttribution: Enable attribution tracking
+    ///   - enableAutoEvents: Enable automatic event tracking (default: true)
+    ///   - enableAttribution: Enable attribution tracking (default: true)
     static func configure(
         apiKey: String,
         workspaceId: String = "",
@@ -34,23 +21,31 @@ public extension DatalyrSDK {
         enableAutoEvents: Bool = true,
         enableAttribution: Bool = true
     ) async throws {
-        let autoEventConfig = AutoEventConfig(
-            trackSessions: true,
-            trackScreenViews: true,
-            trackAppUpdates: true,
-            trackPerformance: false
-        )
-
-        let config = DatalyrConfig(
+        try await shared.initialize(config: configureConfig(
             apiKey: apiKey,
             workspaceId: workspaceId,
             debug: debug,
             enableAutoEvents: enableAutoEvents,
-            enableAttribution: enableAttribution,
-            autoEventConfig: autoEventConfig
-        )
+            enableAttribution: enableAttribution
+        ))
+    }
 
-        try await shared.initialize(config: config)
+    /// The config `configure(apiKey:...)` initializes with. `autoEventConfig` stays nil,
+    /// which the SDK reads as `AutoEventConfig()` (the values both old overloads used).
+    internal static func configureConfig(
+        apiKey: String,
+        workspaceId: String = "",
+        debug: Bool = false,
+        enableAutoEvents: Bool = true,
+        enableAttribution: Bool = true
+    ) -> DatalyrConfig {
+        DatalyrConfig(
+            apiKey: apiKey,
+            workspaceId: workspaceId,
+            debug: debug,
+            enableAutoEvents: enableAutoEvents,
+            enableAttribution: enableAttribution
+        )
     }
     
     /// Convenience method to initialize with SKAdNetwork conversion value encoding
