@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Changed
+- `Package.swift` now declares iOS 13 only. It used to also list macOS 10.15, tvOS 13 and watchOS 6, which were never built or tested: CI and the CocoaPods spec are iOS-only, and the SDK imports AdSupport and AppTrackingTransparency without a platform guard. This does not break package resolution. SwiftPM cannot exclude a platform, so a target for another platform still resolves, with the SDK's oldest deployment target. Whether it compiles there is unchanged. iOS apps are not affected.
+
 ## [2.2.0] - 2026-10-30
 
 ### Changed
