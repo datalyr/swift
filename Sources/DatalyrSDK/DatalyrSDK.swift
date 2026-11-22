@@ -2039,26 +2039,15 @@ public class DatalyrSDK {
         config: DatalyrConfig, 
         template: String = "ecommerce"
     ) async throws {
-        // Create config with SKAdNetwork template
-        let skadConfig = DatalyrConfig(
-            apiKey: config.apiKey,
-            workspaceId: config.workspaceId,
-            debug: config.debug,
-            endpoint: config.endpoint,
-            maxRetries: config.maxRetries,
-            retryDelay: config.retryDelay,
-            timeout: config.timeout,
-            batchSize: config.batchSize,
-            flushInterval: config.flushInterval,
-            maxQueueSize: config.maxQueueSize,
-            respectDoNotTrack: config.respectDoNotTrack,
-            enableAutoEvents: config.enableAutoEvents,
-            enableAttribution: config.enableAttribution,
-            autoEventConfig: config.autoEventConfig,
-            skadTemplate: template
-        )
-        
-        try await shared.initialize(config: skadConfig)
+        try await shared.initialize(config: skadConfig(from: config, template: template))
+    }
+
+    /// The caller's config with only `skadTemplate` set. A copy, so every other field
+    /// (existingUserHint, useServerTracking, and any added later) survives.
+    internal static func skadConfig(from config: DatalyrConfig, template: String) -> DatalyrConfig {
+        var skadConfig = config
+        skadConfig.skadTemplate = template
+        return skadConfig
     }
     
     /// Track event with automatic SKAdNetwork conversion value encoding

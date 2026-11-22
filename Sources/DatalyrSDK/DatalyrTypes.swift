@@ -29,7 +29,9 @@ public struct DatalyrConfig {
     public let enableAutoEvents: Bool
     public let enableAttribution: Bool
     public let autoEventConfig: AutoEventConfig?
-    public let skadTemplate: String?
+    /// Settable inside the SDK only, so `initializeWithSKAdNetwork` can copy the
+    /// caller's config and change just this field.
+    public internal(set) var skadTemplate: String?
     /// Optional: tell the SDK whether the person on this device already used the app
     /// before it shipped DATALYR (e.g. a stored login token or a finished onboarding).
     /// Read once, on the first SDK launch only. Return nil when you cannot tell.

@@ -250,4 +250,14 @@ final class InstallClassifierTests: XCTestCase {
         _ = try await launch(Self.config(hint: { calls.value += 1; return true }))
         XCTAssertEqual(calls.value, 1)
     }
+
+    func testSKANInitPathKeepsTheHostHint() async throws {
+        // C4: initializeWithSKAdNetwork used to rebuild the config and drop existingUserHint,
+        // so an existing user on the SKAN path was sent as a new install.
+        provide(signals(ranBefore: false))
+        let skan = DatalyrSDK.skadConfig(from: Self.config(hint: { true }), template: "ecommerce")
+        _ = try await launch(skan)
+        XCTAssertFalse(names().contains("app_install"), "\(names())")
+        XCTAssertEqual(data("$sdk_first_launch_existing")?["detection_method"] as? String, "host_hint")
+    }
 }
