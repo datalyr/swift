@@ -3,9 +3,11 @@ import PackageDescription
 
 let package = Package(
     name: "DatalyrSDK",
-    // iOS only, like the podspec and CI. Other platforms were declared but never
-    // built: DatalyrUtils.swift imports AdSupport and AppTrackingTransparency
-    // without a platform guard.
+    // The SDK is built and tested for iOS only, like the podspec and CI.
+    // SwiftPM cannot exclude a platform: one left out here gets the SDK's oldest
+    // deployment target, not a resolution error. macOS, tvOS and watchOS were
+    // listed before but never built (DatalyrUtils.swift imports AdSupport and
+    // AppTrackingTransparency without a platform guard).
     platforms: [
         .iOS(.v13)
     ],
