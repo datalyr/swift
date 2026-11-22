@@ -311,7 +311,7 @@ internal class AdAttributionKitIntegration {
 
 /// Unified attribution tracking that uses AdAttributionKit on iOS 17.4+ and SKAdNetwork on earlier versions.
 ///
-/// Owns the cross-launch high-water guard (FSR-3 / FSR-7): SKAN 4 *permits* decreasing
+/// Owns the cross-launch high-water guard: SKAN 4 *permits* decreasing
 /// the conversion value, but the SDK must not — an early/low-funnel event (view_item)
 /// after a high one (begin_checkout/purchase) would clobber it. The OS keeps no state
 /// across cold launches and the in-memory guards in AdAttributionKitIntegration reset
@@ -378,7 +378,7 @@ internal class UnifiedAttributionTracker {
     }
 
     /// Register for attribution tracking.
-    /// FSR-3: the iOS 17.4+ AdAttributionKit registration sends a 0/low conversion value.
+    /// the iOS 17.4+ AdAttributionKit registration sends a 0/low conversion value.
     /// Sending it on EVERY cold launch resets any in-window high-water value to 0/low.
     /// Persist a one-time `skan_registered` flag so the 0-value registration fires only
     /// once per install; later launches skip it (the legacy registerApp… API is idempotent
@@ -403,7 +403,7 @@ internal class UnifiedAttributionTracker {
         }
     }
 
-    /// Update conversion value through the cross-launch high-water guard (FSR-7).
+    /// Update conversion value through the cross-launch high-water guard.
     /// Only strictly-higher values are sent; the window-lock is honored across launches.
     func updateConversionValue(fineValue: Int, coarseValue: String, lockWindow: Bool) async -> Bool {
         let newCoarseRank = coarseRank(coarseValue)
@@ -475,7 +475,7 @@ internal class UnifiedAttributionTracker {
         }
     }
 
-    /// Test-only: exercise just the persisted monotonic guard (FSR-7) without the OS
+    /// Test-only: exercise just the persisted monotonic guard without the OS
     /// SKAdNetwork round-trip, which fails in the simulator/test environment. Returns whether
     /// the value WOULD be sent (and commits the high-water exactly as the real path does).
     func applyHighWaterForTest(fineValue: Int, coarseValue: String, lockWindow: Bool) -> Bool {

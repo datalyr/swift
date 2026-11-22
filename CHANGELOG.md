@@ -25,7 +25,7 @@ All notable changes to this project will be documented in this file.
 ## [2.1.19] - 2026-10-29
 
 ### Added
-- `identify(_:properties:provisional:)` (and `datalyrIdentify(_:properties:provisional:)`). Pass `provisional: true` for the app's own pre-login ID (a guest or device ID assigned before sign-in). A provisional ID is ignored while a signed-in (non-provisional) user is identified, so re-sending it on launch never overrides the account. Replacing it with the real account ID, or with another provisional ID, does not run the account-switch `reset()`. Every event sent while it is current, `$identify` included, carries `properties.$provisional_user_id = true` (identity §2.10); a caller-supplied value for that key is always dropped. The server does not read the marker yet: until a later DATALYR release does, the guest ID is joined to the account only for workspaces where DATALYR has turned provisional conversion on. The flag is persisted as `provisional:<hash of the user id>` and honoured only for that user id (a downgrade that signs in another user, or a kill between writes, leaves the user signed in). It is cleared by `reset()`, by a non-provisional `identify()` and by `alias()`. While a provisional ID is current, `alias(newId)` without `previousId` is handled as `identify(newId)`, so no `$alias` is sent from the guest ID. No `$alias` is sent. `identify` / `alias` / `reset` are now serialised, so a guest identify racing a sign-in can no longer overwrite the account. Calls without `provisional` behave as in 2.1.18, and their identify dedup key is unchanged.
+- `identify(_:properties:provisional:)` (and `datalyrIdentify(_:properties:provisional:)`). Pass `provisional: true` for the app's own pre-login ID (a guest or device ID assigned before sign-in). A provisional ID is ignored while a signed-in (non-provisional) user is identified, so re-sending it on launch never overrides the account. Replacing it with the real account ID, or with another provisional ID, does not run the account-switch `reset()`. Every event sent while it is current, `$identify` included, carries `properties.$provisional_user_id = true`; a caller-supplied value for that key is always dropped. The flag is persisted as `provisional:<hash of the user id>` and honoured only for that user id (a downgrade that signs in another user, or a kill between writes, leaves the user signed in). It is cleared by `reset()`, by a non-provisional `identify()` and by `alias()`. While a provisional ID is current, `alias(newId)` without `previousId` is handled as `identify(newId)`, so no `$alias` is sent from the guest ID. No `$alias` is sent. `identify` / `alias` / `reset` are now serialised, so a guest identify racing a sign-in can no longer overwrite the account. Calls without `provisional` behave as in 2.1.18, and their identify dedup key is unchanged.
 - `syncRevenueCatAttributes(_:)` / `syncSuperwallAttributes(_:)` (instance and static; `nil` unregisters). The handler is called asynchronously on the main thread (never inline, never awaited, so a blocked main thread cannot deadlock the SDK): after registration (or when `initialize()` finishes), and just after each `reset()` (once per account switch inside `identify()`), web→app attribution match, `bindProviderIdentity()` and `updateTrackingAuthorization(status:)`. Attributes are built at delivery time, so a delivery never carries an older `datalyr_id`. After a reset the RevenueCat dictionary sets the previous user's attribution keys to `""` (RevenueCat deletes them); Superwall is not sent empty values. Before this, apps set the attributes once, and after `reset()` rotated the anonymous ID the provider kept the old `datalyr_id`. Order: on login `Purchases.shared.logIn` / `Superwall.shared.identify(userId:)` FIRST, then `identify()`; on logout `Purchases.shared.logOut()` / `Superwall.shared.reset()` FIRST, then `reset()`.
 
 ### Fixed
@@ -202,7 +202,7 @@ All notable changes to this project will be documented in this file.
 ## [2.1.8] - 2026-07-12
 
 ### Changed
-- **TR-26: `PrivacyInfo.xcprivacy` now accurately declares tracking.** The manifest said
+- **`PrivacyInfo.xcprivacy` now accurately declares tracking.** The manifest said
   `NSPrivacyTracking=false` with empty domains and every data type `Linked/Tracking=false`,
   while the SDK reads the IDFA when ATT-authorized, attaches it to events, and forwards
   click-ids / hashed email+phone / purchases to third-party ad CAPI. It now declares
@@ -213,14 +213,14 @@ All notable changes to this project will be documented in this file.
   reflects behavior that was already occurring.
 
 ### Added
-- **A3-25: `schema_version` envelope stamp.** Every event now carries `schema_version = 1`,
+- **`schema_version` envelope stamp.** Every event now carries `schema_version = 1`,
   the first canonical envelope version shared across the whole SDK fleet (web/node/RN/iOS), so
   the ingest contract layer can key on one version marker.
-- **TR-18: caller-supplied `event_id` for idempotent delivery.** If `eventData["event_id"]` is a
+- **Caller-supplied `event_id` for idempotent delivery.** If `eventData["event_id"]` is a
   non-empty string it becomes the wire `eventId` (and is stripped from properties), mirroring the
   Node SDK — so a client that double-tracks a purchase alongside a Stripe/RevenueCat webhook has a
   deterministic server-side dedup key. Omitted/empty → a fresh UUID (unchanged).
-- **TR-17: re-engagement deep links now emit a `$deep_link` event.** `handleDeepLink` persisted
+- **Re-engagement deep links now emit a `$deep_link` event.** `handleDeepLink` persisted
   the extracted `fbclid`/`gclid`/`ttclid`/`lyr` locally (and surfaced them to Superwall/RevenueCat
   client attributes) but fired **no event**, and `createEventPayload` merges attribution only
   into `app_install` — so a day-5 post-install ad-click deep link never reached Datalyr ingest,
@@ -236,9 +236,9 @@ All notable changes to this project will be documented in this file.
 - **Track-3 review P2: `app_install` is protected from queue-overflow eviction.** `isCriticalEvent`
   keyed on revenue names / value keys only, so `app_install` (no value key) was non-critical and
   could be evicted from a large first-launch offline backlog, then dropped by `deadLetter`'s
-  `suffix(100)` — permanently losing install attribution (the exact loss TR-05/TR-21 target). The
+  `suffix(100)` — permanently losing install attribution (the exact loss the overflow guard targets). The
   install family is now treated as critical alongside revenue events.
-- **TR-20a parity: event names with spaces are normalized, not dropped.** `validateEventName`
+- **Event names with spaces are normalized, not dropped.** `validateEventName`
   rejected any name containing a space, so `track("Order Completed")` was silently discarded on
   iOS while the RN bare build recorded it. `track()` now normalizes at entry (trim + collapse
   whitespace runs → a single underscore, mirroring the RN/web `normalizeEventName`), so
@@ -251,15 +251,15 @@ All notable changes to this project will be documented in this file.
   atomically claimed under `preInitLock` via a dedicated `initializing` latch; a re-entrant call
   returns early, and the latch is released on any early throw/return (e.g. empty `apiKey`) so a
   failed init can still be retried.
-- **TR-21 (data loss): the install flag was written BEFORE `app_install` was enqueued.** A
+- **Data loss: the install flag was written BEFORE `app_install` was enqueued.** A
   crash/kill between the flag write and the enqueue lost `app_install` — install attribution, the
   single most valuable mobile event — permanently. The flag is now set AFTER `track()` returns
   (event durably queued), so an interrupted first launch re-fires `app_install` next launch.
-- **TR-28 (identity bleed): `reset()` didn't clear the multi-touch journey.** It wiped current
+- **Identity bleed: `reset()` didn't clear the multi-touch journey.** It wiped current
   attribution but left the persisted journey (touchpoints / first-last touch), so a
   logout→login-as-B carried user A's journey into B. `reset()` now also calls
   `JourneyManager.clearJourney()`.
-- **TR-16 (data loss): a launch-time `track()` could be lost to an init race.** `track()`
+- **Data loss: a launch-time `track()` could be lost to an init race.** `track()`
   read `initialized` in a `guard` *outside* `preInitLock`, then appended to `preInitQueue`
   *inside* the lock without re-checking — so `initialize()`'s atomic drain (which empties the
   buffer and sets `initialized=true` under the same lock) could interleave, and the event
@@ -267,14 +267,14 @@ All notable changes to this project will be documented in this file.
   path and fires exactly at launch. It now re-checks `initialized` inside the lock (mirroring
   `identify()`/`alias()`/`routeDeepLink()`): if init won the race, it falls through to normal
   processing instead of buffering into the void.
-- **TR-05 (data loss): a full event queue silently dropped the oldest event with no
+- **Data loss: a full event queue silently dropped the oldest event with no
   dead-letter.** `enqueue()` did a bare `queue.removeFirst()` (+ debug log) once
   `maxQueueSize` (default **100**) was reached — oldest-first is the offline backlog, so any
   offline period producing >100 events lost everything beyond the newest 100, purchases
   included. Now: the default cap is **1000**; an overflow evicts the oldest **non-critical**
   event first (purchases / value-bearing conversions are retained) and routes the evicted
   event through `deadLetter()` (capped, replayed on the next launch) instead of dropping it.
-- **9.B.1 (data loss): the client-side rate limiter dropped burst/backlog events —
+- **Data loss: the client-side rate limiter dropped burst/backlog events —
   including purchases — instead of pacing them.** The fixed-window `RateLimiter` THREW
   `rateLimitExceeded` past 100 events/min, `shouldRetry` classified that as non-retryable
   (the send failed on its first attempt), and the queue burned one of its 3 retries per
@@ -282,7 +282,7 @@ All notable changes to this project will be documented in this file.
   dead-lettered the overflow. The limiter is now a sliding 60s window that WAITS
   (backpressure) until a slot frees — bounded, so a send can never hang; past the bound it
   proceeds and defers to the server's 429, which is already handled as retry-free
-  backpressure (FSR-31). A backlog now delivers ALL events with zero dead-letters, just
+  backpressure. A backlog now delivers ALL events with zero dead-letters, just
   slower. Mirrors the React Native SDK's `enforceRateLimit()` fix.
 
 ## [2.1.7] - 2026-06-10
@@ -292,74 +292,74 @@ several SKAN under-reporting bugs, dead session/flush timers, pre-init drop path
 cross-user identity contamination. 14 new XCTests (85 total, green).
 
 ### Fixed
-- **FSR-1 (crash): `track()`/`identify()` could crash the host app on `Date`/`URL`/`UUID`
+- **Crash: `track()`/`identify()` could crash the host app on `Date`/`URL`/`UUID`
   property values.** `validateEventData` and `persistUserData` called
   `JSONSerialization.data(withJSONObject:)` on the raw caller dict, which raises an
   *uncatchable* Objective-C `NSInvalidArgumentException` for non-JSON types (the `do/catch`
   never fires). Now guarded with `isValidJSONObject` and sanitized to the wire shape
   (`Date`→ISO8601, `URL`→absoluteString) — these are SDK-supported inputs, so they're kept,
   not rejected, and never crash.
-- **FSR-3 (SKAN): conversion value reset to 0/low on every cold launch (iOS 17.4+).** The
+- **SKAN: conversion value reset to 0/low on every cold launch (iOS 17.4+).** The
   per-launch AdAttributionKit registration sent `updatePostbackConversionValue(0, .low, …)`
   each time, clobbering any in-window value. The 0-value registration now fires **once per
   install** (persisted flag).
-- **FSR-7 (SKAN): the main `trackWithSKAdNetwork` path bypassed the monotonic/lock guard.**
+- **SKAN: the main `trackWithSKAdNetwork` path bypassed the monotonic/lock guard.**
   It called the OS update APIs directly, so a later low-funnel event (e.g. `view_item`)
   downgraded an earlier higher value. It now routes through a single guarded updater that
   **persists the high-water fine+coarse+locked across launches** and only sends increases.
-  (Encoder bit schema unchanged — IOS-24.)
-- **FSR-87 (SKAN): integer `revenue`/`value` silently lost its tier.** `as? Double` returns
+  (Encoder bit schema unchanged.)
+- **SKAN: integer `revenue`/`value` silently lost its tier.** `as? Double` returns
   nil for a native `Int`; now read via `NSNumber` so `["revenue": 50]` encodes the tier.
-- **FSR-4 (sessions): the inactivity-timeout `session_end` timer never fired.**
+- **Sessions: the inactivity-timeout `session_end` timer never fired.**
   `AutoEventsManager` still used `Timer.scheduledTimer` from runloop-less cooperative
-  threads; replaced with a `DispatchSourceTimer` (mirrors the IOS-6 queue fix).
-- **FSR-36 (sessions): timeout measured session AGE, not inactivity, and AutoEvents
+  threads; replaced with a `DispatchSourceTimer` (mirrors the queue fix).
+- **Sessions: timeout measured session AGE, not inactivity, and AutoEvents
   rotation never synced back to the SDK.** Last-activity now anchors the timeout (the stored
   session timestamp is bumped on each tracked event), and AutoEvents pushes a freshly-minted
   session id back to the SDK so payloads/`context.session_id` stay in lockstep.
-- **FSR-5 (deep links): install-moment deep links were dropped if `handleDeepLink` ran
+- **Deep links: install-moment deep links were dropped if `handleDeepLink` ran
   before `initialize()` finished.** URLs are now buffered and replayed before
   `checkAndTrackInstall()`, so `app_install` carries the launch deep link's params.
-- **FSR-33 (identity): pre-init `identify()`/`alias()` were silently dropped** (unlike
+- **Identity: pre-init `identify()`/`alias()` were silently dropped** (unlike
   `track()`). They're now buffered and replayed after init.
-- **FSR-90 (identity): pre-init drain TOCTOU.** `initialized = true` and the buffer
+- **Identity: pre-init drain TOCTOU.** `initialized = true` and the buffer
   snapshot+clear now happen in the same lock critical section, so a racing call can't append
   after the drain and be lost.
-- **FSR-6 (identity): `reset()` never rotated `anonymousId`** — the server's visitor key — so
+- **Identity: `reset()` never rotated `anonymousId`** — the server's visitor key — so
   logout→login on a shared device merged two users server-side. `reset()` now regenerates
-  `anon_<uuid>` (mirrors the Node SDK NODE-6 fix), clears the SKAN window, and drops the
-  web-attribution-checked marker (FSR-93).
-- **FSR-32 (identity): no-arg `alias()` defaulted `previousId` to `visitorId`**, which the
+  `anon_<uuid>` (mirrors the Node SDK), clears the SKAN window, and drops the
+  web-attribution-checked marker.
+- **Identity: no-arg `alias()` defaulted `previousId` to `visitorId`**, which the
   server never keys anonymous events on. Defaults to `currentUserId ?? anonymousId` so the
   link resolves real pre-alias events.
-- **FSR-30 (attribution): web→app merge dropped `gbraid`/`wbraid`/`lyr`.** Added gap-fill
+- **Attribution: web→app merge dropped `gbraid`/`wbraid`/`lyr`.** Added gap-fill
   branches (precedence unchanged).
-- **FSR-34 (attribution): journey last-touch/touchpoints were re-recorded from stale,
+- **Attribution: journey last-touch/touchpoints were re-recorded from stale,
   never-expiring attribution every cold launch**, rolling the 90-day expiry forward and
   inflating `touchpoint_count`. The init-time touch is recorded only when the attribution is
   genuinely new (capture-time gate), carrying the real timestamp.
-- **FSR-35 (attribution): `oppref` was missing from `AttributionData.CodingKeys`** — captured
-  then lost on relaunch. Added (plus a new `dclid` field — FSR-86).
-- **FSR-86 (attribution): `dclid` and other params were whitelisted but never assigned.**
+- **Attribution: `oppref` was missing from `AttributionData.CodingKeys`** — captured
+  then lost on relaunch. Added (plus a new `dclid` field).
+- **Attribution: `dclid` and other params were whitelisted but never assigned.**
   `dclid` is now captured (ingest supports it); the truly-unused whitelist entries
   (`irclickid`, `fb_click_id`, `fb_action_ids`, `fb_action_types`, `click_id`) were removed.
-- **FSR-29 (network): Apple Search Ads fetch had no retry/timeout and blocked init.** Now
+- **Network: Apple Search Ads fetch had no retry/timeout and blocked init.** Now
   bounded at 10s, retries Apple's documented transient 404 up to 3×, and runs detached so it
   no longer gates `initialized` (which was pushing events past the 50-cap pre-init queue).
-- **FSR-31 (network): `429`/`408` were treated as permanent.** They're now retried honoring
+- **Network: `429`/`408` were treated as permanent.** They're now retried honoring
   `Retry-After` without counting against the failure/dead-letter budget.
-- **FSR-92 (network): the `identify()` web-attribution lookup had no request timeout**
+- **Network: the `identify()` web-attribution lookup had no request timeout**
   (inherited 60s). Set to 10s (matching the deferred path).
-- **FSR-88 (queue): the dead-letter store was write-only.** Retry-exhausted events are now
+- **Queue: the dead-letter store was write-only.** Retry-exhausted events are now
   replayed once on the next launch.
-- **FSR-84 (queue): queue init overwrote concurrently-enqueued events with the persisted
+- **Queue: queue init overwrote concurrently-enqueued events with the persisted
   snapshot.** Now merges (persisted-first) instead of assigning.
-- **FSR-89 (queue): `updateConfig` ignored its argument.** It now applies the new config.
-- **FSR-91 (lifecycle): `appWillResignActive` could end the NEXT background task mid-flush.**
+- **Queue: `updateConfig` ignored its argument.** It now applies the new config.
+- **Lifecycle: `appWillResignActive` could end the NEXT background task mid-flush.**
   The task id is captured locally and exactly that id is ended (matches the terminate path).
 
 ### Notes
-- **FSR-25 (unchanged by design):** anonymous events still send `userId = visitorId`
+- **Unchanged by design:** anonymous events still send `userId = visitorId`
   (`DatalyrHTTPClient.transformForServerAPI`) — a shared server-side contract the web→app
   lyr bridge may depend on. Left as-is.
 

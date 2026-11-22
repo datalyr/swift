@@ -21,7 +21,7 @@ internal protocol Storage {
 
 /// Storage manager for Datalyr SDK using UserDefaults.
 ///
-/// IOS-23: a Keychain path used to live here and was **unreachable**.
+/// A Keychain path used to live here and was **unreachable**.
 /// `isSensitiveKey` compared against unprefixed names ("user_id", "visitor_id",
 /// …) while every caller passes a `StorageKeys` constant, which is already
 /// prefixed ("datalyr_user_id" — see DatalyrUtils.swift). The comparison was

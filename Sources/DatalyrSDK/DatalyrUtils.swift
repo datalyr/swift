@@ -35,8 +35,8 @@ internal func errorLog(_ message: String, error: Error? = nil) {
 
 // MARK: - Validation Utilities
 
-/// Normalize an event name for cross-SDK parity (mirrors the RN/web fleet's `normalizeEventName`,
-/// TR-20a): trim, then collapse any run of whitespace to a single underscore, so
+/// Normalize an event name for cross-SDK parity (mirrors the RN/web fleet's `normalizeEventName`):
+/// trim, then collapse any run of whitespace to a single underscore, so
 /// `track("Order Completed")` records as `Order_Completed` on iOS too instead of being silently
 /// dropped by `validateEventName`. `$`-prefixed system names and dot/hyphen names are untouched.
 internal func normalizeEventName(_ eventName: String) -> String {
@@ -71,7 +71,7 @@ internal func validateEventName(_ eventName: String) -> Bool {
 internal func validateEventData(_ eventData: EventData?) -> Bool {
     guard let eventData = eventData else { return true }
 
-    // FSR-1: JSONSerialization.data(withJSONObject:) raises an *Objective-C*
+    // JSONSerialization.data(withJSONObject:) raises an *Objective-C*
     // NSInvalidArgumentException — NOT a Swift error — for non-JSON values like
     // Date/URL/UUID. A do/catch cannot catch that, so calling it on the raw caller
     // dict crashes the HOST APP (e.g. track("x", eventData: ["d": Date()])).
@@ -111,7 +111,7 @@ internal func validateEventData(_ eventData: EventData?) -> Bool {
 /// dictionary. Mirrors AnyCodable's encoding (Date→ISO8601, URL→absoluteString) so
 /// the value-shape matches what actually ships on the wire. Used to keep
 /// JSONSerialization.data(withJSONObject:) from raising an uncatchable NSException
-/// (FSR-1). Values that can't be represented are dropped rather than crashing.
+///. Values that can't be represented are dropped rather than crashing.
 internal func sanitizeForJSONObject(_ dict: [String: Any]) -> [String: Any] {
     var result: [String: Any] = [:]
     for (key, value) in dict {

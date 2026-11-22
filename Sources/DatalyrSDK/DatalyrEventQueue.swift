@@ -11,7 +11,7 @@ internal struct QueueConfig {
     let maxRetryCount: Int
     
     init(
-        maxQueueSize: Int = 1000, // TR-05: was 100 — an offline period producing >100 events lost everything beyond the newest 100
+        maxQueueSize: Int = 1000, // was 100 — an offline period producing >100 events lost everything beyond the newest 100
         batchSize: Int = 10,
         flushInterval: TimeInterval = 30.0,
         maxRetryCount: Int = 3
@@ -28,20 +28,20 @@ internal struct QueueConfig {
 /// Event queue for offline storage and batching
 internal class DatalyrEventQueue {
     private let httpClient: DatalyrHTTPClient
-    // var (was let): updateConfig() now actually applies the new config (FSR-89). Mutated only
+    // var (was let): updateConfig() now actually applies the new config. Mutated only
     // under queueLock so concurrent reads on the processing path see a consistent value.
     private var config: QueueConfig
     private let storage = DatalyrStorage.shared
     private var queue: [QueuedEvent] = []
     // DispatchSourceTimer (not Timer): the queue initializes on a cooperative-pool Task with
     // no running RunLoop, so a Timer.scheduledTimer registered there would NEVER fire. A
-    // dispatch-source timer on processingQueue fires regardless of any run loop. (IOS-6)
+    // dispatch-source timer on processingQueue fires regardless of any run loop.
     private var flushTimer: DispatchSourceTimer?
     private var _isProcessing = false
     private var _isOnline = true
 
     // Drives _isOnline from real connectivity so the offline queue actually holds events
-    // during an outage instead of burning the retry budget toward dead-letter. (IOS-15)
+    // during an outage instead of burning the retry budget toward dead-letter.
     private let pathMonitor = NWPathMonitor()
     private let monitorQueue = DispatchQueue(label: "com.datalyr.network-monitor")
 
@@ -85,7 +85,7 @@ internal class DatalyrEventQueue {
         let shouldFlush: Bool = queueLock.withLock {
             // Check queue size limit
             if queue.count >= config.maxQueueSize {
-                // TR-05: an overflow used to removeFirst() (the OLDEST event — i.e. the head of
+                // an overflow used to removeFirst() (the OLDEST event — i.e. the head of
                 // the offline backlog, often a purchase) and silently drop it. Evict the oldest
                 // NON-critical event instead (keep revenue/conversion events), and dead-letter
                 // the evicted one so it's replayed on the next launch rather than lost forever.
@@ -117,7 +117,7 @@ internal class DatalyrEventQueue {
         }
     }
 
-    /// TR-05: revenue/conversion events protected from queue-overflow eviction — the offline
+    /// revenue/conversion events protected from queue-overflow eviction — the offline
     /// queue exists precisely to hold these, so evict cheaper analytics events first. Matches
     /// on the canonical revenue event names or any value/revenue-bearing eventData.
     private static func isCriticalEvent(_ event: QueuedEvent) -> Bool {
@@ -125,7 +125,7 @@ internal class DatalyrEventQueue {
         // Track-3 review P2: `app_install` carries no value/revenue key, so it was classified
         // NON-critical and could be evicted from a large first-launch offline backlog (then
         // pushed out of deadLetter's suffix(100)) — permanently losing install attribution, the
-        // exact loss TR-05/TR-21 target. Protect the install family alongside revenue events.
+        // exact loss the overflow guard targets. Protect the install family alongside revenue events.
         if name.contains("purchase") || name.contains("subscribe") || name.contains("checkout") || name.contains("install") {
             return true
         }
@@ -186,7 +186,7 @@ internal class DatalyrEventQueue {
     
     /// Update queue configuration
     func updateConfig(_ newConfig: QueueConfig) {
-        // FSR-89: actually APPLY newConfig — the old body ignored its argument and just
+        // actually APPLY newConfig — the old body ignored its argument and just
         // restarted the timer with the SAME (old) interval, so flush interval / batch size /
         // retry budget never changed. Assign under the lock so the processing path sees it
         // consistently, then restart the timer to pick up the new flush interval.
@@ -221,7 +221,7 @@ internal class DatalyrEventQueue {
     private func initializeQueue() async {
         if let persistedQueue = await storage.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) {
             let count = queueLock.withLock {
-                // FSR-84: PREPEND the persisted backlog instead of overwriting `queue`. The
+                // PREPEND the persisted backlog instead of overwriting `queue`. The
                 // queue's init Task races SDK.initialize, which can enqueue events (pre-init
                 // backlog, app_install, session_start) before this load runs; a wholesale
                 // `queue = persistedQueue` would silently drop those — and the next persistQueue()
@@ -232,7 +232,7 @@ internal class DatalyrEventQueue {
             debugLog("Loaded \(count) events from storage")
         }
 
-        // FSR-88: replay the dead-letter store ONCE per launch. deadLetter() previously only
+        // replay the dead-letter store ONCE per launch. deadLetter() previously only
         // wrote to StorageKeys.deadLetterQueue and nothing ever read it ("recoverable for
         // replay" was false) — so an event that exhausted 3 retries (transient outage / temporary
         // 401) was permanently lost. Re-enqueue with retryCount reset and clear the store, giving
@@ -269,7 +269,7 @@ internal class DatalyrEventQueue {
         startNetworkMonitor()
     }
 
-    /// Drive online/offline from real network reachability (IOS-15).
+    /// Drive online/offline from real network reachability.
     private func startNetworkMonitor() {
         // Don't run a live reachability monitor under XCTest — tests drive online/offline
         // explicitly via setOnlineStatus(), and a monitor flipping the flag back to online
@@ -297,7 +297,7 @@ internal class DatalyrEventQueue {
 
         // Drain in batches until the queue is empty or a batch makes no forward progress.
         // processQueueInternal sends only one batchSize-sized batch; without this loop a
-        // manual flush() of a 100-event backlog would send just the first 10 (IOS-13).
+        // manual flush() of a 100-event backlog would send just the first 10.
         // Progress check (a batch must actually remove events) prevents a busy-loop when
         // events are failing-and-requeued (transient outage) — successes and dead-letters both
         // remove events, retried-but-not-dropped events don't, so we stop and let the timer
@@ -379,7 +379,7 @@ internal class DatalyrEventQueue {
 
     /// Park a retry-exhausted event in a capped dead-letter store instead of silently
     /// dropping it — visible (errorLog above) and replayed once on the next launch by
-    /// initializeQueue() (FSR-88), so a transient outage that beats the retry budget gets
+    /// initializeQueue(), so a transient outage that beats the retry budget gets
     /// another delivery attempt rather than being lost.
     private func deadLetter(_ event: QueuedEvent, reason: Error) async {
         var dl = (await storage.getCodableArray(StorageKeys.deadLetterQueue, type: QueuedEvent.self)) ?? []
