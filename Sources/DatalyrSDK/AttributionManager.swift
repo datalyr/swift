@@ -395,7 +395,13 @@ internal class AttributionManager {
         return true
     }
 
-    /// ATT status of the last `att_not_authorized` answer, or nil when the last answer was
+    /// False once the server has answered definitively. Gates the timeout retry, which
+    /// belongs to an attempt already counted and so skips the attempt cap.
+    func isDeferredLookupOpen() async -> Bool {
+        await storage.getBool(StorageKeys.deferredLookupResolved) != true
+    }
+
+        /// ATT status of the last `att_not_authorized` answer, or nil when the last answer was
     /// anything else (or there was none). Gates only the re-run on ATT grant.
     func deferredLookupRefusedATTStatus() async -> UInt? {
         guard let v = await storage.getDouble(StorageKeys.deferredLookupRefusedATTStatus), v >= 0 else { return nil }
@@ -640,12 +646,19 @@ internal enum DeferredLookup {
     /// The JSON body for POST /attribution/deferred-lookup. `att_status` is the live ATT
     /// status (0 notDetermined, 1 restricted, 2 denied, 3 authorized) as a plain Int — the
     /// server compares it numerically.
+    ///
+    /// `anonymous_id` is the SDK's own anonymous id, the one every event already
+    /// carries. The server keys its one-click-one-install claim on it (`device:<id>`), so a
+    /// repeat lookup from the same install is recognised as the same device instead of
+    /// being refused as a second install. The server ignores ids over 128 characters, so
+    /// those are not sent.
     static func requestBody(
         osVersion: String,
         deviceModel: String,
         timezone: String,
         language: String?,
-        attStatus: UInt
+        attStatus: UInt,
+        anonymousId: String? = nil
     ) -> [String: Any] {
         var body: [String: Any] = [
             "platform": "ios",
@@ -657,7 +670,58 @@ internal enum DeferredLookup {
         if let language = language, !language.isEmpty {
             body["language"] = language
         }
+        if let anonymousId = anonymousId, !anonymousId.isEmpty, anonymousId.count <= 128 {
+            body["anonymous_id"] = anonymousId
+        }
         return body
+    }
+
+    /// Seconds the device waits for the lookup answer (URLRequest.timeoutInterval). The
+    /// server stops its own matching at 8 s, so 10 s leaves about 2 s for the network.
+    static let requestTimeout: TimeInterval = 10
+
+    /// A timed-out lookup is sent once more only in the first hour after install: the
+    /// window in which a click is fresh and the user is still in the app. At launch the
+    /// retry runs in the background after `app_install`, so it never lengthens initialize().
+    /// Safe because the request carries `anonymous_id`, so the server's click claim
+    /// treats the second request as the same device (identity.js takeIpMatchedClick:
+    /// same `device:` holder → ok).
+    static let timeoutRetryMaxInstallAgeMinutes: Double = 60
+
+    static func shouldRetryAfterTimeout(_ error: Error, installAgeMinutes: Double?) -> Bool {
+        guard let urlError = error as? URLError, urlError.code == .timedOut else { return false }
+        guard let age = installAgeMinutes else { return false }
+        return age < timeoutRetryMaxInstallAgeMinutes
+    }
+
+    // MARK: Failure fields
+    //
+    // What the `request_failed` outcome event says about a lookup that got no usable
+    // answer: an error class, plus the URLError code or the HTTP status. Never a URL, a
+    // header, or any identifier.
+
+    /// A transport failure (no HTTP answer): `timeout` for URLError.timedOut, else `network`.
+    static func failureFields(forTransportError error: Error) -> [String: Any] {
+        guard let urlError = error as? URLError else { return ["error_class": "network"] }
+        return [
+            "error_class": urlError.code == .timedOut ? "timeout" : "network",
+            "error_code": urlError.code.rawValue,
+        ]
+    }
+
+    /// An HTTP answer other than 200: `http_4xx`, `http_5xx`, … plus the status.
+    static func failureFields(forHTTPStatus statusCode: Int) -> [String: Any] {
+        ["error_class": "http_\(statusCode / 100)xx", "http_status": statusCode]
+    }
+
+    /// A response that is not HTTP at all.
+    static func failureFieldsForNonHTTPResponse() -> [String: Any] {
+        ["error_class": "network"]
+    }
+
+        /// A 200 whose body is not a JSON object.
+    static func failureFieldsForUnreadableBody() -> [String: Any] {
+        ["error_class": "decode"]
     }
 
     /// Disposition of a non-200 response. 5xx/408/429 are transient; anything else is
