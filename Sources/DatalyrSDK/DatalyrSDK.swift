@@ -331,6 +331,11 @@ public class DatalyrSDK {
         // also records the launch's baseline ATT status, so a later grant is seen as a change.
         refreshATTStatus()
 
+        // From here to the end, events are saved to the queue and not sent inline, so a
+        // reachable but hung or refusing endpoint (captive Wi-Fi, an ingest outage) cannot
+        // hold initialize() for the session timeout. They are sent, in order, right after.
+        eventQueue?.holdImmediateFlush()
+
         // Mark as initialized AND snapshot+clear the pre-init buffers in the SAME critical
         // section track()/identify()/alias() use. Otherwise a concurrent call that
         // read initialized==false could append AFTER the drain and be lost forever. Setting
@@ -393,6 +398,9 @@ public class DatalyrSDK {
 
         // Register for attribution tracking (AdAttributionKit on iOS 17.4+, SKAdNetwork otherwise)
         await UnifiedAttributionTracker.shared.register()
+
+        // Send what start-up saved, in the background.
+        eventQueue?.releaseImmediateFlush()
 
         debugLog("Datalyr SDK initialized successfully", data: [
             "workspaceId": config.workspaceId,
