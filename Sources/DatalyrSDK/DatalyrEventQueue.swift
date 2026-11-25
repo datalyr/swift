@@ -162,7 +162,7 @@ internal class DatalyrEventQueue {
             debugLog("Event queued: \(payload.eventName) (queue size: \(queue.count))")
 
             // Check if we should flush (while still holding lock)
-            return _isOnline && !_isProcessing
+            return _isOnline && !_isProcessing && _holdDepth == 0
         }
 
         // Dead-letter the evicted event (outside the lock — deadLetter is async).
@@ -199,6 +199,26 @@ internal class DatalyrEventQueue {
         return false
     }
     
+    /// While held, enqueue() saves the event and returns without sending it: SDK start-up
+    /// holds the queue so initialize() never waits on the event endpoint. flush(), the timer
+    /// and the reachability monitor still send. Under queueLock.
+    private var _holdDepth = 0
+
+    func holdImmediateFlush() {
+        queueLock.withLock { _holdDepth += 1 }
+    }
+
+    /// Ends a hold. Returns the background send of what was saved during it (tests await it).
+    @discardableResult
+    func releaseImmediateFlush() -> Task<Void, Never>? {
+        let shouldProcess: Bool = queueLock.withLock {
+            _holdDepth = max(_holdDepth - 1, 0)
+            return _holdDepth == 0 && _isOnline && !_isProcessing && !queue.isEmpty
+        }
+        guard shouldProcess else { return nil }
+        return Task { [weak self] in await self?.processQueue() }
+    }
+
     /// Manually flush the queue
     func flush() async {
         debugLog("Manual flush requested")
