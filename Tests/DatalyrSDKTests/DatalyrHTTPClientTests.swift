@@ -26,6 +26,149 @@ final class DatalyrHTTPClientTests: XCTestCase {
         return DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
     }
 
+    // MARK: - Tracking-domain routing (PrivacyInfo.xcprivacy lists tracking.datalyr.com)
+    //
+    // iOS blocks tracking.datalyr.com unless the ATT status is authorized at the time of
+    // the request, so the host is chosen from the LIVE status on every send attempt. No
+    // test here sends a request: they build it with createRequest and read it.
+
+    private static let realIDFA = "ABCDEF01-2345-6789-ABCD-EF0123456789"
+
+    /// An event as the SDK builds it while ATT is authorized.
+    private func authorizedEventData(idfa: String = realIDFA) -> [String: Any] {
+        [
+            "idfa": idfa,
+            "att_status": UInt(3),
+            "advertiser_tracking_enabled": true,
+            "alart": "applovin_user_1",
+            "advertiser_data": ["idfa": idfa, "att_status": UInt(3), "tracking_authorized": true] as [String: Any],
+            "plan": "pro"
+        ]
+    }
+
+    private func routingPayload(_ eventData: [String: Any]?) -> EventPayload {
+        EventPayload(
+            workspaceId: "ws_1", visitorId: "vis_1", anonymousId: "anon_1",
+            sessionId: "sess_1", eventId: UUID().uuidString, eventName: "test_event",
+            eventData: eventData
+        )
+    }
+
+    private func routingClient(attStatus: UInt) -> (DatalyrHTTPClient, StatusBox) {
+        let box = StatusBox(attStatus)
+        let client = createTestClient(debug: false)
+        client.attStatusProvider = { box.value }
+        return (client, box)
+    }
+
+    private final class StatusBox {
+        var value: UInt
+        init(_ v: UInt) { value = v }
+    }
+
+    private func properties(of request: URLRequest) throws -> [String: Any] {
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        return try XCTUnwrap(json["properties"] as? [String: Any])
+    }
+
+    func testAuthorizedEventWithIDFAGoesToTrackingDomainWithIdKept() throws {
+        let (client, _) = routingClient(attStatus: 3)
+        let request = try client.createRequest(for: routingPayload(authorizedEventData()))
+        XCTAssertEqual(request.url?.absoluteString, "https://tracking.datalyr.com/track")
+        let props = try properties(of: request)
+        XCTAssertEqual(props["idfa"] as? String, Self.realIDFA)
+        XCTAssertEqual(props["att_status"] as? Int, 3)
+        XCTAssertEqual(props["advertiser_tracking_enabled"] as? Bool, true)
+        XCTAssertEqual(props["alart"] as? String, "applovin_user_1")
+        XCTAssertEqual((props["advertiser_data"] as? [String: Any])?["idfa"] as? String, Self.realIDFA)
+    }
+
+    func testStaleIDFAWhenNotAuthorizedGoesToRegularHostWithIdRemoved() throws {
+        for status: UInt in [0, 1, 2] {   // notDetermined, restricted, denied
+            let (client, _) = routingClient(attStatus: status)
+            let request = try client.createRequest(for: routingPayload(authorizedEventData()))
+            XCTAssertEqual(request.url?.absoluteString, "https://api.datalyr.com", "status \(status)")
+            let props = try properties(of: request)
+            XCTAssertNil(props["idfa"], "status \(status)")
+            XCTAssertNil(props["alart"], "status \(status)")
+            XCTAssertEqual(props["att_status"] as? Int, Int(status))
+            XCTAssertEqual(props["advertiser_tracking_enabled"] as? Bool, false)
+            let advertiser = try XCTUnwrap(props["advertiser_data"] as? [String: Any])
+            XCTAssertNil(advertiser["idfa"], "status \(status)")
+            XCTAssertEqual(advertiser["att_status"] as? Int, Int(status))
+            XCTAssertEqual(advertiser["tracking_authorized"] as? Bool, false)
+            XCTAssertEqual(props["plan"] as? String, "pro", "other properties are kept")
+            // No IDFA anywhere in the body.
+            let body = String(data: try XCTUnwrap(request.httpBody), encoding: .utf8) ?? ""
+            XCTAssertFalse(body.contains(Self.realIDFA), "status \(status)")
+        }
+    }
+
+    func testEventWithoutIDFAGoesToRegularEndpoint() throws {
+        let (client, _) = routingClient(attStatus: 3)
+        XCTAssertEqual(client.endpointFor(routingPayload(["att_status": UInt(3)])), "https://api.datalyr.com")
+        XCTAssertEqual(client.endpointFor(routingPayload(nil)), "https://api.datalyr.com")
+        let request = try client.createRequest(for: routingPayload(["att_status": UInt(3), "plan": "pro"]))
+        XCTAssertEqual(request.url?.absoluteString, "https://api.datalyr.com")
+        XCTAssertEqual(try properties(of: request)["att_status"] as? Int, 3, "authorized events are not changed")
+    }
+
+    func testEmptyOrAllZeroIDFANeverCountsAsAnIDFA() {
+        let (client, _) = routingClient(attStatus: 3)
+        // An app can pass its own `idfa` in eventData; the all-zero value is what iOS
+        // returns without tracking permission.
+        XCTAssertEqual(client.endpointFor(routingPayload(["idfa": ""])), "https://api.datalyr.com")
+        XCTAssertEqual(client.endpointFor(routingPayload(["idfa": DatalyrHTTPClient.zeroIDFA])), "https://api.datalyr.com")
+        XCTAssertEqual(client.endpointFor(routingPayload(["idfa": "00000000-0000-0000-0000-000000000000"])), "https://api.datalyr.com")
+        XCTAssertEqual(client.endpointFor(routingPayload(["idfa": 123])), "https://api.datalyr.com")
+    }
+
+    func testQueuedEventIsRoutedByTheStatusAtEachSendAttempt() throws {
+        // Built while authorized, then the user turns tracking off before (re)sending,
+        // then on again: each attempt follows the status of that moment.
+        let (client, box) = routingClient(attStatus: 3)
+        let payload = routingPayload(authorizedEventData())
+        XCTAssertEqual(try client.createRequest(for: payload).url?.absoluteString, "https://tracking.datalyr.com/track")
+        box.value = 2
+        let denied = try client.createRequest(for: payload)
+        XCTAssertEqual(denied.url?.absoluteString, "https://api.datalyr.com")
+        XCTAssertNil(try properties(of: denied)["idfa"])
+        box.value = 3
+        XCTAssertEqual(try client.createRequest(for: payload).url?.absoluteString, "https://tracking.datalyr.com/track")
+    }
+
+    func testStoredQueueRoundTripIsRoutedAndStrippedByTheCurrentStatus() throws {
+        // The queue is stored with JSONEncoder and reloaded with JSONDecoder
+        // (DatalyrStorage). After the reload the id sits inside AnyCodable as a String.
+        let stored = [QueuedEvent(payload: routingPayload(authorizedEventData()), timestamp: 1_700_000_000)]
+        let data = try JSONEncoder().encode(stored)
+        let reloaded = try JSONDecoder().decode([QueuedEvent].self, from: data)
+        let payload = try XCTUnwrap(reloaded.first?.payload)
+
+        let (client, box) = routingClient(attStatus: 3)
+        let authorized = try client.createRequest(for: payload)
+        XCTAssertEqual(authorized.url?.absoluteString, "https://tracking.datalyr.com/track")
+        XCTAssertEqual(try properties(of: authorized)["idfa"] as? String, Self.realIDFA)
+
+        box.value = 0
+        let notDetermined = try client.createRequest(for: payload)
+        XCTAssertEqual(notDetermined.url?.absoluteString, "https://api.datalyr.com")
+        let props = try properties(of: notDetermined)
+        XCTAssertNil(props["idfa"])
+        XCTAssertNil(props["alart"])
+        XCTAssertNil((props["advertiser_data"] as? [String: Any])?["idfa"])
+        XCTAssertEqual(props["att_status"] as? Int, 0)
+    }
+
+    func testIDFAEventUsesOwnEndpointWithoutServerTracking() {
+        let config = HTTPClientConfig(apiKey: "test_api_key_dk_12345", useServerTracking: false)
+        let client = DatalyrHTTPClient(endpoint: "https://legacy.example.invalid/track", config: config)
+        client.attStatusProvider = { 3 }
+        let payload = routingPayload(["idfa": Self.realIDFA])
+        XCTAssertEqual(client.endpointFor(payload), "https://legacy.example.invalid/track")
+    }
+
     // MARK: - Server-track wire-contract (the default useServerTracking=true path)
 
     func testServerTrackWireShape() {
