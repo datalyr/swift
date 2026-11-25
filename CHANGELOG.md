@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.3.0]
+## [2.3.0] - 2026-11-25
 
 Minor version: event retries (#9), the install-lookup change (#8), the SKAdNetwork fixes and the main-thread fix, released together.
 
