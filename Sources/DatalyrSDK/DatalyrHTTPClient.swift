@@ -244,27 +244,66 @@ internal class DatalyrHTTPClient {
         return min(max(seconds, 0), Self.maxRetryAfter)
     }
     
-    /// Create HTTP request for event payload
     /// Apple privacy manifest: NSPrivacyTracking=true REQUIRES a non-empty
-    /// NSPrivacyTrackingDomains, and iOS fails every request to a listed host until the
-    /// user grants ATT. The manifest lists ONLY tracking.datalyr.com, and only events
-    /// that carry the IDFA (ATT already authorized) are sent there; everything else goes
-    /// to the regular endpoint and is never blocked. Same backend handler.
+    /// NSPrivacyTrackingDomains, and iOS fails every request to a listed host unless the
+    /// app's ATT status is authorized AT THE TIME OF THE REQUEST. The manifest lists ONLY
+    /// tracking.datalyr.com. An event goes there only when it carries a real IDFA AND the
+    /// live ATT status is authorized; everything else goes to the regular endpoint, which
+    /// is never blocked. Same backend handler.
     static let trackingEndpoint = "https://tracking.datalyr.com/track"
 
+    /// The all-zero IDFA iOS returns when tracking is not available. Not an identifier.
+    static let zeroIDFA = "00000000-0000-0000-0000-000000000000"
+
+    /// Source of the ATT status, read on EVERY send attempt (first send, retries and
+    /// dead-letter replays), never the status cached when the event was built.
+    /// Replaceable in tests.
+    var attStatusProvider: () -> UInt = PlatformIntegrationManager.liveTrackingAuthorizationStatus
+
+    /// A real IDFA on the payload: non-empty and not the all-zero value.
+    static func carriesIDFA(_ payload: EventPayload) -> Bool {
+        // eventData holds AnyCodable wrappers: read the wrapped value (a plain `as? String`
+        // on the wrapper never matches, which sent every IDFA event to the regular endpoint).
+        guard let idfa = payload.eventData?["idfa"]?.value as? String else { return false }
+        return !idfa.isEmpty && idfa != zeroIDFA
+    }
+
     func endpointFor(_ payload: EventPayload) -> String {
+        return endpointFor(payload, attStatus: attStatusProvider())
+    }
+
+    func endpointFor(_ payload: EventPayload, attStatus: UInt) -> String {
         guard config.useServerTracking else { return endpoint }
-        // eventData holds AnyCodable wrappers: read the wrapped value. A plain
-        // `as? String` on the wrapper never matches, which sent every IDFA event to
-        // the regular endpoint instead of the declared tracking domain.
-        if let idfa = payload.eventData?["idfa"]?.value as? String, !idfa.isEmpty {
+        if attStatus == 3, DatalyrHTTPClient.carriesIDFA(payload) {
             return DatalyrHTTPClient.trackingEndpoint
         }
         return endpoint
     }
 
-    private func createRequest(for payload: EventPayload) throws -> URLRequest {
-        guard let url = URL(string: endpointFor(payload)) else {
+    /// Fields the SDK attaches only while ATT is authorized. When the live status is no
+    /// longer authorized at send time (an event built or queued before the user turned
+    /// tracking off), they are removed so the regular host never receives them, and the
+    /// event's ATT fields are set to the live status so the server does not treat it as
+    /// consented.
+    static func removeTrackingOnlyFields(from properties: inout [String: Any], liveAttStatus: UInt) {
+        properties.removeValue(forKey: "idfa")
+        for key in AttributionData.appUserIdKeys { properties.removeValue(forKey: key) }
+        let live = Int(liveAttStatus)
+        if properties["att_status"] != nil { properties["att_status"] = live }
+        if properties["advertiser_tracking_enabled"] != nil { properties["advertiser_tracking_enabled"] = false }
+        if var advertiser = properties["advertiser_data"] as? [String: Any] {
+            advertiser.removeValue(forKey: "idfa")
+            if advertiser["att_status"] != nil { advertiser["att_status"] = live }
+            if advertiser["tracking_authorized"] != nil { advertiser["tracking_authorized"] = false }
+            properties["advertiser_data"] = advertiser
+        }
+    }
+
+    /// Create the HTTP request for an event payload. Called on every send attempt.
+    func createRequest(for payload: EventPayload) throws -> URLRequest {
+        // One live read per attempt, so the host and the body always agree.
+        let attStatus = attStatusProvider()
+        guard let url = URL(string: endpointFor(payload, attStatus: attStatus)) else {
             throw HTTPError.invalidURL
         }
         
@@ -292,7 +331,11 @@ internal class DatalyrHTTPClient {
         // Transform payload for server-side API if needed
         let requestBody: Data
         if config.useServerTracking {
-            let serverPayload = transformForServerAPI(payload)
+            var serverPayload = transformForServerAPI(payload)
+            if attStatus != 3, var properties = serverPayload["properties"] as? [String: Any] {
+                DatalyrHTTPClient.removeTrackingOnlyFields(from: &properties, liveAttStatus: attStatus)
+                serverPayload["properties"] = properties
+            }
             requestBody = try JSONSerialization.data(withJSONObject: serverPayload)
         } else {
             requestBody = try EventPayload.wireEncoder().encode(payload)
