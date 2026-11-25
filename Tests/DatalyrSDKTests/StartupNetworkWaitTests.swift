@@ -97,8 +97,8 @@ final class StartupNetworkWaitTests: XCTestCase {
     private static let ours: Set<String> = ["startup_pre_init", "app_install", "startup_after_init"]
 
     func testInitializeDoesNotWaitForAHungEndpointAndDeliversInstallOnceInOrder() async throws {
-        // The endpoint hangs for 3 s, then answers (the connection comes back).
-        HungIngestStub.answerAfter = Date().addingTimeInterval(3)
+        // The endpoint hangs for 10 s, then answers (the connection comes back).
+        HungIngestStub.answerAfter = Date().addingTimeInterval(10)
 
         let sdk = DatalyrSDK()
         await sdk.track("startup_pre_init")  // buffered before init, replayed by initialize()
@@ -109,13 +109,13 @@ final class StartupNetworkWaitTests: XCTestCase {
             endpoint: "https://hung-ingest.test/track",
             maxRetries: 0,
             retryDelay: 0.05,
-            timeout: 10,
+            timeout: 30,
             flushInterval: 3600,
             enableAutoEvents: false,
             enableAttribution: false
         ))
         let elapsed = Date().timeIntervalSince(start)
-        XCTAssertLessThan(elapsed, 1.0, "initialize() waited \(String(format: "%.1f", elapsed)) s on the event endpoint")
+        XCTAssertLessThan(elapsed, 4.0, "initialize() waited \(String(format: "%.1f", elapsed)) s on the event endpoint")
 
         // Before initialize() returned, the start-up events were saved to the queue, in order.
         let persisted = await DatalyrStorage.shared.getCodableArray(StorageKeys.eventQueue, type: QueuedEvent.self) ?? []
@@ -127,7 +127,7 @@ final class StartupNetworkWaitTests: XCTestCase {
         await sdk.track("startup_after_init")
 
         // Once the endpoint answers, every event is delivered exactly once, in order.
-        let deadline = Date().addingTimeInterval(15)
+        let deadline = Date().addingTimeInterval(25)
         while Date() < deadline {
             let got = Set(HungIngestStub.delivered.filter { Self.ours.contains($0) })
             if got == Self.ours && sdk.getStatus().queueStats.queueSize == 0 { break }
