@@ -254,7 +254,10 @@ internal class DatalyrHTTPClient {
 
     func endpointFor(_ payload: EventPayload) -> String {
         guard config.useServerTracking else { return endpoint }
-        if let idfa = payload.eventData?["idfa"] as? String, !idfa.isEmpty {
+        // eventData holds AnyCodable wrappers: read the wrapped value. A plain
+        // `as? String` on the wrapper never matches, which sent every IDFA event to
+        // the regular endpoint instead of the declared tracking domain.
+        if let idfa = payload.eventData?["idfa"]?.value as? String, !idfa.isEmpty {
             return DatalyrHTTPClient.trackingEndpoint
         }
         return endpoint

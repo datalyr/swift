@@ -26,6 +26,37 @@ final class DatalyrHTTPClientTests: XCTestCase {
         return DatalyrHTTPClient(endpoint: "https://api.datalyr.com", config: config)
     }
 
+    // MARK: - Tracking-domain routing (PrivacyInfo.xcprivacy lists tracking.datalyr.com)
+
+    private func routingPayload(_ eventData: [String: Any]?) -> EventPayload {
+        EventPayload(
+            workspaceId: "ws_1", visitorId: "vis_1", anonymousId: "anon_1",
+            sessionId: "sess_1", eventId: UUID().uuidString, eventName: "test_event",
+            eventData: eventData
+        )
+    }
+
+    func testEventWithIDFAGoesToTrackingDomain() {
+        let client = createTestClient()
+        let payload = routingPayload(["idfa": "ABCDEF01-2345-6789-ABCD-EF0123456789", "att_status": UInt(3)])
+        XCTAssertEqual(client.endpointFor(payload), DatalyrHTTPClient.trackingEndpoint)
+        XCTAssertEqual(DatalyrHTTPClient.trackingEndpoint, "https://tracking.datalyr.com/track")
+    }
+
+    func testEventWithoutIDFAGoesToRegularEndpoint() {
+        let client = createTestClient()
+        XCTAssertEqual(client.endpointFor(routingPayload(["att_status": UInt(2)])), "https://api.datalyr.com")
+        XCTAssertEqual(client.endpointFor(routingPayload(nil)), "https://api.datalyr.com")
+        XCTAssertEqual(client.endpointFor(routingPayload(["idfa": ""])), "https://api.datalyr.com")
+    }
+
+    func testIDFAEventUsesRegularEndpointWithoutServerTracking() {
+        let config = HTTPClientConfig(apiKey: "test_api_key_dk_12345", useServerTracking: false)
+        let client = DatalyrHTTPClient(endpoint: "https://legacy.example.invalid/track", config: config)
+        let payload = routingPayload(["idfa": "ABCDEF01-2345-6789-ABCD-EF0123456789"])
+        XCTAssertEqual(client.endpointFor(payload), "https://legacy.example.invalid/track")
+    }
+
     // MARK: - Server-track wire-contract (the default useServerTracking=true path)
 
     func testServerTrackWireShape() {
