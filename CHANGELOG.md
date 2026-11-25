@@ -2,32 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.3.0] - 2026-11-25
+
+Minor version: event retries (#9), the install-lookup change (#8), the SKAdNetwork fixes and the main-thread fix, released together.
 
 ### Fixed
+- `initialize()` no longer waits on the event endpoint. When the phone had a network but the endpoint refused or hung the connection (captive Wi-Fi, an ingest outage), `initialize()` waited for the first event send, up to 30 s (the session's 2 × 15 s timeout), before it returned. With no network at all it already returned at once. **Behaviour change:** the events `initialize()` makes (events tracked before it, `session_start`, `$attribution_match`, `app_install`, replayed `identify`/`alias`) are saved to the queue before it returns and sent in the background right after, in the same order, instead of before it returns. `datalyrDidInitialize` therefore fires before they are delivered. Delivery is unchanged: each event is saved before `initialize()` returns, keeps its event id, and is retried like any other event (after 10 failed attempts it moves to the dead-letter store, which is replayed on at most 3 later launches and keeps events for at most 7 days). Events the app tracks while `initialize()` is still running are saved at once and sent when it ends. `initialize()` still waits for the install lookup (at most 10 s) on every launch where the lookup is still owed: the first launch, and up to 3 launches within 7 days of install if earlier attempts failed. On those launches the app's own events can wait up to about 10 s before they are sent. `app_install` can then carry the lookup's match. `track()` and `flush()` outside start-up are unchanged.
 - `initializeWithSKAdNetwork(config:template:)` and `configureWithSKAdNetwork(...)` now keep every field of the caller's config and set only `skadTemplate`. They used to rebuild the config and drop `existingUserHint` and `useServerTracking`, so an existing user on this path was sent as `app_install` instead of `$sdk_first_launch_existing`. **Check your config:** on this SKAdNetwork start-up path `useServerTracking: false` is now honoured, so events go to your own `endpoint` in the older payload shape, as `initialize()` already does. If you set `useServerTracking: false` but still point at DATALYR's endpoint, remove it.
 - `AdAttributionKitBridge.updatePostbackConversionValue`, `updateConversionValue(_:)` and `registerForAttribution()` now use the same stored high-water as the SDK's own conversion-value updates. A value not higher than the last one is skipped without an error, so a conversion value never goes down. A value outside 0-63 passed to `updateConversionValue(_:)` is ignored. A `lockWindow: true` call with a value that is not higher sends the lock at the stored value. A lock sent through the bridge goes to Apple as asked but does not stop later values (SKAN 4 windows 2 and 3). Registration sends its 0/low value once per install and never after a higher value, including the registration `initialize()` runs. Signatures and errors are unchanged.
 - SDK error messages print only when `debug` is on, including the Apple Search Ads fetch error and the "skadTemplate not set" message that `trackPurchase` / `trackSubscription` printed in every app without SKAdNetwork. The one-off warning about ignored configuration options still prints at `initialize()`.
+- Building an event no longer waits for the main thread on iOS. `track()`, and with it `identify()`, `bindProviderIdentity()` and `updateTrackingAuthorization(status:)`, read `UIDevice` / `UIScreen` inside an `async` function, where Swift hops to the main actor for those properties. Each event therefore waited for the main thread. An app that blocked the main thread waiting on one of these calls deadlocked, and events built while main was busy were delayed. The values are now read synchronously on the calling thread, as `getDeviceInfo()` already did. The event properties are unchanged. The session start in auto events had the same wait for `os_version` and is fixed the same way.
 
 ### Changed
 - The two `configure(apiKey:...)` overloads are one function with default arguments. Every earlier call form still compiles and builds the same config.
-
-### Deprecated
-- `getDeferredAttributionData()` and `getLastError()`: both always return nil. They keep working.
-
-Release as **2.2.1** on its own (2.3.0 if shipped with the event-retry change in #9). Version number not bumped yet.
-
-### Changed
 - The deferred web-to-app lookup (`POST /attribution/deferred-lookup`) sends the SDK's `anonymous_id` (the id every event already carries), so the server can tell a repeat lookup from this install apart from another install on the same network.
 - A lookup that gets no usable answer is reported as `$attribution_match` with `reason: request_failed` plus `error_class` (`timeout`, `network`, `http_4xx`, `http_5xx`, `decode`), `error_code` or `http_status`, and `elapsed_ms`. HTTP errors, unreadable answers and non-HTTP responses, which sent no event before, now send this one.
 - A lookup that times out in the first hour after install is sent once more (same counted attempt) in the background after `app_install`. `initialize()` still waits for at most one lookup (10 s), as in 2.2.0. The retry's outcome carries `timeout_retry: true`, and a match it finds is sent as `$web_attribution_matched` after `app_install`.
-
-### Release note
-- Do not re-track an event from `datalyrDidFailToSendEvent`. With the event-retry change (#9), an app that does so would loop on a final refusal: each re-tracked copy is refused again and reported again.
-
-Release as **2.3.0** (or 2.3.0 together with the install-lookup change in #8, which alone would be 2.2.1). Version number not bumped yet.
-
-### Changed
 - Events are kept on a 5xx, 503, 429, 408, timeout or network error (offline, DNS, TLS, cancelled) and retried with the same event id. A send is one request; the queue waits for `Retry-After` (as a minimum, plus 0–25% jitter, capped at 300 s) or a backoff that doubles from `retryDelay` to 300 s. The first request that does not deliver pauses the batch, so an outage is probed with one request at a time.
 - An event moves to the dead-letter store only after 10 failed attempts (about 8–10 minutes; `maxRetries` can raise this, not lower it). 429 and 408 spend no attempt. Before, an event was dead-lettered after about 30 s of 5xx.
 - Any 2xx counts as delivered (before: only 200 and 201; a 202 or 204 was sent again).
@@ -36,14 +26,14 @@ Release as **2.3.0** (or 2.3.0 together with the install-lookup change in #8, wh
 - When the dead-letter store (100) is full, the oldest event that is not a purchase, subscription, checkout, install or value-bearing event is dropped, and counted. Replayed dead letters are saved in the queue before they are removed from the store, so a kill during launch loses nothing.
 - `datalyrDidFailToSendEvent` now also fires for final refusals and for 401/403/404 after 10 minutes.
 
+### Deprecated
+- `getDeferredAttributionData()` and `getLastError()`: both always return nil. They keep working.
+
 ### Added
 - `QueueStats.droppedEvents` and `QueueStats.droppedEventsByReason` (`rejected`, `refused`, `dead_letter_full`, `dead_letter_expired`), kept across launches. `QueuedEvent.authRefusedSince`.
 
 ### Release note
 - Do not re-track an event from `datalyrDidFailToSendEvent`. An app that does so would now loop on a final refusal (400, 413, …): each re-tracked copy is refused again and reported again.
-
-### Fixed
-- Building an event no longer waits for the main thread on iOS. `track()`, and with it `identify()`, `bindProviderIdentity()` and `updateTrackingAuthorization(status:)`, read `UIDevice` / `UIScreen` inside an `async` function, where Swift hops to the main actor for those properties. Each event therefore waited for the main thread. An app that blocked the main thread waiting on one of these calls deadlocked, and events built while main was busy were delayed. The values are now read synchronously on the calling thread, as `getDeviceInfo()` already did. The event properties are unchanged. The session start in auto events had the same wait for `os_version` and is fixed the same way.
 
 ## [2.2.0] - 2026-10-30
 

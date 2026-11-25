@@ -28,19 +28,19 @@ The SDK supports iOS 13 and later.
 
 1. In Xcode, open **File > Add Package Dependencies**.
 2. Enter `https://github.com/datalyr/swift`.
-3. Select version 2.2.0.
+3. Select version 2.3.0.
 4. Add the `DatalyrSDK` product to your app target.
 
 Or add it to `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/datalyr/swift", from: "2.2.0")
+.package(url: "https://github.com/datalyr/swift", from: "2.3.0")
 ```
 
 **CocoaPods:**
 
 ```ruby
-pod 'DatalyrSDK', '~> 2.2.0'
+pod 'DatalyrSDK', '~> 2.3.0'
 ```
 
 Run `pod install`. Then open the generated `.xcworkspace`.
