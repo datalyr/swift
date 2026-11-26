@@ -87,10 +87,12 @@ internal class DatalyrHTTPClient {
     private let endpoint: String
     private let config: HTTPClientConfig
     private let session: URLSession
-    /// Session for the tracking host only. It does not wait for connectivity, so a request
-    /// iOS refuses (the tracking domain is blocked) fails at once and the event falls back to
-    /// the normal host in the same send, instead of waiting out the resource timeout.
-    private let trackingSession: URLSession
+    /// Session for the tracking host and for the fallback to the normal host. It does not
+    /// wait for connectivity: a request iOS refuses (the tracking domain is blocked) fails at
+    /// once and the event falls back in the same send, and the fallback cannot sit waiting for
+    /// the network and then answer after a reconnect (which would start the skip although the
+    /// tracking host never failed with a network present).
+    private let noWaitSession: URLSession
     private let rateLimiter = RateLimiter()
     
     init(endpoint: String, config: HTTPClientConfig) {
@@ -116,7 +118,7 @@ internal class DatalyrHTTPClient {
 
         let trackingConfig = sessionConfig.copy() as! URLSessionConfiguration
         trackingConfig.waitsForConnectivity = false
-        self.trackingSession = URLSession(configuration: trackingConfig)
+        self.noWaitSession = URLSession(configuration: trackingConfig)
     }
 
     #if DEBUG
@@ -157,10 +159,24 @@ internal class DatalyrHTTPClient {
         // normal host now, without the advertising id and with the same event id, rather
         // than hold the queue behind it. A 429 or an answer with Retry-After is the server
         // pacing us: that follows the normal retry rules.
-        let attempt = await perform(prepared.request, on: trackingSession, payload: payload)
+        let attempt = await perform(prepared.request, on: noWaitSession, payload: payload)
         guard Self.fallsBackFromTrackingHost(attempt.response, hasRetryAfter: attempt.hasRetryAfter) else {
+            if Self.isThrottle(attempt.response, hasRetryAfter: attempt.hasRetryAfter) {
+                // The tracking host asks us to wait. The queue honours the wait; after
+                // trackingThrottleFallbackAfter such answers in a row for this event, the skip
+                // starts, so its next attempt (after the wait) goes to the normal host without
+                // the id instead of holding the queue with no end.
+                if noteTrackingThrottle(payload.eventId) >= Self.trackingThrottleFallbackAfter {
+                    clearTrackingThrottle(payload.eventId)
+                    debugLog("Tracking host keeps asking to wait; skipping it for 10 minutes: \(payload.eventName)")
+                    startTrackingHostCoolDown()
+                }
+            } else {
+                clearTrackingThrottle(payload.eventId)
+            }
             return attempt.response
         }
+        clearTrackingThrottle(payload.eventId)
         debugLog("Tracking host failed; sending to the normal host without the advertising id: \(payload.eventName)")
         let fallback: PreparedRequest
         do {
@@ -169,10 +185,11 @@ internal class DatalyrHTTPClient {
             return attempt.response
         }
         await waitForRateLimitSlot()
-        let answer = await perform(fallback.request, on: session, payload: payload)
+        let answer = await perform(fallback.request, on: noWaitSession, payload: payload)
         if answer.response.statusCode != 0 {
-            // The normal host answered while the tracking host did not: skip the tracking host
-            // for a while instead of failing every event there first. Offline never gets here.
+            // The normal host answered at once while the tracking host did not: skip the
+            // tracking host for a while instead of failing every event there first. Offline
+            // (or a reconnect) never gets here: the fallback does not wait for the network.
             startTrackingHostCoolDown()
         }
         return answer.response
@@ -186,6 +203,33 @@ internal class DatalyrHTTPClient {
         if response.statusCode == 429 || hasRetryAfter { return false }
         return response.statusCode >= 400
     }
+
+    /// Throttle answers (429, or any answer with Retry-After) in a row from the tracking host
+    /// for one event, after which the skip starts.
+    static let trackingThrottleFallbackAfter = 3
+
+    static func isThrottle(_ response: HTTPResponse, hasRetryAfter: Bool) -> Bool {
+        guard response.disposition != .delivered, response.statusCode != 0 else { return false }
+        return response.statusCode == 429 || hasRetryAfter
+    }
+
+    /// Per event id, under routeLock. Memory only; an entry is removed on any other answer.
+    private var trackingThrottles: [String: Int] = [:]
+
+    private func noteTrackingThrottle(_ eventId: String) -> Int {
+        routeLock.withLock {
+            let n = (trackingThrottles[eventId] ?? 0) + 1
+            trackingThrottles[eventId] = n
+            return n
+        }
+    }
+
+    private func clearTrackingThrottle(_ eventId: String) {
+        _ = routeLock.withLock { trackingThrottles.removeValue(forKey: eventId) }
+    }
+
+    /// Test support: whether the fallback to the normal host waits for connectivity.
+    var fallbackSessionWaitsForConnectivity: Bool { noWaitSession.configuration.waitsForConnectivity }
 
     /// One request, classified. `hasRetryAfter`: the answer carried a Retry-After header.
     private func perform(_ request: URLRequest, on session: URLSession,
