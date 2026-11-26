@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.1] - Unreleased
+
+### Fixed
+- Events from users who allowed tracking now go to `tracking.datalyr.com`, the tracking domain the privacy manifest declares, with the advertising ID (IDFA). Since 2.1.16 every event went to `ingest.datalyr.com`, because the check that chose the host never read the IDFA. No events were lost.
+- **The advertising ID is sent from the next app launch after the user allows tracking.** iOS opens the tracking domain only to app launches that start with tracking allowed: in the launch where the user taps "Allow", requests to it still fail. So an event goes to `tracking.datalyr.com` only when tracking was allowed when the app launched, is still allowed when the event is sent, and the event carries a real IDFA (an empty or all-zero value never counts). The SDK reads the permission when iOS loads it into the app, before your code runs, so it is correct even if your app shows the prompt before `initialize()`.
+- In the launch where the user allows tracking, events go to `ingest.datalyr.com` at once, without the IDFA, with `att_status` 3. On the next launch the SDK sends `$att_status` once more (`resent: true`) with the IDFA, so the server can join the two. It uses one event id per grant, so a re-send cut short by the app being closed is counted once. Users who had already allowed tracking before this version get no extra event.
+- Events sent without permission are unchanged, byte for byte, except in one short window: an event made before the user answered the prompt, or before tracking was turned off, and sent after it, has `att_status` and `advertiser_tracking_enabled` (also in `advertiser_data`) set to the permission at the moment it is sent, and no IDFA or AppLovin `alart`. This also covers retries and events saved by an earlier launch.
+- If `tracking.datalyr.com` does not answer, or answers an HTTP error other than 429, the event is sent to `ingest.datalyr.com` at once, without the IDFA and with the same event id, and the tracking domain is skipped for 10 minutes. A 429 or an answer with `Retry-After` follows the normal retry rules. A blocked request never holds later events.
+- `initialize()` timing is unchanged from 2.3.0. With `useServerTracking: false` every event still goes to your own `endpoint`, unchanged.
+
 ## [2.3.0] - 2026-11-25
 
 Minor version: event retries (#9), the install-lookup change (#8), the SKAdNetwork fixes and the main-thread fix, released together.
