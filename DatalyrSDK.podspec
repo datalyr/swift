@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'DatalyrSDK'
-  s.version          = '2.3.0'
+  s.version          = '2.3.1'
   s.summary          = 'Server-side attribution tracking SDK for iOS'
   s.description      = <<-DESC
     Datalyr SDK for iOS with server-side tracking API support.
@@ -20,11 +20,13 @@ Pod::Spec.new do |s|
   s.ios.deployment_target = '13.0'
   s.swift_version    = '5.0'
 
-  s.source_files     = 'Sources/DatalyrSDK/**/*.swift'
+  s.source_files     = 'Sources/DatalyrSDK/**/*.swift', 'Sources/DatalyrSDKLaunch/**/*.{h,m}'
+  # Reads the ATT status when the SDK is loaded (before main()); see TrackingStatusAtStart.swift.
+  s.public_header_files = 'Sources/DatalyrSDKLaunch/include/*.h'
   # Ship the privacy manifest to CocoaPods installs (SPM already does via Package.swift).
   s.resource_bundles = { 'DatalyrSDK' => ['Sources/DatalyrSDK/PrivacyInfo.xcprivacy'] }
   s.frameworks       = 'Foundation', 'UIKit', 'StoreKit'
-  s.weak_frameworks  = 'AdServices', 'AdAttributionKit'
+  s.weak_frameworks  = 'AdServices', 'AdAttributionKit', 'AppTrackingTransparency'
 
   s.requires_arc     = true
 end

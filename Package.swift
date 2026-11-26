@@ -17,9 +17,14 @@ let package = Package(
     ],
     dependencies: [],
     targets: [
+        // Reads the ATT status when the SDK is loaded into the app process (before main()).
+        .target(
+            name: "DatalyrSDKLaunch",
+            path: "Sources/DatalyrSDKLaunch"
+        ),
         .target(
             name: "DatalyrSDK",
-            dependencies: [],
+            dependencies: ["DatalyrSDKLaunch"],
             path: "Sources/DatalyrSDK",
             resources: [
                 .copy("PrivacyInfo.xcprivacy")

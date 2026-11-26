@@ -87,6 +87,12 @@ internal class DatalyrHTTPClient {
     private let endpoint: String
     private let config: HTTPClientConfig
     private let session: URLSession
+    /// Session for the tracking host and for the fallback to the normal host. It does not
+    /// wait for connectivity: a request iOS refuses (the tracking domain is blocked) fails at
+    /// once and the event falls back in the same send, and the fallback cannot sit waiting for
+    /// the network and then answer after a reconnect (which would start the skip although the
+    /// tracking host never failed with a network present).
+    private let noWaitSession: URLSession
     private let rateLimiter = RateLimiter()
     
     init(endpoint: String, config: HTTPClientConfig) {
@@ -109,6 +115,10 @@ internal class DatalyrHTTPClient {
         #endif
 
         self.session = URLSession(configuration: sessionConfig)
+
+        let trackingConfig = sessionConfig.copy() as! URLSessionConfiguration
+        trackingConfig.waitsForConnectivity = false
+        self.noWaitSession = URLSession(configuration: trackingConfig)
     }
 
     #if DEBUG
@@ -132,46 +142,130 @@ internal class DatalyrHTTPClient {
         await waitForRateLimitSlot()
         debugLog("Sending event: \(payload.eventName)")
 
-        let request: URLRequest
+        let prepared: PreparedRequest
         do {
-            request = try createRequest(for: payload)
+            prepared = try prepareRequest(for: payload)
         } catch {
             // The payload cannot be encoded: no retry will ever change that.
             errorLog("Event could not be encoded: \(payload.eventName)")
             return HTTPResponse(success: false, statusCode: 0, error: error, disposition: .rejected)
         }
+        guard prepared.viaTrackingHost else {
+            return await perform(prepared.request, on: session, payload: payload).response
+        }
 
+        // Second line of defence: the tracking host did not take the event (iOS blocked it,
+        // nothing answered, or something in front of it answered an error). Send it to the
+        // normal host now, without the advertising id and with the same event id, rather
+        // than hold the queue behind it. A 429 or an answer with Retry-After is the server
+        // pacing us: that follows the normal retry rules.
+        let attempt = await perform(prepared.request, on: noWaitSession, payload: payload)
+        guard Self.fallsBackFromTrackingHost(attempt.response, hasRetryAfter: attempt.hasRetryAfter) else {
+            if Self.isThrottle(attempt.response, hasRetryAfter: attempt.hasRetryAfter) {
+                // The tracking host asks us to wait. The queue honours the wait; after
+                // trackingThrottleFallbackAfter such answers in a row for this event, the skip
+                // starts, so its next attempt (after the wait) goes to the normal host without
+                // the id instead of holding the queue with no end.
+                if noteTrackingThrottle(payload.eventId) >= Self.trackingThrottleFallbackAfter {
+                    clearTrackingThrottle(payload.eventId)
+                    debugLog("Tracking host keeps asking to wait; skipping it for 10 minutes: \(payload.eventName)")
+                    startTrackingHostCoolDown()
+                }
+            } else {
+                clearTrackingThrottle(payload.eventId)
+            }
+            return attempt.response
+        }
+        clearTrackingThrottle(payload.eventId)
+        debugLog("Tracking host failed; sending to the normal host without the advertising id: \(payload.eventName)")
+        let fallback: PreparedRequest
+        do {
+            fallback = try prepareRequest(for: payload, avoidTrackingHost: true)
+        } catch {
+            return attempt.response
+        }
+        await waitForRateLimitSlot()
+        let answer = await perform(fallback.request, on: noWaitSession, payload: payload)
+        if answer.response.statusCode != 0 {
+            // The normal host answered at once while the tracking host did not: skip the
+            // tracking host for a while instead of failing every event there first. Offline
+            // (or a reconnect) never gets here: the fallback does not wait for the network.
+            startTrackingHostCoolDown()
+        }
+        return answer.response
+    }
+
+    /// Whether a tracking-host attempt falls back to the normal host: no answer (blocked,
+    /// offline, timeout) or an HTTP 4xx/5xx, except 429 and any answer with Retry-After.
+    static func fallsBackFromTrackingHost(_ response: HTTPResponse, hasRetryAfter: Bool) -> Bool {
+        if response.disposition == .delivered { return false }
+        if response.statusCode == 0 { return true }
+        if response.statusCode == 429 || hasRetryAfter { return false }
+        return response.statusCode >= 400
+    }
+
+    /// Throttle answers (429, or any answer with Retry-After) in a row from the tracking host
+    /// for one event, after which the skip starts.
+    static let trackingThrottleFallbackAfter = 3
+
+    static func isThrottle(_ response: HTTPResponse, hasRetryAfter: Bool) -> Bool {
+        guard response.disposition != .delivered, response.statusCode != 0 else { return false }
+        return response.statusCode == 429 || hasRetryAfter
+    }
+
+    /// Per event id, under routeLock. Memory only; an entry is removed on any other answer.
+    private var trackingThrottles: [String: Int] = [:]
+
+    private func noteTrackingThrottle(_ eventId: String) -> Int {
+        routeLock.withLock {
+            let n = (trackingThrottles[eventId] ?? 0) + 1
+            trackingThrottles[eventId] = n
+            return n
+        }
+    }
+
+    private func clearTrackingThrottle(_ eventId: String) {
+        _ = routeLock.withLock { trackingThrottles.removeValue(forKey: eventId) }
+    }
+
+    /// Test support: whether the fallback to the normal host waits for connectivity.
+    var fallbackSessionWaitsForConnectivity: Bool { noWaitSession.configuration.waitsForConnectivity }
+
+    /// One request, classified. `hasRetryAfter`: the answer carried a Retry-After header.
+    private func perform(_ request: URLRequest, on session: URLSession,
+                         payload: EventPayload) async -> (response: HTTPResponse, hasRetryAfter: Bool) {
         do {
             let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
-                return HTTPResponse(success: false, statusCode: 0, error: HTTPError.invalidResponse,
-                                    disposition: .retry(after: nil))
+                return (HTTPResponse(success: false, statusCode: 0, error: HTTPError.invalidResponse,
+                                     disposition: .retry(after: nil)), false)
             }
             let status = httpResponse.statusCode
+            let hasRetryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After") != nil
             let retryAfter = retryAfterSeconds(from: httpResponse)
             let disposition = Self.disposition(forStatus: status, retryAfter: retryAfter)
             switch disposition {
             case .delivered:
                 debugLog("Event sent successfully: \(payload.eventName)")
-                return HTTPResponse(success: true, statusCode: status, data: data, disposition: .delivered)
+                return (HTTPResponse(success: true, statusCode: status, data: data, disposition: .delivered), hasRetryAfter)
             case .refused where status == 404:
                 // Ingest never answers 404: something in front of it sent this request elsewhere.
                 errorLog("HTTP 404: the event endpoint was not found (a misroute in front of DATALYR ingest). Kept and retried.")
-                return HTTPResponse(success: false, statusCode: status, data: data,
-                                    error: HTTPError.httpError(status, "Endpoint not found"), disposition: disposition)
+                return (HTTPResponse(success: false, statusCode: status, data: data,
+                                     error: HTTPError.httpError(status, "Endpoint not found"), disposition: disposition), hasRetryAfter)
             case .refused:
                 errorLog("HTTP \(status): Authentication failed. Check your API key and workspace ID.")
-                return HTTPResponse(success: false, statusCode: status, data: data,
-                                    error: HTTPError.authenticationFailed, disposition: disposition)
+                return (HTTPResponse(success: false, statusCode: status, data: data,
+                                     error: HTTPError.authenticationFailed, disposition: disposition), hasRetryAfter)
             default:
                 errorLog("Event send failed: HTTP \(status)")
-                return HTTPResponse(success: false, statusCode: status, data: data,
-                                    error: HTTPError.httpError(status, String(data: data, encoding: .utf8)),
-                                    disposition: disposition)
+                return (HTTPResponse(success: false, statusCode: status, data: data,
+                                     error: HTTPError.httpError(status, String(data: data, encoding: .utf8)),
+                                     disposition: disposition), hasRetryAfter)
             }
         } catch {
             errorLog("Event send failed: \(error.localizedDescription)")
-            return HTTPResponse(success: false, statusCode: 0, error: error, disposition: Self.disposition(forError: error))
+            return (HTTPResponse(success: false, statusCode: 0, error: error, disposition: Self.disposition(forError: error)), false)
         }
     }
 
@@ -244,24 +338,112 @@ internal class DatalyrHTTPClient {
         return min(max(seconds, 0), Self.maxRetryAfter)
     }
     
-    /// Create HTTP request for event payload
     /// Apple privacy manifest: NSPrivacyTracking=true REQUIRES a non-empty
-    /// NSPrivacyTrackingDomains, and iOS fails every request to a listed host until the
-    /// user grants ATT. The manifest lists ONLY tracking.datalyr.com, and only events
-    /// that carry the IDFA (ATT already authorized) are sent there; everything else goes
-    /// to the regular endpoint and is never blocked. Same backend handler.
+    /// NSPrivacyTrackingDomains. The manifest lists ONLY tracking.datalyr.com (same backend
+    /// handler as the normal host). iOS blocks a listed host unless tracking is authorized at
+    /// the time of the request, and keeps blocking it for the rest of the launch in which the
+    /// user allowed tracking: it is opened only to processes started after the grant (proved
+    /// on an iPhone, 2026-11-25). So an event goes there only when it carries a real IDFA, and
+    /// tracking was authorized when this process started, and is authorized now. Everything
+    /// else goes to the normal host, which is never blocked.
     static let trackingEndpoint = "https://tracking.datalyr.com/track"
 
-    func endpointFor(_ payload: EventPayload) -> String {
-        guard config.useServerTracking else { return endpoint }
-        if let idfa = payload.eventData?["idfa"] as? String, !idfa.isEmpty {
-            return DatalyrHTTPClient.trackingEndpoint
+    /// The all-zero IDFA iOS returns when tracking is not available. Not an identifier.
+    static let zeroIDFA = "00000000-0000-0000-0000-000000000000"
+
+    /// How long the tracking host is skipped after it failed while the normal host answered.
+    static let trackingHostCoolDown: TimeInterval = 600
+
+    /// The ATT status NOW, read on every send attempt (first send, retries, events stored by
+    /// an earlier launch, dead-letter replays), never the status cached when the event was
+    /// built. Replaceable in tests.
+    var attStatusProvider: () -> UInt = PlatformIntegrationManager.liveTrackingAuthorizationStatus
+
+    /// The ATT status when this process started (nil: unreadable, counts as not authorized).
+    /// Replaceable in tests.
+    var attStatusAtProcessStartProvider: () -> UInt? = TrackingStatusAtStart.value
+
+    /// Clock for the cool-down (seconds since 1970). Replaceable in tests.
+    var now: () -> TimeInterval = { Date().timeIntervalSince1970 }
+
+    private let routeLock = NSLock()
+    private var _trackingHostAvoidedUntil: TimeInterval = 0
+
+    /// Until when (seconds since 1970) events skip the tracking host. Memory only.
+    var trackingHostAvoidedUntil: TimeInterval { routeLock.withLock { _trackingHostAvoidedUntil } }
+
+    /// Starts the cool-down. A cool-down already running is not extended.
+    private func startTrackingHostCoolDown() {
+        let current = now()
+        routeLock.withLock {
+            if current >= _trackingHostAvoidedUntil {
+                _trackingHostAvoidedUntil = current + Self.trackingHostCoolDown
+            }
         }
-        return endpoint
     }
 
-    private func createRequest(for payload: EventPayload) throws -> URLRequest {
-        guard let url = URL(string: endpointFor(payload)) else {
+    /// A real IDFA on the payload: non-empty and not the all-zero value.
+    static func carriesIDFA(_ payload: EventPayload) -> Bool {
+        // eventData holds AnyCodable wrappers: read the wrapped value (a plain `as? String`
+        // on the wrapper never matches, which sent every IDFA event to the normal host).
+        guard let idfa = payload.eventData?["idfa"]?.value as? String else { return false }
+        return !idfa.isEmpty && idfa != zeroIDFA
+    }
+
+    /// Whether `payload` goes to the tracking host, with these statuses.
+    func usesTrackingHost(_ payload: EventPayload, liveAttStatus: UInt, avoidTrackingHost: Bool = false) -> Bool {
+        guard config.useServerTracking, !avoidTrackingHost, liveAttStatus == 3,
+              DatalyrHTTPClient.carriesIDFA(payload) else { return false }
+        guard attStatusAtProcessStartProvider() == 3 else { return false }
+        return now() >= trackingHostAvoidedUntil
+    }
+
+    func endpointFor(_ payload: EventPayload) -> String {
+        return usesTrackingHost(payload, liveAttStatus: attStatusProvider())
+            ? DatalyrHTTPClient.trackingEndpoint : endpoint
+    }
+
+    /// Whether the properties carry a field that may go only to the tracking host.
+    static func hasTrackingOnlyFields(_ properties: [String: Any]) -> Bool {
+        if properties["idfa"] != nil { return true }
+        if AttributionData.appUserIdKeys.contains(where: { properties[$0] != nil }) { return true }
+        if let advertiser = properties["advertiser_data"] as? [String: Any], advertiser["idfa"] != nil { return true }
+        return false
+    }
+
+    /// For an event sent to the normal host: removes the IDFA (also from `advertiser_data`)
+    /// and AppLovin's `alart`, and sets the permission fields that are present to the status
+    /// at send time, so the body never claims more than the user allows now.
+    static func removeTrackingOnlyFields(from properties: inout [String: Any], liveAttStatus: UInt) {
+        properties.removeValue(forKey: "idfa")
+        for key in AttributionData.appUserIdKeys { properties.removeValue(forKey: key) }
+        let live = Int(liveAttStatus)
+        let authorized = liveAttStatus == 3
+        if properties["att_status"] != nil { properties["att_status"] = live }
+        if properties["advertiser_tracking_enabled"] != nil { properties["advertiser_tracking_enabled"] = authorized }
+        if var advertiser = properties["advertiser_data"] as? [String: Any] {
+            advertiser.removeValue(forKey: "idfa")
+            if advertiser["att_status"] != nil { advertiser["att_status"] = live }
+            if advertiser["tracking_authorized"] != nil { advertiser["tracking_authorized"] = authorized }
+            properties["advertiser_data"] = advertiser
+        }
+    }
+
+    struct PreparedRequest {
+        let request: URLRequest
+        let viaTrackingHost: Bool
+    }
+
+    /// The HTTP request for one send attempt of `payload`. One live ATT read per attempt, so
+    /// the host and the body always agree.
+    func createRequest(for payload: EventPayload) throws -> URLRequest {
+        return try prepareRequest(for: payload).request
+    }
+
+    private func prepareRequest(for payload: EventPayload, avoidTrackingHost: Bool = false) throws -> PreparedRequest {
+        let attStatus = attStatusProvider()
+        let viaTrackingHost = usesTrackingHost(payload, liveAttStatus: attStatus, avoidTrackingHost: avoidTrackingHost)
+        guard let url = URL(string: viaTrackingHost ? DatalyrHTTPClient.trackingEndpoint : endpoint) else {
             throw HTTPError.invalidURL
         }
         
@@ -289,7 +471,17 @@ internal class DatalyrHTTPClient {
         // Transform payload for server-side API if needed
         let requestBody: Data
         if config.useServerTracking {
-            let serverPayload = transformForServerAPI(payload)
+            var serverPayload = transformForServerAPI(payload)
+            // The normal host never receives the advertising id. While tracking is not
+            // authorized every event's permission fields show the status at send time (an
+            // event built before the user answered the prompt, or before tracking was turned
+            // off). While it is authorized, an event that is not sent to the tracking host
+            // (allowed during this launch, or the tracking host failed) loses only the id.
+            if !viaTrackingHost, var properties = serverPayload["properties"] as? [String: Any],
+               attStatus != 3 || DatalyrHTTPClient.hasTrackingOnlyFields(properties) {
+                DatalyrHTTPClient.removeTrackingOnlyFields(from: &properties, liveAttStatus: attStatus)
+                serverPayload["properties"] = properties
+            }
             requestBody = try JSONSerialization.data(withJSONObject: serverPayload)
         } else {
             requestBody = try EventPayload.wireEncoder().encode(payload)
@@ -302,7 +494,7 @@ internal class DatalyrHTTPClient {
             debugLog("Request body: \(requestBody.count) bytes")
         }
         
-        return request
+        return PreparedRequest(request: request, viaTrackingHost: viaTrackingHost)
     }
     
     /// Wait for a rate-limit slot using the thread-safe actor (bounded; never throws)

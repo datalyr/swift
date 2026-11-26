@@ -18,7 +18,7 @@ Track your iOS app with DATALYR and see which channel, campaign and ad drove eve
 - **Attribution.** Click IDs, UTMs, Apple Search Ads and SKAdNetwork data are captured and kept with the install.
 - **One customer, every session.** Anonymous app activity joins the signed-in user when you call `identify()`.
 - **Better ad signal.** Conversions reach your ad platforms with the data they need to optimize.
-- **Privacy built in.** App Tracking Transparency is respected, and a privacy manifest ships with the SDK.
+- **Privacy built in.** App Tracking Transparency is respected, and a privacy manifest ships with the SDK. The advertising ID is sent only after the user allows tracking, from the next app launch on (iOS opens the tracking domain only to launches that start with tracking allowed).
 
 ## Install
 

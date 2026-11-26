@@ -123,6 +123,14 @@ internal class DatalyrStorage: Storage {
     
     // MARK: - Synchronous access (for callers that serialize a read-modify-write under a lock)
 
+    func getStringSync(_ key: String) -> String? {
+        return userDefaults.string(forKey: keyPrefix + key)
+    }
+
+    func setStringSync(_ key: String, value: String) {
+        userDefaults.set(value, forKey: keyPrefix + key)
+    }
+
     func getDoubleSync(_ key: String) -> Double? {
         let prefixedKey = keyPrefix + key
         return userDefaults.object(forKey: prefixedKey) != nil ? userDefaults.double(forKey: prefixedKey) : nil
