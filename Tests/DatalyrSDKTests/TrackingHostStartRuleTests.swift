@@ -371,6 +371,103 @@ final class TrackingHostStartRuleTests: XCTestCase {
         XCTAssertEqual(RouteStub.requests.last?.host, RouteStub.trackingHost)
     }
 
+    // MARK: - Review A1: the tracking host alone keeps answering 429 / Retry-After
+
+    func testRepeatedThrottleOnTheTrackingHostFallsBackAfterThreeInARowHonouringEachWait() async {
+        for (answer, label) in [(IngestStub.Answer.status(429, headers: ["Retry-After": "1"]), "429 + Retry-After"),
+                                (.status(429), "429"),
+                                (.status(503, headers: ["Retry-After": "1"]), "503 + Retry-After")] {
+            RouteStub.reset()
+            await DatalyrStorage.shared.removeValue(StorageKeys.eventQueue)
+            let clock = Box<TimeInterval>(1_800_000_000)
+            let client = fallbackClient(clock: clock)
+            RouteStub.handler = { host, _ in host == RouteStub.trackingHost ? answer : .status(200) }
+            let queue = await makeQueue(client)
+            queue.now = { clock.value }
+            await queue.enqueue(payload(.real, eventId: "evt_throttled"))
+
+            // Three answers in a row from the tracking host; before each retry the queue waits
+            // for the time the server asked for.
+            for attempt in 1...3 {
+                XCTAssertEqual(RouteStub.requests.count, attempt, "\(label): attempt \(attempt)")
+                XCTAssertEqual(RouteStub.requests.last?.host, RouteStub.trackingHost, label)
+                XCTAssertEqual(queue.getStats().queueSize, 1, label)
+                let gate = queue.retryNotBefore
+                XCTAssertGreaterThan(gate, clock.value, "\(label): the queue waits before retrying")
+                await queue.flush()  // before the wait: nothing is sent
+                XCTAssertEqual(RouteStub.requests.count, attempt, "\(label): no retry before the wait")
+                clock.value = gate + 0.001
+                if attempt < 3 {
+                    XCTAssertEqual(client.trackingHostAvoidedUntil, 0, "\(label): no skip before 3 in a row")
+                    await queue.flush()
+                }
+            }
+            XCTAssertGreaterThan(client.trackingHostAvoidedUntil, clock.value, "\(label): 10-minute skip after 3 in a row")
+
+            // The retry after the third wait goes to the normal host without the id.
+            await queue.flush()
+            XCTAssertEqual(queue.getStats().queueSize, 0, "\(label): the queue is not held")
+            let last = RouteStub.requests.last
+            XCTAssertEqual(last?.host, RouteStub.normalHost, label)
+            XCTAssertEqual(last?.eventId, "evt_throttled", label)
+            XCTAssertFalse(last?.rawBody.contains(Self.idfa) ?? true, label)
+            await DatalyrStorage.shared.removeValue(StorageKeys.eventQueue)
+        }
+    }
+
+    func testThrottleCountIsPerEventAndInARow() async {
+        let clock = Box<TimeInterval>(1_800_000_000)
+        let client = fallbackClient(clock: clock)
+        let answers = Box<[IngestStub.Answer]>([.status(429), .status(429), .status(200), .status(429), .status(429)])
+        RouteStub.handler = { host, _ in
+            guard host == RouteStub.trackingHost else { return .status(200) }
+            var list = answers.value
+            let next = list.isEmpty ? IngestStub.Answer.status(200) : list.removeFirst()
+            answers.value = list
+            return next
+        }
+        let first = payload(.real, eventId: "evt_a")
+        _ = await client.sendEvent(first)
+        _ = await client.sendEvent(first)
+        let delivered = await client.sendEvent(first)
+        XCTAssertTrue(delivered.success)
+        let second = payload(.real, eventId: "evt_b")
+        _ = await client.sendEvent(second)
+        _ = await client.sendEvent(second)
+        XCTAssertEqual(client.trackingHostAvoidedUntil, 0, "two in a row for each event: no skip")
+        XCTAssertTrue(RouteStub.on(RouteStub.normalHost).isEmpty)
+    }
+
+    // MARK: - Review A2: a reconnect must not start the skip
+
+    func testFallbackDoesNotWaitForTheNetwork() {
+        // The fallback to the normal host must not wait for connectivity: if it did, a network
+        // that comes back during the wait would answer 200 and start the 10-minute skip
+        // although the tracking host never failed with a network present.
+        let client = self.client(start: 3, now: 3)
+        XCTAssertFalse(client.fallbackSessionWaitsForConnectivity)
+    }
+
+    func testReconnectAfterAnOfflineAttemptGoesToTheTrackingHost() async {
+        let clock = Box<TimeInterval>(1_800_000_000)
+        let client = fallbackClient(clock: clock)
+        let online = Box(false)
+        RouteStub.handler = { _, _ in online.value ? .status(200) : .failure(.notConnectedToInternet) }
+        let queue = await makeQueue(client)
+        queue.now = { clock.value }
+        await queue.enqueue(payload(.real, eventId: "evt_offline"))
+        XCTAssertEqual(queue.getStats().queueSize, 1, "kept while offline")
+        XCTAssertEqual(client.trackingHostAvoidedUntil, 0, "offline: no skip")
+
+        online.value = true          // the network comes back
+        clock.value = queue.retryNotBefore + 0.001
+        await queue.flush()
+        XCTAssertEqual(queue.getStats().queueSize, 0)
+        XCTAssertEqual(RouteStub.requests.last?.host, RouteStub.trackingHost, "the id goes to the tracking host")
+        XCTAssertEqual(RouteStub.requests.last?.properties["idfa"] as? String, Self.idfa)
+        XCTAssertEqual(client.trackingHostAvoidedUntil, 0, "a reconnect starts no skip")
+    }
+
     // MARK: - No head-of-line stall
 
     private func makeQueue(_ client: DatalyrHTTPClient) async -> DatalyrEventQueue {
