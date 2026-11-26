@@ -396,6 +396,9 @@ public class DatalyrSDK {
         // first-hour timeout. See runLaunchLookupAndInstall.
         _ = await runLaunchLookupAndInstall()
 
+        // Allowed during the previous launch: send its `$att_status` again, now with the IDFA.
+        await resendAttStatusIfIdWithheld()
+
         // Register for attribution tracking (AdAttributionKit on iOS 17.4+, SKAdNetwork otherwise)
         await UnifiedAttributionTracker.shared.register()
 
@@ -1644,7 +1647,61 @@ public class DatalyrSDK {
         }
         cachedAdvertiserData = manager.getAdvertiserData()
         let status = reported ?? manager.getTrackingAuthorizationStatus()
+        noteIdWithheldIfAllowedDuringThisLaunch(status: status)
         return (status, deferredLookupCoordinator.observeATTStatus(status))
+    }
+
+    /// Tracking is authorized but this process did not start authorized: iOS keeps the
+    /// tracking domain closed until the next launch, so this launch's events go to the normal
+    /// host without the IDFA (DatalyrHTTPClient). Note it, so the next launch that starts
+    /// authorized sends `$att_status` once with the IDFA. The stored value is that event's
+    /// id, made once per grant.
+    private func noteIdWithheldIfAllowedDuringThisLaunch(status: UInt) {
+        guard status == 3, config?.useServerTracking != false,
+              TrackingStatusAtStart.value() != 3 else { return }
+        let alreadyNoted: Bool = preInitLock.withLock {
+            defer { idWithheldNoted = true }
+            return idWithheldNoted
+        }
+        guard !alreadyNoted else { return }
+        if DatalyrStorage.shared.getStringSync(StorageKeys.attIdWithheld) == nil {
+            DatalyrStorage.shared.setStringSync(StorageKeys.attIdWithheld, value: "att_resend_\(UUID().uuidString.lowercased())")
+        }
+    }
+
+    /// Under preInitLock.
+    private var idWithheldNoted = false
+
+    #if DEBUG
+    /// Test support: stop after the re-sent `$att_status` is queued and before its flag is
+    /// removed (the app killed in between).
+    internal var stopBeforeAttResendFlagRemovalForTesting = false
+    #endif
+
+    /// The previous launch allowed tracking during the launch, so its events reached the
+    /// server without the IDFA. If tracking was authorized when this process started and is
+    /// authorized now, send `$att_status` once (`resent: true`): it carries the IDFA to the
+    /// tracking host for the same device ids. The flag is removed only after the event is
+    /// queued; if the app is killed in between, the next launch sends it again with the SAME
+    /// event id, which the server de-duplicates. Not authorized now: nothing to send.
+    internal func resendAttStatusIfIdWithheld() async {
+        guard let grantId = await DatalyrStorage.shared.getString(StorageKeys.attIdWithheld) else { return }
+        let now = platformIntegrationManager?.getTrackingAuthorizationStatus()
+            ?? PlatformIntegrationManager.liveTrackingAuthorizationStatus()
+        if now == 3 {
+            guard TrackingStatusAtStart.value() == 3 else { return } // still withheld: next launch
+            await track("$att_status", eventData: [
+                "status": UInt(3),
+                "status_name": "authorized",
+                "authorized": true,
+                "resent": true,
+                "event_id": grantId
+            ])
+            #if DEBUG
+            if stopBeforeAttResendFlagRemovalForTesting { return }
+            #endif
+        }
+        await DatalyrStorage.shared.removeValue(StorageKeys.attIdWithheld)
     }
 
     /// `initialized`, read under the lock initialize() sets it under.

@@ -525,6 +525,11 @@ internal enum StorageKeys {
     /// re-emit unchanged identity. See DatalyrSDK.identify(). The stored key string
     /// is unchanged from earlier releases so existing installs keep their dedup state.
     static let lastIdentityKey = "datalyr_last_identity_fingerprint"
+    /// Set when tracking was allowed during a launch that did not start authorized, so that
+    /// launch's events reached the server without the IDFA. The value is the event id of the
+    /// one `$att_status` re-sent with the IDFA on the next launch that starts authorized
+    /// (fixed per grant, so a re-send interrupted by a kill is de-duplicated by the server).
+    static let attIdWithheld = "datalyr_att_id_withheld"
 } 
 // MARK: - Async mutex
 

@@ -40,6 +40,9 @@ internal class PlatformIntegrationManager {
 
     /// The live ATT status: 0 = notDetermined, 1 = restricted, 2 = denied, 3 = authorized.
     static func liveTrackingAuthorizationStatus() -> UInt {
+        #if DEBUG
+        if let override = liveStatusForTesting { return override() }
+        #endif
         #if canImport(AppTrackingTransparency)
         if #available(iOS 14, macOS 11, *) {
             return ATTrackingManager.trackingAuthorizationStatus.rawValue
@@ -47,6 +50,22 @@ internal class PlatformIntegrationManager {
         #endif
         return 3 // authorized (pre-iOS 14)
     }
+
+    /// Whether this OS has App Tracking Transparency (iOS 14+, macOS 11+, tvOS 14+).
+    static var trackingAuthorizationFrameworkAvailable: Bool {
+        #if canImport(AppTrackingTransparency)
+        if #available(iOS 14, macOS 11, tvOS 14, *) { return true }
+        #endif
+        return false
+    }
+
+    #if DEBUG
+    /// Test support: replaces the system ATT status for every reader (the SDK, every HTTP
+    /// client and every PlatformIntegrationManager left on the default provider).
+    static var liveStatusForTesting: (() -> UInt)?
+    /// Test support: the IDFA iOS would return (the simulator returns all zeros).
+    static var idfaForTesting: String?
+    #endif
 
     /// Check if tracking is authorized (ATT)
     func isTrackingAuthorized() -> Bool {
@@ -64,7 +83,12 @@ internal class PlatformIntegrationManager {
     func getIDFA() -> String? {
         #if canImport(AdSupport)
         guard isTrackingAuthorized() else { return nil }
-        let idfa = ASIdentifierManager.shared().advertisingIdentifier.uuidString
+        let idfa: String = {
+            #if DEBUG
+            if let override = Self.idfaForTesting { return override }
+            #endif
+            return ASIdentifierManager.shared().advertisingIdentifier.uuidString
+        }()
         // All zeros means tracking is not available
         if idfa == "00000000-0000-0000-0000-000000000000" { return nil }
         return idfa
